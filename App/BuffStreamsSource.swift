@@ -5,37 +5,50 @@ struct BuffStreamsSource: StreamSource {
   let name = "BuffStreams"
   let baseURL = URL(string: "https://buffstreams.plus")!
 
-  // Maps URL slugs to leagues
-  static let slugToLeague: [String: SportLeague] = [
-    "nba": .nba,
-    "nfl": .nfl,
-    "mlb": .mlb,
-    "nhl": .nhl,
-    "mma": .mma,
-    "ufc": .ufc,
-    "boxing": .boxing,
-    "soccer": .soccer,
-    "football": .soccer,
-    "f1": .f1,
-    "cfb": .ncaaf,
-    "ncaa": .ncaab,
-    "ncaab": .ncaab,
-    "college-basketball": .ncaab,
-    "college-football": .ncaaf,
-    "ncaaf": .ncaaf,
-    "ice-hockey": .nhl,
-    "hockey": .nhl,
-    "ufc-mma": .ufc,
-    "wnba": .wnba,
-    "wwe": .wwe,
-    "tennis": .tennis,
-    "golf": .golf,
-    "nascar": .nascar,
-    "premier-league": .premierLeague,
-    "laliga": .laLiga,
-    "serie-a": .serieA,
-    "bundesliga": .bundesliga,
+  // Maps URL slug prefixes to leagues.
+  // Order matters: longer/more-specific prefixes first so "premier-league" beats "p".
+  // Any slug that starts with a key is mapped to that league, e.g. "nhl-playoffs" → .nhl.
+  static let slugPrefixToLeague: [(prefix: String, league: SportLeague)] = [
+    ("nba", .nba),
+    ("nfl", .nfl),
+    ("mlb", .mlb),
+    ("nhl", .nhl),
+    ("hockey", .nhl),
+    ("ice-hockey", .nhl),
+    ("ufc", .ufc),
+    ("mma", .mma),
+    ("boxing", .boxing),
+    ("premier-league", .premierLeague),
+    ("laliga", .laLiga),
+    ("serie-a", .serieA),
+    ("bundesliga", .bundesliga),
+    ("soccer", .soccer),
+    ("football", .soccer),
+    ("f1", .f1),
+    ("formula-1", .f1),
+    ("cfb", .ncaaf),
+    ("college-football", .ncaaf),
+    ("ncaaf", .ncaaf),
+    ("ncaab", .ncaab),
+    ("ncaa", .ncaab),
+    ("college-basketball", .ncaab),
+    ("wnba", .wnba),
+    ("wwe", .wwe),
+    ("tennis", .tennis),
+    ("golf", .golf),
+    ("nascar", .nascar),
+    ("title-game", .wwe), // catch-all for title events
   ]
+
+  static func league(for slug: String) -> SportLeague? {
+    let lower = slug.lowercased()
+    for entry in slugPrefixToLeague {
+      if lower == entry.prefix || lower.hasPrefix(entry.prefix + "-") {
+        return entry.league
+      }
+    }
+    return nil
+  }
 
   // League-specific stream page slugs (e.g. /nbastreams2)
   static let leagueStreamSlug: [SportLeague: String] = [
@@ -93,21 +106,18 @@ struct BuffStreamsSource: StreamSource {
   // MARK: - Parsing
 
   private func parseAvailableLeagues(from html: String) -> [SportLeague] {
+    // Derive available leagues from the game links actually present on the page
     var found = Set<SportLeague>()
-    let lower = html.lowercased()
-    for (slug, league) in Self.slugToLeague {
-      if lower.contains("/\(slug)") || lower.contains(">\(slug)<") {
-        found.insert(league)
+    let hrefPattern = #"href=['"][^'"]*?/([a-z0-9-]+)/[a-z0-9-]+/\d+['"']"#
+    if let regex = try? NSRegularExpression(pattern: hrefPattern, options: .caseInsensitive) {
+      let range = NSRange(html.startIndex..., in: html)
+      for match in regex.matches(in: html, range: range) {
+        if let r = Range(match.range(at: 1), in: html) {
+          let slug = String(html[r])
+          if let league = Self.league(for: slug) { found.insert(league) }
+        }
       }
     }
-    for (league, slug) in Self.leagueStreamSlug {
-      if lower.contains(slug) {
-        found.insert(league)
-      }
-    }
-    // Always include the leagues that buffstreams is known to carry
-    let known: [SportLeague] = [.nba, .nfl, .mlb, .nhl, .mma, .boxing, .soccer, .f1, .ncaaf, .ncaab, .wnba, .wwe]
-    for k in known { found.insert(k) }
     return Array(found).sorted { $0.displayName < $1.displayName }
   }
 
@@ -138,9 +148,9 @@ struct BuffStreamsSource: StreamSource {
       // Skip non-game paths
       guard !path.contains("streams2") && !gameSlug.isEmpty else { continue }
 
-      // If the slug is recognized, require it to match the requested league.
-      // Unknown slugs are trusted to belong to the page we fetched.
-      if let mappedLeague = Self.slugToLeague[sportSlug], mappedLeague != league { continue }
+      // Require the URL sport slug to map to exactly the requested league.
+      // Uses prefix matching so "nhl-playoffs", "nba-finals", etc. resolve correctly.
+      guard let mappedLeague = Self.league(for: sportSlug), mappedLeague == league else { continue }
 
       guard !seen.contains(gameID) else { continue }
       seen.insert(gameID)
