@@ -19,6 +19,13 @@ struct BuffStreamsSource: StreamSource {
     "f1": .f1,
     "cfb": .ncaaf,
     "ncaa": .ncaab,
+    "ncaab": .ncaab,
+    "college-basketball": .ncaab,
+    "college-football": .ncaaf,
+    "ncaaf": .ncaaf,
+    "ice-hockey": .nhl,
+    "hockey": .nhl,
+    "ufc-mma": .ufc,
     "wnba": .wnba,
     "wwe": .wwe,
     "tennis": .tennis,
@@ -131,8 +138,8 @@ struct BuffStreamsSource: StreamSource {
       // Skip non-game paths
       guard !path.contains("streams2") && !gameSlug.isEmpty else { continue }
 
-      // Only include if the sport slug matches the expected league
-      if let mappedLeague = Self.slugToLeague[sportSlug], mappedLeague != league { continue }
+      // Only include games whose URL slug explicitly maps to the requested league
+      guard let mappedLeague = Self.slugToLeague[sportSlug], mappedLeague == league else { continue }
 
       guard !seen.contains(gameID) else { continue }
       seen.insert(gameID)
