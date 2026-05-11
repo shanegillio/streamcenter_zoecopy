@@ -138,8 +138,9 @@ struct BuffStreamsSource: StreamSource {
       // Skip non-game paths
       guard !path.contains("streams2") && !gameSlug.isEmpty else { continue }
 
-      // Only include games whose URL slug explicitly maps to the requested league
-      guard let mappedLeague = Self.slugToLeague[sportSlug], mappedLeague == league else { continue }
+      // If the slug is recognized, require it to match the requested league.
+      // Unknown slugs are trusted to belong to the page we fetched.
+      if let mappedLeague = Self.slugToLeague[sportSlug], mappedLeague != league { continue }
 
       guard !seen.contains(gameID) else { continue }
       seen.insert(gameID)
