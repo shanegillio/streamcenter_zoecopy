@@ -200,7 +200,7 @@ struct BuffStreamsSource: StreamSource {
       .trimmingCharacters(in: .whitespacesAndNewlines)
 
     // Time pattern: "12:00 AM", "02:30 PM", optionally followed by timezone
-    let timePattern = #"(\d{1,2}:\d{2}\s*[AaPp][Mm](?:\s*[A-Z]{1,3})?)"#
+    let timePattern = #"(\d{1,2}:\d{2}\s*[AaPp][Mm](?:\s*[A-Z]{2,3})?)"#
     if let timeRegex = try? NSRegularExpression(pattern: timePattern),
        let m = timeRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
        let fullRange = Range(m.range, in: text),

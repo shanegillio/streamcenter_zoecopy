@@ -49,7 +49,7 @@ struct GamesView: View {
             if !liveGames.isEmpty {
               Section {
                 ForEach(liveGames) { game in
-                  NavigationLink(value: game) {
+                  NavigationLink(destination: PlayerView(game: game)) {
                     GameRow(game: game)
                   }
                   .buttonStyle(.plain)
@@ -63,7 +63,7 @@ struct GamesView: View {
             if !upcomingGames.isEmpty {
               Section {
                 ForEach(upcomingGames) { game in
-                  NavigationLink(value: game) {
+                  NavigationLink(destination: PlayerView(game: game)) {
                     GameRow(game: game)
                   }
                   .buttonStyle(.plain)
@@ -80,9 +80,6 @@ struct GamesView: View {
     }
     .navigationTitle(league.displayName)
     .navigationBarTitleDisplayMode(.large)
-    .navigationDestination(for: Game.self) { game in
-      PlayerView(game: game)
-    }
     .task { await loadGames() }
     .refreshable { await loadGames() }
   }
