@@ -30,17 +30,14 @@ enum AdBlockRules {
   ]
   """
 
+  @MainActor
   static func compile() async -> WKContentRuleList? {
-    try? await withCheckedThrowingContinuation { continuation in
+    await withCheckedContinuation { continuation in
       WKContentRuleListStore.default().compileContentRuleList(
         forIdentifier: "StreamZoneAdBlock",
         encodedContentRuleList: rulesJSON
-      ) { list, error in
-        if let list = list {
-          continuation.resume(returning: list)
-        } else {
-          continuation.resume(returning: nil)
-        }
+      ) { list, _ in
+        continuation.resume(returning: list)
       }
     }
   }

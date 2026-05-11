@@ -51,10 +51,8 @@ struct PlayerView: View {
     }
     .toolbarColorScheme(.dark, for: .navigationBar)
     .task {
-      async let rules = AdBlockRules.compile()
-      async let stream = extractStreamURL()
-      ruleList = await rules
-      let url = await stream
+      ruleList = await AdBlockRules.compile()
+      let url = await extractStreamURL()
       if let url {
         player = AVPlayer(url: url)
         player?.play()

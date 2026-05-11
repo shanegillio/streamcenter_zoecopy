@@ -125,45 +125,39 @@ struct BuffStreamsSource: StreamSource {
     var games: [Game] = []
     var seen = Set<String>()
 
-    // Match anchor tags: href="/sport/slug/id"
-    let hrefPattern = #"href=['"]((?:https://buffstreams\.plus)?/([a-z0-9-]+)/([a-z0-9-]+)/(\d+))['"']"#
-    guard let hrefRegex = try? NSRegularExpression(pattern: hrefPattern, options: .caseInsensitive) else { return [] }
+    // Match full anchor tags so we get both the URL and the link text in one capture.
+    // Format: <a href="https://buffstreams.plus/sport-slug/game-slug/id">Team A HH:MM AM Team B Live Streams</a>
+    let anchorPattern = #"<a\s[^>]*href=['"](?:https://buffstreams\.plus)?(/([a-z0-9-]+)/([a-z0-9-]+)/(\d+))['"'][^>]*>\s*([^<]+?)\s*</a>"#
+    guard let anchorRegex = try? NSRegularExpression(pattern: anchorPattern, options: .caseInsensitive) else { return [] }
     let nsHTML = html as NSString
-    let matches = hrefRegex.matches(in: html, range: NSRange(location: 0, length: nsHTML.length))
+    let matches = anchorRegex.matches(in: html, range: NSRange(location: 0, length: nsHTML.length))
 
     for match in matches {
-      guard match.numberOfRanges >= 5 else { continue }
+      guard match.numberOfRanges >= 6 else { continue }
       guard
-        let pathRange = Range(match.range(at: 1), in: html),
-        let sportSlugRange = Range(match.range(at: 2), in: html),
+        let pathRange    = Range(match.range(at: 1), in: html),
+        let sportRange   = Range(match.range(at: 2), in: html),
         let gameSlugRange = Range(match.range(at: 3), in: html),
-        let gameIDRange = Range(match.range(at: 4), in: html)
+        let gameIDRange  = Range(match.range(at: 4), in: html),
+        let textRange    = Range(match.range(at: 5), in: html)
       else { continue }
 
-      let path = String(html[pathRange])
-      let sportSlug = String(html[sportSlugRange]).lowercased()
-      let gameSlug = String(html[gameSlugRange])
-      let gameID = String(html[gameIDRange])
+      let path      = String(html[pathRange])
+      let sportSlug = String(html[sportRange]).lowercased()
+      let gameSlug  = String(html[gameSlugRange])
+      let gameID    = String(html[gameIDRange])
+      let linkText  = String(html[textRange])
 
-      // Skip non-game paths
-      guard !path.contains("streams2") && !gameSlug.isEmpty else { continue }
+      guard !path.contains("streams2") else { continue }
 
-      // Require the URL sport slug to map to exactly the requested league.
-      // Uses prefix matching so "nhl-playoffs", "nba-finals", etc. resolve correctly.
       guard let mappedLeague = Self.league(for: sportSlug), mappedLeague == league else { continue }
-
       guard !seen.contains(gameID) else { continue }
       seen.insert(gameID)
 
-      // Find the link text in context
-      let contextStart = max(0, match.range.location - 20)
-      let contextLength = min(match.range.location + match.range.length + 200, nsHTML.length) - contextStart
-      let context = nsHTML.substring(with: NSRange(location: contextStart, length: contextLength))
+      let (homeTeam, awayTeam, scheduledTime) = parseLinkText(linkText, gameSlug: gameSlug)
+      let isLive = detectLive(linkText: linkText, scheduledTime: scheduledTime)
 
-      let (homeTeam, awayTeam, scheduledTime) = parseLinkContext(context, gameSlug: gameSlug)
-      let isLive = detectLive(context: context, scheduledTime: scheduledTime)
-
-      let pageURLString = path.hasPrefix("http") ? path : "https://buffstreams.plus\(path)"
+      let pageURLString = "https://buffstreams.plus\(path)"
       guard let pageURL = URL(string: pageURLString) else { continue }
 
       games.append(Game(
@@ -190,30 +184,39 @@ struct BuffStreamsSource: StreamSource {
 
   // MARK: - Helpers
 
-  private func parseLinkContext(_ context: String, gameSlug: String) -> (String, String, Date?) {
-    // Format: "Team A HH:MM AM/PM Team B Live Streams"
-    let stripped = context
+  // Parses anchor text like "Cleveland Cavaliers 12:00 AM Detroit Pistons Live Streams"
+  // or live text like "Carolina Hurricanes 4' Philadelphia Flyers Live Streams"
+  private func parseLinkText(_ raw: String, gameSlug: String) -> (String, String, Date?) {
+    let text = raw
       .replacingOccurrences(of: "Live Streams", with: "", options: .caseInsensitive)
-      .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
       .trimmingCharacters(in: .whitespacesAndNewlines)
 
-    let timePattern = #"(\d{1,2}:\d{2}\s*[AaPp][Mm](?:\s*[A-Z]{2,3})?)"#
+    // Time pattern: "12:00 AM", "02:30 PM", optionally followed by timezone
+    let timePattern = #"(\d{1,2}:\d{2}\s*[AaPp][Mm](?:\s*[A-Z]{1,3})?)"#
     if let timeRegex = try? NSRegularExpression(pattern: timePattern),
-       let match = timeRegex.firstMatch(in: stripped, range: NSRange(stripped.startIndex..., in: stripped)),
-       let timeRange = Range(match.range, in: stripped),
-       let captureRange = Range(match.range(at: 1), in: stripped) {
-      let before = stripped[stripped.startIndex..<timeRange.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
-      let after = stripped[timeRange.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
-      let timeStr = String(stripped[captureRange])
-      let parsedTime = parseETTime(timeStr)
+       let m = timeRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+       let fullRange = Range(m.range, in: text),
+       let capRange  = Range(m.range(at: 1), in: text) {
+      let before = text[text.startIndex..<fullRange.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+      let after  = text[fullRange.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+      let timeStr = String(text[capRange])
       return (
-        before.isEmpty ? teamNameFromSlug(gameSlug, isHome: true) : cleanTeamName(before),
-        after.isEmpty ? teamNameFromSlug(gameSlug, isHome: false) : cleanTeamName(after),
-        parsedTime
+        before.isEmpty ? teamNameFromSlug(gameSlug, isHome: true) : before,
+        after.isEmpty  ? teamNameFromSlug(gameSlug, isHome: false) : after,
+        parseETTime(timeStr)
       )
     }
 
-    // Fallback: derive from slug
+    // Live game: "Carolina Hurricanes 4' Philadelphia Flyers" — no clock time
+    let livePattern = #"^(.+?)\s+\d+['′]\s+(.+)$"#
+    if let liveRegex = try? NSRegularExpression(pattern: livePattern),
+       let m = liveRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+       m.numberOfRanges >= 3,
+       let r1 = Range(m.range(at: 1), in: text),
+       let r2 = Range(m.range(at: 2), in: text) {
+      return (String(text[r1]), String(text[r2]), nil)
+    }
+
     let (home, away) = splitTeamsFromSlug(gameSlug)
     return (home, away, nil)
   }
@@ -234,12 +237,16 @@ struct BuffStreamsSource: StreamSource {
     return (words[0..<mid].joined(separator: " "), words[mid...].joined(separator: " "))
   }
 
-  private func detectLive(context: String, scheduledTime: Date?) -> Bool {
-    let lower = context.lowercased()
-    if lower.contains("live now") || lower.contains("watching now") { return true }
+  private func detectLive(linkText: String, scheduledTime: Date?) -> Bool {
+    // A minute-marker like "4'" means the game is in progress
+    let liveMarker = #"\d+['′]"#
+    if (try? NSRegularExpression(pattern: liveMarker))?.firstMatch(
+        in: linkText, range: NSRange(linkText.startIndex..., in: linkText)) != nil {
+      return true
+    }
     if let t = scheduledTime {
       let diff = Date().timeIntervalSince(t)
-      return diff >= -300 && diff < 14400 // within 5 min before to 4 hrs after
+      return diff >= -300 && diff < 14400
     }
     return false
   }
