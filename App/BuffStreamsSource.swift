@@ -125,28 +125,36 @@ struct BuffStreamsSource: StreamSource {
     var games: [Game] = []
     var seen = Set<String>()
 
-    // Match full anchor tags so we get both the URL and the link text in one capture.
-    // Format: <a href="https://buffstreams.plus/sport-slug/game-slug/id">Team A HH:MM AM Team B Live Streams</a>
-    let anchorPattern = #"<a\s[^>]*href=['"](?:https://buffstreams\.plus)?(/([a-z0-9-]+)/([a-z0-9-]+)/(\d+))['"'][^>]*>\s*([^<]+?)\s*</a>"#
-    guard let anchorRegex = try? NSRegularExpression(pattern: anchorPattern, options: .caseInsensitive) else { return [] }
+    // Capture full anchor tag including its inner HTML so nested <span> elements don't break the match.
+    // .dotMatchesLineSeparators lets (.*?) span newlines inside the tag.
+    let anchorPattern = #"<a\b[^>]*href=['"](?:https://buffstreams\.plus)?(/([a-z0-9-]+)/([a-z0-9-]+)/(\d+))['"][^>]*>(.*?)</a>"#
+    guard let anchorRegex = try? NSRegularExpression(
+      pattern: anchorPattern,
+      options: [.caseInsensitive, .dotMatchesLineSeparators]
+    ) else { return [] }
     let nsHTML = html as NSString
     let matches = anchorRegex.matches(in: html, range: NSRange(location: 0, length: nsHTML.length))
 
     for match in matches {
       guard match.numberOfRanges >= 6 else { continue }
       guard
-        let pathRange    = Range(match.range(at: 1), in: html),
-        let sportRange   = Range(match.range(at: 2), in: html),
+        let pathRange     = Range(match.range(at: 1), in: html),
+        let sportRange    = Range(match.range(at: 2), in: html),
         let gameSlugRange = Range(match.range(at: 3), in: html),
-        let gameIDRange  = Range(match.range(at: 4), in: html),
-        let textRange    = Range(match.range(at: 5), in: html)
+        let gameIDRange   = Range(match.range(at: 4), in: html),
+        let innerRange    = Range(match.range(at: 5), in: html)
       else { continue }
 
       let path      = String(html[pathRange])
       let sportSlug = String(html[sportRange]).lowercased()
       let gameSlug  = String(html[gameSlugRange])
       let gameID    = String(html[gameIDRange])
-      let linkText  = String(html[textRange])
+
+      // Strip any nested HTML tags to get plain text
+      let linkText = String(html[innerRange])
+        .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+        .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
 
       guard !path.contains("streams2") else { continue }
 
