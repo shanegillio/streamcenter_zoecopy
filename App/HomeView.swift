@@ -60,6 +60,13 @@ struct HomeView: View {
 
   private var leagueGrid: some View {
     LazyVGrid(columns: columns, spacing: 16) {
+      // Browse tile always appears first for custom sources
+      if !registry.selectedSource.isBuiltIn {
+        NavigationLink(destination: BrowseView(source: registry.selectedSource)) {
+          BrowseTile(source: registry.selectedSource)
+        }
+        .buttonStyle(.plain)
+      }
       ForEach(availableLeagues) { league in
         NavigationLink(destination: GamesView(league: league, source: registry.selectedSource)) {
           LeagueTile(league: league)
@@ -70,16 +77,37 @@ struct HomeView: View {
   }
 
   private var emptyState: some View {
-    VStack(spacing: 16) {
-      Spacer(minLength: 80)
-      Image(systemName: "sportscourt")
-        .font(.system(size: 56))
-        .foregroundStyle(.quaternary)
-      Text("No leagues available")
-        .font(.headline)
-        .foregroundStyle(.secondary)
-      Button("Retry") { Task { await loadLeagues() } }
-        .buttonStyle(.bordered)
+    VStack(spacing: 20) {
+      Spacer(minLength: 60)
+      if !registry.selectedSource.isBuiltIn {
+        // Custom source: scraping found nothing, offer direct browse
+        Image(systemName: "globe")
+          .font(.system(size: 52))
+          .foregroundStyle(.secondary)
+        Text("Couldn't detect leagues")
+          .font(.headline)
+        Text("Tap Browse to navigate the site manually. Streams are intercepted automatically.")
+          .font(.subheadline)
+          .foregroundStyle(.secondary)
+          .multilineTextAlignment(.center)
+          .padding(.horizontal, 32)
+        NavigationLink(destination: BrowseView(source: registry.selectedSource)) {
+          Label("Browse \(registry.selectedSource.name)", systemImage: "globe")
+            .padding(.horizontal, 8)
+        }
+        .buttonStyle(.borderedProminent)
+        Button("Retry Detection") { Task { await loadLeagues() } }
+          .buttonStyle(.bordered)
+      } else {
+        Image(systemName: "sportscourt")
+          .font(.system(size: 52))
+          .foregroundStyle(.quaternary)
+        Text("No leagues available")
+          .font(.headline)
+          .foregroundStyle(.secondary)
+        Button("Retry") { Task { await loadLeagues() } }
+          .buttonStyle(.bordered)
+      }
     }
     .frame(maxWidth: .infinity)
   }
@@ -206,6 +234,33 @@ struct AddSourceSheet: View {
       dismiss()
     } else {
       errorMessage = "Invalid URL or source already exists."
+    }
+  }
+}
+
+// MARK: - Browse tile (custom sources)
+
+struct BrowseTile: View {
+  let source: AnyStreamSource
+
+  var body: some View {
+    ZStack {
+      RoundedRectangle(cornerRadius: 16)
+        .fill(Color.secondary.opacity(0.13))
+        .aspectRatio(1, contentMode: .fit)
+
+      VStack(spacing: 10) {
+        Image(systemName: "globe")
+          .font(.system(size: 36, weight: .bold))
+          .foregroundStyle(Color.secondary)
+
+        Text("Browse")
+          .font(.system(size: 20, weight: .bold))
+          .foregroundStyle(Color.secondary.opacity(0.85))
+          .minimumScaleFactor(0.3)
+          .frame(maxWidth: .infinity)
+          .padding(.horizontal, 6)
+      }
     }
   }
 }
