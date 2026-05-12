@@ -4,8 +4,7 @@ struct HomeView: View {
   @Environment(SourceRegistry.self) private var registry
   @State private var availableLeagues: [SportLeague] = []
   @State private var isLoading = true
-  @State private var showSourcePicker = false
-  @State private var showAddSource = false
+  @State private var showSourceManager = false
 
   private let columns = [
     GridItem(.flexible()),
@@ -38,36 +37,28 @@ struct HomeView: View {
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .principal) {
-          Text("SteamCenter")
-            .font(.headline)
-            .fontWeight(.bold)
+          Text("StreamCenter")
+            .font(.system(size: 22, weight: .bold))
         }
         ToolbarItem(placement: .topBarTrailing) {
           Button {
-            showSourcePicker = true
+            showSourceManager = true
           } label: {
-            Label("Source", systemImage: "antenna.radiowaves.left.and.right")
+            Label("Sources", systemImage: "antenna.radiowaves.left.and.right")
           }
         }
       }
-      .confirmationDialog("Stream Source", isPresented: $showSourcePicker, titleVisibility: .visible) {
-        ForEach(registry.sources) { source in
-          Button {
-            registry.selectedSource = source
-            Task { await loadLeagues() }
-          } label: {
-            Text(source.name + (source.id == registry.selectedSource.id ? " ✓" : ""))
-          }
-        }
-        Button("Add Source…") {
-          showAddSource = true
-        }
-        Button("Cancel", role: .cancel) {}
-      }
-      .sheet(isPresented: $showAddSource) {
-        AddSourceSheet { name, url in
+      .sheet(isPresented: $showSourceManager) {
+        SourceManagerSheet(selectedSourceID: registry.selectedSource.id) { source in
+          registry.selectedSource = source
+          showSourceManager = false
+          Task { await loadLeagues() }
+        } onAdd: { name, url in
           _ = registry.addSource(name: name, urlString: url)
+        } onDelete: { source in
+          registry.removeSource(source)
         }
+        .environment(registry)
       }
       .task { await loadLeagues() }
     }
@@ -103,6 +94,74 @@ struct HomeView: View {
     isLoading = true
     availableLeagues = (try? await registry.selectedSource.fetchAvailableLeagues()) ?? []
     isLoading = false
+  }
+}
+
+// MARK: - Source Manager Sheet
+
+struct SourceManagerSheet: View {
+  @Environment(SourceRegistry.self) private var registry
+  var selectedSourceID: String
+  var onSelect: (AnyStreamSource) -> Void
+  var onAdd: (String, String) -> Void
+  var onDelete: (AnyStreamSource) -> Void
+
+  @Environment(\.dismiss) private var dismiss
+  @State private var showAddSource = false
+
+  var body: some View {
+    NavigationStack {
+      List {
+        ForEach(registry.sources) { source in
+          Button {
+            onSelect(source)
+          } label: {
+            HStack {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(source.name)
+                  .font(.body)
+                  .foregroundStyle(.primary)
+                Text(source.baseURL.host ?? source.baseURL.absoluteString)
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+              Spacer()
+              if source.id == selectedSourceID {
+                Image(systemName: "checkmark")
+                  .font(.body.weight(.semibold))
+                  .foregroundStyle(.tint)
+              }
+            }
+          }
+          .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            if !source.isBuiltIn {
+              Button(role: .destructive) {
+                onDelete(source)
+              } label: {
+                Label("Delete", systemImage: "trash")
+              }
+            }
+          }
+        }
+      }
+      .navigationTitle("Stream Sources")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Done") { dismiss() }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+          Button {
+            showAddSource = true
+          } label: {
+            Label("Add", systemImage: "plus")
+          }
+        }
+      }
+      .sheet(isPresented: $showAddSource) {
+        AddSourceSheet(onAdd: onAdd)
+      }
+    }
   }
 }
 

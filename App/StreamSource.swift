@@ -10,18 +10,19 @@ protocol StreamSource {
   func fetchGames(for league: SportLeague) async throws -> [Game]
 }
 
-// Type-erased wrapper so sources with value or reference semantics both work
 struct AnyStreamSource: Identifiable, Equatable {
   let id: String
   let name: String
   let baseURL: URL
+  let isBuiltIn: Bool
   private let _fetchLeagues: () async throws -> [SportLeague]
   private let _fetchGames: (SportLeague) async throws -> [Game]
 
-  init<S: StreamSource>(_ source: S) {
+  init<S: StreamSource>(_ source: S, builtIn: Bool = false) {
     id = source.id
     name = source.name
     baseURL = source.baseURL
+    isBuiltIn = builtIn
     _fetchLeagues = source.fetchAvailableLeagues
     _fetchGames = source.fetchGames
   }
@@ -49,11 +50,14 @@ final class SourceRegistry {
   private static let customSourcesKey = "customSources"
 
   private init() {
-    var all: [AnyStreamSource] = [AnyStreamSource(BuffStreamsSource())]
+    var all: [AnyStreamSource] = [
+      AnyStreamSource(BuffStreamsSource(), builtIn: true),
+      AnyStreamSource(PPVToSource(), builtIn: true),
+    ]
     if let saved = UserDefaults.standard.array(forKey: Self.customSourcesKey) as? [[String: String]] {
       for entry in saved {
         if let name = entry["name"], let urlStr = entry["url"], let url = URL(string: urlStr) {
-          all.append(AnyStreamSource(CustomStreamSource(name: name, baseURL: url)))
+          all.append(AnyStreamSource(CustomStreamSource(name: name, baseURL: url), builtIn: false))
         }
       }
     }
@@ -67,22 +71,22 @@ final class SourceRegistry {
       cleaned = "https://" + cleaned
     }
     guard let url = URL(string: cleaned), url.host != nil else { return false }
-    let source = AnyStreamSource(CustomStreamSource(name: name, baseURL: url))
     guard !sources.contains(where: { $0.baseURL.host == url.host }) else { return false }
+    let source = AnyStreamSource(CustomStreamSource(name: name, baseURL: url), builtIn: false)
     sources.append(source)
     persistCustomSources()
     return true
   }
 
   func removeSource(_ source: AnyStreamSource) {
-    guard source.id != "buffstreams" else { return }
+    guard !source.isBuiltIn else { return }
     sources.removeAll { $0.id == source.id }
     if selectedSource == source { selectedSource = sources[0] }
     persistCustomSources()
   }
 
   private func persistCustomSources() {
-    let custom = sources.dropFirst().map { ["name": $0.name, "url": $0.baseURL.absoluteString] }
-    UserDefaults.standard.set(Array(custom), forKey: Self.customSourcesKey)
+    let custom = sources.filter { !$0.isBuiltIn }.map { ["name": $0.name, "url": $0.baseURL.absoluteString] }
+    UserDefaults.standard.set(custom, forKey: Self.customSourcesKey)
   }
 }
