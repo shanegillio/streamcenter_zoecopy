@@ -4,6 +4,7 @@ struct HomeView: View {
   @Environment(SourceRegistry.self) private var registry
   @State private var availableLeagues: [SportLeague] = []
   @State private var isLoading = true
+  @State private var loadFailed = false
   @State private var showSourceManager = false
 
   private let columns = [
@@ -16,8 +17,14 @@ struct HomeView: View {
     NavigationStack {
       ZStack {
         if isLoading {
-          ProgressView()
-            .scaleEffect(1.3)
+          VStack(spacing: 14) {
+            ProgressView().scaleEffect(1.3)
+            if !registry.selectedSource.isBuiltIn {
+              Text("Scanning \(registry.selectedSource.name) for streams…")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            }
+          }
         } else {
           ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -77,26 +84,28 @@ struct HomeView: View {
   }
 
   private var emptyState: some View {
-    VStack(spacing: 20) {
+    VStack(spacing: 16) {
       Spacer(minLength: 60)
       if !registry.selectedSource.isBuiltIn {
-        // Custom source: scraping found nothing, offer direct browse
-        Image(systemName: "globe")
-          .font(.system(size: 52))
+        Image(systemName: loadFailed ? "wifi.exclamationmark" : "questionmark.circle")
+          .font(.system(size: 48))
           .foregroundStyle(.secondary)
-        Text("Couldn't detect leagues")
+        Text(loadFailed ? "Couldn't reach \(registry.selectedSource.name)" : "No leagues detected")
           .font(.headline)
-        Text("Tap Browse to navigate the site manually. Streams are intercepted automatically.")
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
-          .multilineTextAlignment(.center)
-          .padding(.horizontal, 32)
+        Text(loadFailed
+          ? "Check your connection, then try again. You can also browse the site manually."
+          : "The site loaded but no game listings were found. Browse the site manually — streams will be intercepted automatically when you tap one."
+        )
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 28)
         NavigationLink(destination: BrowseView(source: registry.selectedSource)) {
           Label("Browse \(registry.selectedSource.name)", systemImage: "globe")
             .padding(.horizontal, 8)
         }
         .buttonStyle(.borderedProminent)
-        Button("Retry Detection") { Task { await loadLeagues() } }
+        Button("Try Again") { Task { await loadLeagues() } }
           .buttonStyle(.bordered)
       } else {
         Image(systemName: "sportscourt")
@@ -114,7 +123,13 @@ struct HomeView: View {
 
   private func loadLeagues() async {
     isLoading = true
-    availableLeagues = (try? await registry.selectedSource.fetchAvailableLeagues()) ?? []
+    loadFailed = false
+    do {
+      availableLeagues = try await registry.selectedSource.fetchAvailableLeagues()
+    } catch {
+      availableLeagues = []
+      loadFailed = true
+    }
     isLoading = false
   }
 }

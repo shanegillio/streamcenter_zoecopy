@@ -6,8 +6,6 @@ struct CustomStreamSource: StreamSource {
 
   var id: String { baseURL.host ?? baseURL.absoluteString }
 
-  // Ordered from most-specific to least-specific so a path like /premier-league/
-  // beats a later /football/ match.
   private static let urlSegmentLeague: [(String, SportLeague)] = [
     ("premier-league", .premierLeague), ("laliga", .laLiga), ("la-liga", .laLiga),
     ("serie-a", .serieA), ("bundesliga", .bundesliga),
@@ -35,8 +33,6 @@ struct CustomStreamSource: StreamSource {
   ]
 
   static func detectLeague(href: String, text: String) -> SportLeague? {
-    let hrefLower = href.lowercased()
-    // Split the URL path into segments and check each one
     if let url = URL(string: href) {
       let segments = url.pathComponents.map { $0.lowercased() }
       for (keyword, league) in urlSegmentLeague {
@@ -44,12 +40,11 @@ struct CustomStreamSource: StreamSource {
           return league
         }
       }
-      // Also check the full path string for compound patterns
+      let hrefLower = href.lowercased()
       for (keyword, league) in urlSegmentLeague where hrefLower.contains("/\(keyword)") {
         return league
       }
     }
-    // Fall back to text keywords
     let textLower = text.lowercased()
     for (keyword, league) in textLeague where textLower.contains(keyword) {
       return league
@@ -78,7 +73,7 @@ struct CustomStreamSource: StreamSource {
             let url = URL(string: link.href),
             !seen.contains(link.href) else { return nil }
       seen.insert(link.href)
-      let (home, away) = parseTeams(from: link.text)
+      let (home, away) = parseTeams(from: link.text, href: link.href)
       let textLower = link.text.lowercased()
       let isLive = textLower.contains("live") || textLower.contains("in progress")
       return Game(
@@ -96,17 +91,26 @@ struct CustomStreamSource: StreamSource {
   // MARK: - Helpers
 
   private func isGameLink(_ link: ScrapedLink) -> Bool {
-    let text = link.text.lowercased()
-    guard text.contains(" vs ") || text.contains(" vs. ") || text.contains(" @ ") else { return false }
     guard let linkURL = URL(string: link.href), let linkHost = linkURL.host else { return false }
-    // Accept same host OR any subdomain of the same root domain
-    // e.g. base=v2.streameast.ga should accept links from streameast.ga or www.streameast.ga
-    let rootDomain = rootDomain(of: baseURL.host ?? "")
-    guard linkHost == baseURL.host || linkHost.hasSuffix("." + rootDomain) || linkHost == rootDomain else { return false }
-    // Reject nav/utility paths
+
+    // Must be same root domain
+    let root = rootDomain(of: baseURL.host ?? "")
+    guard linkHost == baseURL.host || linkHost.hasSuffix("." + root) || linkHost == root else { return false }
+
+    // Reject utility pages
     let path = linkURL.path.lowercased()
-    let blocklist = ["/about", "/contact", "/login", "/register", "/signup", "/privacy", "/terms", "/faq"]
-    return !blocklist.contains(where: { path.hasPrefix($0) })
+    let blocklist = ["/about", "/contact", "/login", "/register", "/signup", "/privacy", "/terms", "/faq", "/schedule", "/home"]
+    guard !blocklist.contains(where: { path.hasPrefix($0) }) else { return false }
+
+    // Must look like a matchup — check link text AND URL slug
+    let text = link.text.lowercased()
+    let hasVsText = text.contains(" vs ") || text.contains(" vs. ") || text.contains(" @ ")
+    let hasVsURL  = path.contains("-vs-") || path.contains("-vs.")
+    guard hasVsText || hasVsURL else { return false }
+
+    // Must resolve to a specific game (not a category page) — path should have ≥ 2 segments
+    let segments = linkURL.pathComponents.filter { $0 != "/" }
+    return segments.count >= 2
   }
 
   private func rootDomain(of host: String) -> String {
@@ -115,7 +119,8 @@ struct CustomStreamSource: StreamSource {
     return parts.suffix(2).joined(separator: ".")
   }
 
-  private func parseTeams(from text: String) -> (String, String) {
+  // Parses teams from link text first; falls back to URL slug if text is uninformative.
+  private func parseTeams(from text: String, href: String) -> (String, String) {
     let cleaned = text
       .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
       .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -124,7 +129,6 @@ struct CustomStreamSource: StreamSource {
       guard let range = cleaned.range(of: separator, options: .caseInsensitive) else { continue }
       let home = String(cleaned[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
       var away = String(cleaned[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-      // Strip trailing noise: time, "LIVE", channel name after first meaningful break
       let noisePatterns = [#"\s+\d{1,2}:\d{2}"#, #"\s+LIVE\b"#, #"\s+HD\b"#, #"\s+\|"#]
       for pattern in noisePatterns {
         if let r = away.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
@@ -134,7 +138,24 @@ struct CustomStreamSource: StreamSource {
       away = away.trimmingCharacters(in: .whitespacesAndNewlines)
       if !home.isEmpty && !away.isEmpty { return (home, away) }
     }
-    return (cleaned, "TBD")
+
+    // Fall back to URL slug: /nba/detroit-pistons-vs-cleveland-cavaliers-3/
+    if let url = URL(string: href) {
+      let slug = url.pathComponents.last(where: { $0.contains("-vs-") }) ?? ""
+      for sep in ["-vs-", "-vs."] {
+        if let r = slug.range(of: sep, options: .caseInsensitive) {
+          let homePart = String(slug[..<r.lowerBound])
+          var awayPart = String(slug[r.upperBound...])
+          // strip trailing "-N" (stream number suffix)
+          awayPart = awayPart.replacingOccurrences(of: #"-\d+$"#, with: "", options: .regularExpression)
+          let home = homePart.split(separator: "-").map { $0.capitalized }.joined(separator: " ")
+          let away = awayPart.split(separator: "-").map { $0.capitalized }.joined(separator: " ")
+          if !home.isEmpty && !away.isEmpty { return (home, away) }
+        }
+      }
+    }
+
+    return (cleaned.isEmpty ? "TBD" : cleaned, "TBD")
   }
 
   private func scrapeLinks() async -> [ScrapedLink] {
