@@ -74,13 +74,13 @@ struct CustomStreamSource: StreamSource {
             !seen.contains(link.href) else { return nil }
       seen.insert(link.href)
       let (home, away) = parseTeams(from: link.text, href: link.href)
-      let textLower = link.text.lowercased()
-      let isLive = textLower.contains("live") || textLower.contains("in progress")
+      let scheduledTime = parseTime(from: link.text)
+      let isLive = detectLive(text: link.text, scheduledTime: scheduledTime)
       return Game(
         id: link.href,
         homeTeam: home,
         awayTeam: away,
-        scheduledTime: nil,
+        scheduledTime: scheduledTime,
         isLive: isLive,
         pageURL: url,
         league: league
@@ -156,6 +156,50 @@ struct CustomStreamSource: StreamSource {
     }
 
     return (cleaned.isEmpty ? "TBD" : cleaned, "TBD")
+  }
+
+  private func detectLive(text: String, scheduledTime: Date?) -> Bool {
+    let lower = text.lowercased()
+    if lower.contains("in progress") || lower.contains(" live") { return true }
+    if let t = scheduledTime {
+      let diff = Date().timeIntervalSince(t)
+      return diff >= -300 && diff < 14400
+    }
+    return false
+  }
+
+  // Extracts a time string like "8:00 PM", "02:30 AM ET" from link text and
+  // resolves it to today's date in ET (matching how most US sports sites display times).
+  private func parseTime(from text: String) -> Date? {
+    let pattern = #"(\d{1,2}:\d{2}\s*[AaPp][Mm](?:\s*[A-Z]{2,3})?)"#
+    guard let regex = try? NSRegularExpression(pattern: pattern),
+          let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+          let range = Range(match.range(at: 1), in: text) else { return nil }
+
+    var raw = String(text[range])
+      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+      .trimmingCharacters(in: .whitespaces)
+      .uppercased()
+    for tz in [" ET", " EST", " EDT", " GMT", " UTC", " PT", " CT", " MT"] {
+      raw = raw.replacingOccurrences(of: tz, with: "")
+    }
+
+    let etTZ = TimeZone(identifier: "America/New_York")!
+    var etCal = Calendar(identifier: .gregorian)
+    etCal.timeZone = etTZ
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = etTZ
+
+    for format in ["h:mm a", "hh:mm a"] {
+      formatter.dateFormat = format
+      guard let parsed = formatter.date(from: raw) else { continue }
+      var comps = etCal.dateComponents([.year, .month, .day], from: Date())
+      let t = etCal.dateComponents([.hour, .minute], from: parsed)
+      comps.hour = t.hour; comps.minute = t.minute; comps.second = 0
+      return etCal.date(from: comps)
+    }
+    return nil
   }
 
   private func scrapeLinks() async -> [ScrapedLink] {
