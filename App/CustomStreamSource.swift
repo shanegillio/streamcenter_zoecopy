@@ -160,7 +160,14 @@ struct CustomStreamSource: StreamSource {
 
   private func detectLive(text: String, scheduledTime: Date?) -> Bool {
     let lower = text.lowercased()
-    if lower.contains("in progress") || lower.contains(" live") { return true }
+    // Text-based indicators
+    if lower.contains("in progress") || lower.contains("live") || lower.contains("halftime") { return true }
+    // Score pattern: two numbers around a separator ("3 - 7", "45:67", "3-7")
+    // Upcoming games never show scores, so this reliably indicates a game in progress.
+    let scorePattern = #"\b\d{1,3}\s*[-:]\s*\d{1,3}\b"#
+    if (try? NSRegularExpression(pattern: scorePattern))?.firstMatch(
+        in: text, range: NSRange(text.startIndex..., in: text)) != nil { return true }
+    // Time-based: game was scheduled within the last 4 hours
     if let t = scheduledTime {
       let diff = Date().timeIntervalSince(t)
       return diff >= -300 && diff < 14400
