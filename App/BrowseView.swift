@@ -15,11 +15,16 @@ struct BrowseView: View {
       Color.black.ignoresSafeArea()
 
       if rulesReady {
-        StreamWebView(url: source.baseURL, ruleList: ruleList) { streamURL in
-          let p = AVPlayer(url: streamURL)
-          avPlayer = p
-          p.play()
-        }
+        StreamWebView(
+          url: source.baseURL,
+          ruleList: ruleList,
+          onStreamURLFound: { streamURL in
+            let p = AVPlayer(url: streamURL)
+            avPlayer = p
+            p.play()
+          },
+          browseMode: true
+        )
         .ignoresSafeArea()
         .opacity(avPlayer == nil ? 1 : 0)
 

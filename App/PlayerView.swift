@@ -78,8 +78,11 @@ struct StreamWebView: UIViewRepresentable {
   let url: URL
   let ruleList: WKContentRuleList?
   var onStreamURLFound: ((URL) -> Void)? = nil
+  /// Browse mode: allows cross-domain link navigation and redirects window.open() into
+  /// the same WebView instead of suppressing it. Used by BrowseView for custom sources.
+  var browseMode: Bool = false
 
-  func makeCoordinator() -> Coordinator { Coordinator(onStreamURLFound: onStreamURLFound) }
+  func makeCoordinator() -> Coordinator { Coordinator(onStreamURLFound: onStreamURLFound, browseMode: browseMode) }
 
   func makeUIView(context: Context) -> WKWebView {
     let config = WKWebViewConfiguration()
@@ -88,12 +91,12 @@ struct StreamWebView: UIViewRepresentable {
 
     if let ruleList { config.userContentController.add(ruleList) }
 
-    // Weak proxy avoids WKUserContentController retaining Coordinator
     let proxy = WeakScriptProxy(delegate: context.coordinator)
     config.userContentController.add(proxy, name: "streamURL")
 
+    let popupJS = browseMode ? Self.popupRedirectJS : Self.popupSuppressJS
     config.userContentController.addUserScript(WKUserScript(
-      source: Self.popupSuppressJS, injectionTime: .atDocumentStart, forMainFrameOnly: false
+      source: popupJS, injectionTime: .atDocumentStart, forMainFrameOnly: false
     ))
     config.userContentController.addUserScript(WKUserScript(
       source: Self.autoPlayAndInterceptJS, injectionTime: .atDocumentStart, forMainFrameOnly: false
@@ -121,6 +124,7 @@ struct StreamWebView: UIViewRepresentable {
 
   // MARK: JS Payloads
 
+  // Standard mode: suppress all popups (used for BuffStreams / PPV.to where popups are ads)
   static let popupSuppressJS = """
     window.open = function(){return null;};
     window.alert = function(){};
@@ -128,12 +132,31 @@ struct StreamWebView: UIViewRepresentable {
     window.prompt = function(){return '';};
   """
 
+  // Browse mode: redirect window.open() into the same WebView so stream popups work,
+  // while still silencing alert/confirm/prompt spam.
+  static let popupRedirectJS = """
+    window.alert = function(){};
+    window.confirm = function(){return false;};
+    window.prompt = function(){return '';};
+    window.open = function(url){
+      if (url && typeof url === 'string' && url.indexOf('http') === 0) {
+        window.location.href = url;
+      }
+      return null;
+    };
+  """
+
   static let autoPlayAndInterceptJS = """
     (function(){
       'use strict';
       var _r = {};
+      function isStreamURL(u) {
+        if (!u || typeof u !== 'string') return false;
+        var l = u.toLowerCase();
+        return l.indexOf('.m3u8') !== -1 || l.indexOf('.mpd') !== -1;
+      }
       function report(url) {
-        if (!url || _r[url] || url.indexOf('.m3u8') === -1) return;
+        if (!url || _r[url] || !isStreamURL(url)) return;
         _r[url] = 1;
         try { window.webkit.messageHandlers.streamURL.postMessage(url); } catch(e){}
       }
@@ -141,28 +164,56 @@ struct StreamWebView: UIViewRepresentable {
       // Intercept XHR
       var xhrOpen = XMLHttpRequest.prototype.open;
       XMLHttpRequest.prototype.open = function(m, u) {
-        if (typeof u === 'string') report(u); return xhrOpen.apply(this, arguments);
+        if (typeof u === 'string') report(u);
+        return xhrOpen.apply(this, arguments);
       };
 
       // Intercept fetch
       if (window.fetch) {
         var _f = window.fetch;
         window.fetch = function() {
-          if (typeof arguments[0] === 'string') report(arguments[0]);
+          var arg = arguments[0];
+          if (typeof arg === 'string') report(arg);
+          else if (arg && typeof arg === 'object' && arg.url) report(arg.url);
           return _f.apply(this, arguments);
         };
       }
 
-      function scan() {
-        // Check existing video/source elements
-        document.querySelectorAll('video, source').forEach(function(el) {
-          report(el.src || el.getAttribute('src') || '');
+      function scanScripts() {
+        // Many sports sites embed the m3u8 URL as a string literal in an inline <script>
+        // rather than fetching it via XHR/fetch, so XHR interception alone misses it.
+        document.querySelectorAll('script:not([src])').forEach(function(s) {
+          var c = s.innerHTML.replace(/[\\r\\n\\t]+/g, ' ');
+          // Pattern 1: quoted .m3u8 or .mpd URL
+          var m1 = c.match(/['"]([^'"]{8,}(?:\\.m3u8|\\.mpd)[^'"]*)['"]/);
+          if (m1 && m1[1].indexOf('http') !== -1) { report(m1[1]); }
+          // Pattern 2: base64-encoded URL via atob()
+          var b64matches = c.match(/atob\\s*\\(\\s*['"]([A-Za-z0-9+\\/=]{20,})['"]\\s*\\)/g);
+          if (b64matches) {
+            b64matches.forEach(function(match) {
+              try {
+                var b64 = match.replace(/^atob\\s*\\(\\s*['"]/, '').replace(/['"]\\s*\\)$/, '');
+                var decoded = atob(b64);
+                if (decoded.indexOf('http') === 0) report(decoded);
+              } catch(e) {}
+            });
+          }
         });
-        // Auto-play any video
+      }
+
+      function scan() {
+        // video / source elements
+        document.querySelectorAll('video, source').forEach(function(el) {
+          var src = el.src || el.getAttribute('src') || '';
+          if (src) report(src);
+        });
+        // inline scripts (catches string-literal m3u8 URLs)
+        scanScripts();
+        // auto-play paused videos
         document.querySelectorAll('video').forEach(function(v) {
           if (v.paused) v.play().catch(function(){});
         });
-        // Click play buttons (common player selectors)
+        // click common play buttons
         ['.vjs-big-play-button','.jw-icon-display','.jw-display-icon-display',
          '.plyr__control--overlaid','[data-plyr="play"]','.play-btn','.play_btn',
          '.btn-play','#play','[class*="play-button"]','button[class*="play"]'
@@ -170,7 +221,7 @@ struct StreamWebView: UIViewRepresentable {
           var el = document.querySelector(sel);
           if (el && !el._az) { el._az = 1; el.click(); }
         });
-        // Remove fixed/absolute ad overlays above z 999
+        // remove fixed/absolute ad overlays above z-index 999
         document.querySelectorAll('*').forEach(function(el){
           try {
             var s = window.getComputedStyle(el);
@@ -186,7 +237,7 @@ struct StreamWebView: UIViewRepresentable {
         document.documentElement || document,
         {childList:true, subtree:true, attributes:true}
       );
-      [100,500,1000,2000,3000,5000].forEach(function(t){ setTimeout(scan, t); });
+      [100,500,1000,2000,3000,5000,8000].forEach(function(t){ setTimeout(scan, t); });
     })();
   """
 
@@ -194,9 +245,13 @@ struct StreamWebView: UIViewRepresentable {
 
   final class Coordinator: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     let onStreamURLFound: ((URL) -> Void)?
+    let browseMode: Bool
     private var found = false
 
-    init(onStreamURLFound: ((URL) -> Void)?) { self.onStreamURLFound = onStreamURLFound }
+    init(onStreamURLFound: ((URL) -> Void)?, browseMode: Bool) {
+      self.onStreamURLFound = onStreamURLFound
+      self.browseMode = browseMode
+    }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
       guard !found,
@@ -207,11 +262,20 @@ struct StreamWebView: UIViewRepresentable {
     }
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
-                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? { nil }
+                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+      // In browse mode, load popup URLs in the same WebView instead of suppressing.
+      if browseMode, let url = navigationAction.request.url {
+        webView.load(URLRequest(url: url))
+      }
+      return nil
+    }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-      if action.navigationType == .linkActivated,
+      // In browse mode allow everything so users can navigate naturally through the site.
+      // In standard mode, block cross-domain link taps (these are almost always ad redirects).
+      if !browseMode,
+         action.navigationType == .linkActivated,
          let host = action.request.url?.host,
          host != webView.url?.host {
         decisionHandler(.cancel); return
