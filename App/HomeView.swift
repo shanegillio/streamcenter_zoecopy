@@ -108,11 +108,12 @@ struct LeagueTile: View {
           .foregroundStyle(league.accentColor)
 
         Text(league.displayName)
-          .font(.system(size: 14, weight: .bold))
+          .font(.system(size: 20, weight: .bold))
           .foregroundStyle(league.accentColor.opacity(0.85))
           .multilineTextAlignment(.center)
           .lineLimit(2)
-          .minimumScaleFactor(0.7)
+          .minimumScaleFactor(0.3)
+          .frame(maxWidth: .infinity)
           .padding(.horizontal, 6)
       }
     }
