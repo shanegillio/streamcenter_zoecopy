@@ -64,7 +64,7 @@ struct PPVToSource: StreamSource {
     let now = Date().timeIntervalSince1970
     return streams.compactMap { stream -> Game? in
       guard Self.league(for: stream) == league else { return nil }
-      guard let url = URL(string: "https://ppv.to/\(stream.uriName)") else { return nil }
+      guard let url = URL(string: stream.iframe) else { return nil }
       let parts = stream.name.components(separatedBy: " vs. ")
       let homeTeam = parts.first ?? stream.name
       let awayTeam = parts.count > 1 ? parts[1] : "TBD"
@@ -122,6 +122,7 @@ struct PPVStream: Decodable {
   let startsAt: Int
   let endsAt: Int
   let categoryName: String
+  let iframe: String
 
   enum CodingKeys: String, CodingKey {
     case id, name
@@ -129,5 +130,6 @@ struct PPVStream: Decodable {
     case startsAt = "starts_at"
     case endsAt = "ends_at"
     case categoryName = "category_name"
+    case iframe
   }
 }

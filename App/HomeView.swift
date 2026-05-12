@@ -13,7 +13,6 @@ struct HomeView: View {
   ]
 
   var body: some View {
-    @Bindable var reg = registry
     NavigationStack {
       ZStack {
         if isLoading {
@@ -49,16 +48,11 @@ struct HomeView: View {
         }
       }
       .sheet(isPresented: $showSourceManager) {
-        SourceManagerSheet(selectedSourceID: registry.selectedSource.id) { source in
-          registry.selectedSource = source
-          showSourceManager = false
-          Task { await loadLeagues() }
-        } onAdd: { name, url in
-          _ = registry.addSource(name: name, urlString: url)
-        } onDelete: { source in
-          registry.removeSource(source)
-        }
-        .environment(registry)
+        SourceManagerSheet()
+          .environment(registry)
+          .onDisappear {
+            Task { await loadLeagues() }
+          }
       }
       .task { await loadLeagues() }
     }
@@ -101,11 +95,6 @@ struct HomeView: View {
 
 struct SourceManagerSheet: View {
   @Environment(SourceRegistry.self) private var registry
-  var selectedSourceID: String
-  var onSelect: (AnyStreamSource) -> Void
-  var onAdd: (String, String) -> Void
-  var onDelete: (AnyStreamSource) -> Void
-
   @Environment(\.dismiss) private var dismiss
   @State private var showAddSource = false
 
@@ -114,19 +103,20 @@ struct SourceManagerSheet: View {
       List {
         ForEach(registry.sources) { source in
           Button {
-            onSelect(source)
+            registry.selectedSource = source
+            dismiss()
           } label: {
-            HStack {
-              VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 12) {
+              VStack(alignment: .leading, spacing: 3) {
                 Text(source.name)
-                  .font(.body)
-                  .foregroundStyle(.primary)
+                  .font(.body.weight(.medium))
+                  .foregroundStyle(Color(.label))
                 Text(source.baseURL.host ?? source.baseURL.absoluteString)
                   .font(.caption)
-                  .foregroundStyle(.secondary)
+                  .foregroundStyle(.blue)
               }
               Spacer()
-              if source.id == selectedSourceID {
+              if source.id == registry.selectedSource.id {
                 Image(systemName: "checkmark")
                   .font(.body.weight(.semibold))
                   .foregroundStyle(.tint)
@@ -136,7 +126,7 @@ struct SourceManagerSheet: View {
           .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             if !source.isBuiltIn {
               Button(role: .destructive) {
-                onDelete(source)
+                registry.removeSource(source)
               } label: {
                 Label("Delete", systemImage: "trash")
               }
@@ -159,7 +149,8 @@ struct SourceManagerSheet: View {
         }
       }
       .sheet(isPresented: $showAddSource) {
-        AddSourceSheet(onAdd: onAdd)
+        AddSourceSheet()
+          .environment(registry)
       }
     }
   }
@@ -168,11 +159,11 @@ struct SourceManagerSheet: View {
 // MARK: - Add Source Sheet
 
 struct AddSourceSheet: View {
-  var onAdd: (String, String) -> Void
+  @Environment(SourceRegistry.self) private var registry
   @Environment(\.dismiss) private var dismiss
   @State private var sourceName = ""
   @State private var sourceURL = ""
-  @State private var showError = false
+  @State private var errorMessage: String? = nil
 
   var body: some View {
     NavigationStack {
@@ -185,8 +176,8 @@ struct AddSourceSheet: View {
             .autocorrectionDisabled()
             .textInputAutocapitalization(.never)
         } footer: {
-          if showError {
-            Text("Please enter a valid name and URL.")
+          if let msg = errorMessage {
+            Text(msg)
               .foregroundStyle(.red)
           }
         }
@@ -198,17 +189,24 @@ struct AddSourceSheet: View {
           Button("Cancel") { dismiss() }
         }
         ToolbarItem(placement: .confirmationAction) {
-          Button("Add") {
-            let trimName = sourceName.trimmingCharacters(in: .whitespacesAndNewlines)
-            let trimURL = sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimName.isEmpty && !trimURL.isEmpty else { showError = true; return }
-            onAdd(trimName, trimURL)
-            dismiss()
-          }
+          Button("Add") { attemptAdd() }
         }
       }
     }
     .presentationDetents([.medium])
+  }
+
+  private func attemptAdd() {
+    let trimName = sourceName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimURL = sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimName.isEmpty else { errorMessage = "Please enter a name."; return }
+    guard !trimURL.isEmpty else { errorMessage = "Please enter a URL."; return }
+    let success = registry.addSource(name: trimName, urlString: trimURL)
+    if success {
+      dismiss()
+    } else {
+      errorMessage = "Invalid URL or source already exists."
+    }
   }
 }
 

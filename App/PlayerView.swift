@@ -111,7 +111,8 @@ struct StreamWebView: UIViewRepresentable {
       "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
       forHTTPHeaderField: "User-Agent"
     )
-    request.setValue("https://buffstreams.plus", forHTTPHeaderField: "Referer")
+    let referer = url.scheme.map { "\($0)://\(url.host ?? "")" } ?? "https://buffstreams.plus"
+    request.setValue(referer, forHTTPHeaderField: "Referer")
     webView.load(request)
     return webView
   }
