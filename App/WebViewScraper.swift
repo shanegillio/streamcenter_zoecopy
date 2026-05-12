@@ -1,28 +1,47 @@
 import Foundation
 import WebKit
+import UIKit
 
 struct ScrapedLink {
   let href: String
   let text: String
 }
 
-// Loads a URL in a hidden WKWebView, waits for JS to render, then extracts all anchor links.
+// Loads a URL in a WKWebView attached to an off-screen UIWindow so Cloudflare JS
+// challenges and SSO redirects complete fully before link extraction runs.
+// Debounces didFinish so multi-hop redirect chains (Cloudflare → SSO → real page)
+// only trigger one extraction pass after the final page settles.
 @MainActor
 final class WebViewScraper: NSObject {
   private var webView: WKWebView?
+  private var hostWindow: UIWindow?
   private var continuation: CheckedContinuation<[ScrapedLink], Never>?
   private var hasResumed = false
   private var timeoutTask: Task<Void, Never>?
+  private var extractionTask: Task<Void, Never>?
 
-  func scrape(url: URL, timeout: TimeInterval = 18) async -> [ScrapedLink] {
+  func scrape(url: URL, timeout: TimeInterval = 30) async -> [ScrapedLink] {
     await withCheckedContinuation { cont in
       self.continuation = cont
+      self.hasResumed = false
 
       let config = WKWebViewConfiguration()
       config.allowsInlineMediaPlayback = false
+
       let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
       wv.navigationDelegate = self
       self.webView = wv
+
+      // Attach to a real (but invisible) UIWindow so Cloudflare's JS challenge runs
+      // in a full browser context rather than an orphaned WebView.
+      if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+        let win = UIWindow(windowScene: scene)
+        win.frame = CGRect(x: -400, y: -400, width: 390, height: 844)
+        win.windowLevel = UIWindow.Level(rawValue: -9999)
+        win.addSubview(wv)
+        win.isHidden = false
+        self.hostWindow = win
+      }
 
       var request = URLRequest(url: url, timeoutInterval: timeout)
       request.setValue(
@@ -40,37 +59,46 @@ final class WebViewScraper: NSObject {
     }
   }
 
+  // Debounced: each didFinish resets the 3-second timer so we only extract
+  // after the final page in a redirect chain fully settles.
+  private func scheduleExtraction() {
+    extractionTask?.cancel()
+    extractionTask = Task { @MainActor [weak self] in
+      try? await Task.sleep(nanoseconds: 3_000_000_000)
+      guard !Task.isCancelled, let self else { return }
+      self.extractLinks()
+    }
+  }
+
   private func extractLinks() {
     guard let wv = webView else { finish(with: []); return }
-    // Wait 2 s for SPA frameworks (React/Vue/Nuxt) to finish rendering
-    Task { @MainActor [weak self] in
-      guard let self else { return }
-      try? await Task.sleep(nanoseconds: 2_000_000_000)
-      let js = """
-        (function() {
-          var links = [], seen = {};
-          document.querySelectorAll('a[href]').forEach(function(a) {
-            var href = a.href;
-            var text = (a.innerText || a.textContent || '').replace(/\\s+/g, ' ').trim();
-            if (href && !seen[href]) { seen[href] = 1; links.push({href:href, text:text}); }
-          });
-          return JSON.stringify(links);
-        })()
-      """
-      wv.evaluateJavaScript(js) { [weak self] result, _ in
-        Task { @MainActor in
-          guard let self else { return }
-          if let jsonStr = result as? String,
-             let data = jsonStr.data(using: .utf8),
-             let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] {
-            let links = raw.compactMap { d -> ScrapedLink? in
-              guard let href = d["href"], let text = d["text"] else { return nil }
-              return ScrapedLink(href: href, text: text)
-            }
-            self.finish(with: links)
-          } else {
-            self.finish(with: [])
+    let js = """
+      (function() {
+        var links = [], seen = {};
+        document.querySelectorAll('a[href]').forEach(function(a) {
+          var href = a.href;
+          var text = (a.innerText || a.textContent || '').replace(/\\s+/g, ' ').trim();
+          if (href && !seen[href] && href.startsWith('http')) {
+            seen[href] = 1;
+            links.push({href: href, text: text});
           }
+        });
+        return JSON.stringify(links);
+      })()
+    """
+    wv.evaluateJavaScript(js) { [weak self] result, _ in
+      Task { @MainActor in
+        guard let self else { return }
+        if let jsonStr = result as? String,
+           let data = jsonStr.data(using: .utf8),
+           let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] {
+          let links = raw.compactMap { d -> ScrapedLink? in
+            guard let href = d["href"], let text = d["text"] else { return nil }
+            return ScrapedLink(href: href, text: text)
+          }
+          self.finish(with: links)
+        } else {
+          self.finish(with: [])
         }
       }
     }
@@ -80,15 +108,26 @@ final class WebViewScraper: NSObject {
     guard !hasResumed else { return }
     hasResumed = true
     timeoutTask?.cancel()
+    extractionTask?.cancel()
     timeoutTask = nil
+    extractionTask = nil
     continuation?.resume(returning: links)
     continuation = nil
+    webView?.navigationDelegate = nil
     webView = nil
+    hostWindow?.isHidden = true
+    hostWindow = nil
   }
 }
 
 extension WebViewScraper: WKNavigationDelegate {
-  func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { extractLinks() }
-  func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { finish(with: []) }
-  func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { finish(with: []) }
+  func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+    scheduleExtraction()
+  }
+  func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+    finish(with: [])
+  }
+  func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+    finish(with: [])
+  }
 }

@@ -98,12 +98,21 @@ struct CustomStreamSource: StreamSource {
   private func isGameLink(_ link: ScrapedLink) -> Bool {
     let text = link.text.lowercased()
     guard text.contains(" vs ") || text.contains(" vs. ") || text.contains(" @ ") else { return false }
-    // Must be on the same host
-    guard let linkURL = URL(string: link.href), linkURL.host == baseURL.host else { return false }
-    // Reject nav/footer-looking paths
+    guard let linkURL = URL(string: link.href), let linkHost = linkURL.host else { return false }
+    // Accept same host OR any subdomain of the same root domain
+    // e.g. base=v2.streameast.ga should accept links from streameast.ga or www.streameast.ga
+    let rootDomain = rootDomain(of: baseURL.host ?? "")
+    guard linkHost == baseURL.host || linkHost.hasSuffix("." + rootDomain) || linkHost == rootDomain else { return false }
+    // Reject nav/utility paths
     let path = linkURL.path.lowercased()
-    let blocklist = ["/about", "/contact", "/login", "/register", "/signup", "/privacy", "/terms", "/faq", "/home"]
+    let blocklist = ["/about", "/contact", "/login", "/register", "/signup", "/privacy", "/terms", "/faq"]
     return !blocklist.contains(where: { path.hasPrefix($0) })
+  }
+
+  private func rootDomain(of host: String) -> String {
+    let parts = host.split(separator: ".")
+    guard parts.count >= 2 else { return host }
+    return parts.suffix(2).joined(separator: ".")
   }
 
   private func parseTeams(from text: String) -> (String, String) {
