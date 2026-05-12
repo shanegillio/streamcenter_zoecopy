@@ -5,6 +5,7 @@ struct HomeView: View {
   @State private var availableLeagues: [SportLeague] = []
   @State private var isLoading = true
   @State private var showSourcePicker = false
+  @State private var showAddSource = false
 
   private let columns = [
     GridItem(.flexible()),
@@ -34,9 +35,13 @@ struct HomeView: View {
           }
         }
       }
-      .navigationTitle("StreamZone")
-      .navigationBarTitleDisplayMode(.large)
+      .navigationBarTitleDisplayMode(.inline)
       .toolbar {
+        ToolbarItem(placement: .principal) {
+          Text("SteamCenter")
+            .font(.headline)
+            .fontWeight(.bold)
+        }
         ToolbarItem(placement: .topBarTrailing) {
           Button {
             showSourcePicker = true
@@ -54,7 +59,15 @@ struct HomeView: View {
             Text(source.name + (source.id == registry.selectedSource.id ? " ✓" : ""))
           }
         }
+        Button("Add Source…") {
+          showAddSource = true
+        }
         Button("Cancel", role: .cancel) {}
+      }
+      .sheet(isPresented: $showAddSource) {
+        AddSourceSheet { name, url in
+          _ = registry.addSource(name: name, urlString: url)
+        }
       }
       .task { await loadLeagues() }
     }
@@ -92,6 +105,55 @@ struct HomeView: View {
     isLoading = false
   }
 }
+
+// MARK: - Add Source Sheet
+
+struct AddSourceSheet: View {
+  var onAdd: (String, String) -> Void
+  @Environment(\.dismiss) private var dismiss
+  @State private var sourceName = ""
+  @State private var sourceURL = ""
+  @State private var showError = false
+
+  var body: some View {
+    NavigationStack {
+      Form {
+        Section {
+          TextField("Name (e.g. MyStreams)", text: $sourceName)
+            .autocorrectionDisabled()
+          TextField("URL (e.g. https://example.com)", text: $sourceURL)
+            .keyboardType(.URL)
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.never)
+        } footer: {
+          if showError {
+            Text("Please enter a valid name and URL.")
+              .foregroundStyle(.red)
+          }
+        }
+      }
+      .navigationTitle("Add Source")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Cancel") { dismiss() }
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Add") {
+            let trimName = sourceName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimURL = sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimName.isEmpty && !trimURL.isEmpty else { showError = true; return }
+            onAdd(trimName, trimURL)
+            dismiss()
+          }
+        }
+      }
+    }
+    .presentationDetents([.medium])
+  }
+}
+
+// MARK: - League tile
 
 struct LeagueTile: View {
   let league: SportLeague

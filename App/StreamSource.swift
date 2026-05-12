@@ -43,14 +43,46 @@ struct AnyStreamSource: Identifiable, Equatable {
 final class SourceRegistry {
   static let shared = SourceRegistry()
 
-  let sources: [AnyStreamSource] = [
-    AnyStreamSource(BuffStreamsSource())
-  ]
-
+  private(set) var sources: [AnyStreamSource]
   var selectedSource: AnyStreamSource
 
+  private static let customSourcesKey = "customSources"
+
   private init() {
-    let all = [AnyStreamSource(BuffStreamsSource())]
+    var all: [AnyStreamSource] = [AnyStreamSource(BuffStreamsSource())]
+    if let saved = UserDefaults.standard.array(forKey: Self.customSourcesKey) as? [[String: String]] {
+      for entry in saved {
+        if let name = entry["name"], let urlStr = entry["url"], let url = URL(string: urlStr) {
+          all.append(AnyStreamSource(CustomStreamSource(name: name, baseURL: url)))
+        }
+      }
+    }
+    sources = all
     selectedSource = all[0]
+  }
+
+  func addSource(name: String, urlString: String) -> Bool {
+    var cleaned = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !cleaned.hasPrefix("http://") && !cleaned.hasPrefix("https://") {
+      cleaned = "https://" + cleaned
+    }
+    guard let url = URL(string: cleaned), url.host != nil else { return false }
+    let source = AnyStreamSource(CustomStreamSource(name: name, baseURL: url))
+    guard !sources.contains(where: { $0.baseURL.host == url.host }) else { return false }
+    sources.append(source)
+    persistCustomSources()
+    return true
+  }
+
+  func removeSource(_ source: AnyStreamSource) {
+    guard source.id != "buffstreams" else { return }
+    sources.removeAll { $0.id == source.id }
+    if selectedSource == source { selectedSource = sources[0] }
+    persistCustomSources()
+  }
+
+  private func persistCustomSources() {
+    let custom = sources.dropFirst().map { ["name": $0.name, "url": $0.baseURL.absoluteString] }
+    UserDefaults.standard.set(Array(custom), forKey: Self.customSourcesKey)
   }
 }

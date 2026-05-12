@@ -12,12 +12,12 @@
     "CODE_SIGN_IDENTITY": "-"
   },
   "targets": {
-    "StreamZone": {
+    "SteamCenter": {
       "deploymentTarget": "17.0",
       "info": {
         "path": "App/Info.plist",
         "properties": {
-          "CFBundleDisplayName": "StreamZone",
+          "CFBundleDisplayName": "SteamCenter",
           "CFBundleShortVersionString": "1.0",
           "CFBundleVersion": "1",
           "ITSAppUsesNonExemptEncryption": false,
