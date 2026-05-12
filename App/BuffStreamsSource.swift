@@ -215,10 +215,9 @@ struct BuffStreamsSource: StreamSource {
       )
     }
 
-    // Live game: "Carolina Hurricanes 4' Philadelphia Flyers" — minute marker, no clock time.
-    // [^0-9a-zA-Z\s] matches any apostrophe/prime variant (', ′, ', ʹ, etc.)
-    let livePattern = #"^(.+?)\s+\d{1,3}[^0-9a-zA-Z\s]\s+(.+)$"#
-    if let liveRegex = try? NSRegularExpression(pattern: livePattern),
+    // Live game: "Cleveland Cavaliers In Progress Detroit Pistons"
+    let inProgressPattern = #"^(.+?)\s+[Ii]n [Pp]rogress\s+(.+)$"#
+    if let liveRegex = try? NSRegularExpression(pattern: inProgressPattern),
        let m = liveRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
        m.numberOfRanges >= 3,
        let r1 = Range(m.range(at: 1), in: text),
@@ -247,13 +246,7 @@ struct BuffStreamsSource: StreamSource {
   }
 
   private func detectLive(linkText: String, scheduledTime: Date?) -> Bool {
-    // Minute marker (soccer/timed sports): digits followed by any non-alphanumeric, non-space
-    // character then a space — catches ', ′, ' (U+2019), and any other apostrophe variant.
-    let minuteMarker = #"\d{1,3}[^0-9a-zA-Z\s]\s"#
-    if (try? NSRegularExpression(pattern: minuteMarker))?.firstMatch(
-        in: linkText, range: NSRange(linkText.startIndex..., in: linkText)) != nil {
-      return true
-    }
+    if linkText.lowercased().contains("in progress") { return true }
     // Time-based: game was scheduled within the last 4 hours
     if let t = scheduledTime {
       let diff = Date().timeIntervalSince(t)
