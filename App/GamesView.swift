@@ -16,32 +16,18 @@ struct GamesView: View {
       Color(.systemBackground).ignoresSafeArea()
 
       if isLoading {
-        ProgressView()
-          .scaleEffect(1.3)
+        ProgressView().scaleEffect(1.3)
       } else if let error = errorMessage {
         VStack(spacing: 12) {
-          Image(systemName: "exclamationmark.triangle")
-            .font(.largeTitle)
-            .foregroundStyle(.secondary)
-          Text(error)
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-          Button("Retry") { Task { await loadGames() } }
-            .buttonStyle(.bordered)
-        }
-        .padding()
+          Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundStyle(.secondary)
+          Text(error).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+          Button("Retry") { Task { await loadGames() } }.buttonStyle(.bordered)
+        }.padding()
       } else if games.isEmpty {
         VStack(spacing: 12) {
-          Image(systemName: league.sfSymbol)
-            .font(.system(size: 48))
-            .foregroundStyle(.quaternary)
-          Text("No games found")
-            .font(.headline)
-            .foregroundStyle(.secondary)
-          Text("Check back closer to game time.")
-            .font(.subheadline)
-            .foregroundStyle(.tertiary)
+          Image(systemName: league.sfSymbol).font(.system(size: 48)).foregroundStyle(.quaternary)
+          Text("No games found").font(.headline).foregroundStyle(.secondary)
+          Text("Check back closer to game time.").font(.subheadline).foregroundStyle(.tertiary)
         }
       } else {
         ScrollView {
@@ -53,7 +39,7 @@ struct GamesView: View {
                     GameRow(game: game)
                   }
                   .buttonStyle(.plain)
-                  Divider().padding(.leading, 72)
+                  Divider().padding(.leading, 88)
                 }
               } header: {
                 SectionHeader(title: "Live Now", color: .red)
@@ -67,7 +53,7 @@ struct GamesView: View {
                     GameRow(game: game)
                   }
                   .buttonStyle(.plain)
-                  Divider().padding(.leading, 72)
+                  Divider().padding(.leading, 88)
                 }
               } header: {
                 SectionHeader(title: "Upcoming", color: .secondary)
@@ -96,69 +82,120 @@ struct GamesView: View {
   }
 }
 
+// MARK: - Game row
+
 struct GameRow: View {
   let game: Game
 
   var body: some View {
-    HStack(spacing: 16) {
-      ZStack {
-        Circle()
-          .fill(game.league.accentColor.opacity(0.15))
-          .frame(width: 48, height: 48)
-        Image(systemName: game.league.sfSymbol)
-          .font(.system(size: 20, weight: .semibold))
-          .foregroundStyle(game.league.accentColor)
+    HStack(spacing: 14) {
+      // Stacked team logos
+      VStack(spacing: 6) {
+        TeamLogo(teamName: game.homeTeam, league: game.league)
+        TeamLogo(teamName: game.awayTeam, league: game.league)
       }
+      .frame(width: 56)
 
-      VStack(alignment: .leading, spacing: 3) {
+      // Team names
+      VStack(alignment: .leading, spacing: 6) {
         Text(game.homeTeam)
-          .font(.subheadline)
-          .fontWeight(.semibold)
-          .foregroundStyle(.primary)
+          .font(.subheadline).fontWeight(.semibold).foregroundStyle(.primary)
+          .lineLimit(1)
         Text(game.awayTeam)
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
+          .font(.subheadline).foregroundStyle(.secondary)
+          .lineLimit(1)
       }
 
       Spacer()
 
-      if game.isLive {
-        LiveBadge()
-      } else {
-        Text(game.displayTime)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .multilineTextAlignment(.trailing)
+      // Status
+      VStack(alignment: .trailing, spacing: 4) {
+        if game.isLive {
+          LivePill()
+        } else {
+          Text(game.displayTime)
+            .font(.caption).fontWeight(.medium)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.trailing)
+        }
       }
 
       Image(systemName: "chevron.right")
-        .font(.caption)
+        .font(.caption2).fontWeight(.semibold)
         .foregroundStyle(.quaternary)
     }
     .padding(.horizontal, 16)
-    .padding(.vertical, 12)
+    .padding(.vertical, 14)
     .contentShape(Rectangle())
   }
 }
 
-struct LiveBadge: View {
+// MARK: - Team logo
+
+struct TeamLogo: View {
+  let teamName: String
+  let league: SportLeague
+
+  private var logoURL: URL? {
+    TeamLogoService.resolve(teamName: teamName, league: league)
+  }
+
+  private var initials: String {
+    teamName.split(separator: " ").suffix(2).compactMap { $0.first }.map(String.init).joined()
+  }
+
+  var body: some View {
+    Group {
+      if let url = logoURL {
+        AsyncImage(url: url) { phase in
+          switch phase {
+          case .success(let image):
+            image.resizable().scaledToFit()
+          default:
+            initialsView
+          }
+        }
+      } else {
+        initialsView
+      }
+    }
+    .frame(width: 36, height: 36)
+  }
+
+  private var initialsView: some View {
+    ZStack {
+      Circle().fill(league.accentColor.opacity(0.15))
+      Text(initials)
+        .font(.system(size: 11, weight: .bold))
+        .foregroundStyle(league.accentColor)
+    }
+  }
+}
+
+// MARK: - Live pill
+
+struct LivePill: View {
   @State private var pulse = false
 
   var body: some View {
-    HStack(spacing: 4) {
+    HStack(spacing: 5) {
       Circle()
         .fill(.red)
-        .frame(width: 7, height: 7)
-        .scaleEffect(pulse ? 1.3 : 1.0)
-        .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulse)
+        .frame(width: 6, height: 6)
+        .scaleEffect(pulse ? 1.4 : 0.9)
+        .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: pulse)
       Text("LIVE")
-        .font(.caption2)
-        .fontWeight(.bold)
-        .foregroundStyle(.red)
+        .font(.caption2).fontWeight(.black)
+        .foregroundStyle(.white)
     }
+    .padding(.horizontal, 8)
+    .padding(.vertical, 4)
+    .background(.red, in: Capsule())
     .onAppear { pulse = true }
   }
 }
+
+// MARK: - Section header
 
 struct SectionHeader: View {
   let title: String
@@ -166,8 +203,7 @@ struct SectionHeader: View {
 
   var body: some View {
     Text(title.uppercased())
-      .font(.caption)
-      .fontWeight(.semibold)
+      .font(.caption).fontWeight(.semibold)
       .foregroundStyle(color)
       .padding(.horizontal, 16)
       .padding(.vertical, 8)

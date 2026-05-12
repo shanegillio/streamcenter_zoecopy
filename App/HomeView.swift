@@ -97,23 +97,24 @@ struct LeagueTile: View {
   let league: SportLeague
 
   var body: some View {
-    VStack(spacing: 10) {
-      ZStack {
-        RoundedRectangle(cornerRadius: 16)
-          .fill(league.accentColor.opacity(0.12))
-          .aspectRatio(1, contentMode: .fit)
+    ZStack {
+      RoundedRectangle(cornerRadius: 16)
+        .fill(league.accentColor.opacity(0.13))
+        .aspectRatio(1, contentMode: .fit)
 
+      VStack(spacing: 8) {
         Image(systemName: league.sfSymbol)
-          .font(.system(size: 30, weight: .medium))
+          .font(.system(size: 26, weight: .semibold))
           .foregroundStyle(league.accentColor)
-      }
 
-      Text(league.displayName)
-        .font(.caption)
-        .fontWeight(.medium)
-        .foregroundStyle(.primary)
-        .lineLimit(1)
-        .minimumScaleFactor(0.8)
+        Text(league.displayName)
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(league.accentColor.opacity(0.85))
+          .multilineTextAlignment(.center)
+          .lineLimit(2)
+          .minimumScaleFactor(0.75)
+          .padding(.horizontal, 4)
+      }
     }
   }
 }
