@@ -97,24 +97,24 @@ struct GameRow: View {
       .frame(width: 56)
 
       // Team names
-      VStack(alignment: .leading, spacing: 6) {
+      VStack(alignment: .leading, spacing: 7) {
         Text(game.homeTeam)
-          .font(.subheadline).fontWeight(.semibold).foregroundStyle(.primary)
+          .font(.system(size: 16, weight: .bold)).foregroundStyle(.primary)
           .lineLimit(1)
         Text(game.awayTeam)
-          .font(.subheadline).foregroundStyle(.secondary)
+          .font(.system(size: 16, weight: .bold)).foregroundStyle(.primary)
           .lineLimit(1)
       }
 
       Spacer()
 
       // Status
-      VStack(alignment: .trailing, spacing: 4) {
+      Group {
         if game.isLive {
           LivePill()
         } else {
           Text(game.displayTime)
-            .font(.caption).fontWeight(.medium)
+            .font(.caption).fontWeight(.semibold)
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.trailing)
         }

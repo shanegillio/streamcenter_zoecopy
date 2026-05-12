@@ -267,25 +267,29 @@ struct BuffStreamsSource: StreamSource {
       .replacingOccurrences(of: " ET", with: "")
       .replacingOccurrences(of: " EST", with: "")
       .replacingOccurrences(of: " EDT", with: "")
+      .replacingOccurrences(of: " GMT", with: "")
+      .replacingOccurrences(of: " UTC", with: "")
+
+    // Use a single ET calendar throughout so hour/minute extraction never drifts to local TZ
+    let etTZ = TimeZone(identifier: "America/New_York")!
+    var etCal = Calendar(identifier: .gregorian)
+    etCal.timeZone = etTZ
 
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.timeZone = TimeZone(identifier: "America/New_York")
+    formatter.timeZone = etTZ
 
-    for format in ["h:mm A", "hh:mm A"] {
+    for format in ["h:mm a", "hh:mm a", "h:mm A", "hh:mm A"] {
       formatter.dateFormat = format
-      if let parsed = formatter.date(from: cleaned) {
-        let cal = Calendar.current
-        let now = Date()
-        var comps = cal.dateComponents(in: TimeZone(identifier: "America/New_York")!, from: now)
-        let timeComps = cal.dateComponents([.hour, .minute], from: parsed)
-        comps.hour = timeComps.hour
-        comps.minute = timeComps.minute
-        comps.second = 0
-        if let date = cal.date(from: comps) {
-          return date
-        }
-      }
+      guard let parsed = formatter.date(from: cleaned) else { continue }
+
+      // Extract today's Y/M/D in ET, then apply the parsed H:M (also in ET)
+      var comps = etCal.dateComponents([.year, .month, .day], from: Date())
+      let t = etCal.dateComponents([.hour, .minute], from: parsed)
+      comps.hour = t.hour
+      comps.minute = t.minute
+      comps.second = 0
+      if let date = etCal.date(from: comps) { return date }
     }
     return nil
   }

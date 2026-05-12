@@ -62,6 +62,8 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     vc.player = player
     vc.showsPlaybackControls = true
     vc.videoGravity = .resizeAspect
+    vc.entersFullScreenWhenPlaybackBegins = true
+    vc.exitsFullScreenWhenPlaybackEnds = true
     return vc
   }
 

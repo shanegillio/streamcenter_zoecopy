@@ -12,23 +12,30 @@ struct Game: Identifiable, Equatable, Hashable {
   var title: String { "\(homeTeam) vs \(awayTeam)" }
 
   var displayTime: String {
-    if isLive { return "LIVE NOW" }
-    guard let time = scheduledTime else { return "Today" }
+    if isLive { return "LIVE" }
+    guard let time = scheduledTime else { return "Time TBD" }
+
+    // Show time in ET to match what the source site displays
+    let etTZ = TimeZone(identifier: "America/New_York")!
+    var etCal = Calendar(identifier: .gregorian)
+    etCal.timeZone = etTZ
+
     let formatter = DateFormatter()
-    let calendar = Calendar.current
-    if calendar.isDateInToday(time) {
-      formatter.dateFormat = "h:mm a"
-    } else if calendar.isDateInTomorrow(time) {
-      formatter.dateFormat = "'Tomorrow' h:mm a"
-    } else {
-      formatter.dateFormat = "EEE, h:mm a"
-    }
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = etTZ
     formatter.amSymbol = "AM"
     formatter.pmSymbol = "PM"
+
+    if etCal.isDateInToday(time) {
+      formatter.dateFormat = "h:mm a 'ET'"
+    } else if etCal.isDateInTomorrow(time) {
+      formatter.dateFormat = "'Tomorrow' h:mm a 'ET'"
+    } else {
+      formatter.dateFormat = "EEE h:mm a 'ET'"
+    }
     return formatter.string(from: time)
   }
 
   static func == (lhs: Game, rhs: Game) -> Bool { lhs.id == rhs.id }
-
   func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
