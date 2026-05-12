@@ -102,18 +102,18 @@ struct LeagueTile: View {
         .fill(league.accentColor.opacity(0.13))
         .aspectRatio(1, contentMode: .fit)
 
-      VStack(spacing: 8) {
+      VStack(spacing: 10) {
         Image(systemName: league.sfSymbol)
-          .font(.system(size: 26, weight: .semibold))
+          .font(.system(size: 36, weight: .bold))
           .foregroundStyle(league.accentColor)
 
         Text(league.displayName)
-          .font(.system(size: 12, weight: .semibold))
+          .font(.system(size: 14, weight: .bold))
           .foregroundStyle(league.accentColor.opacity(0.85))
           .multilineTextAlignment(.center)
           .lineLimit(2)
-          .minimumScaleFactor(0.75)
-          .padding(.horizontal, 4)
+          .minimumScaleFactor(0.7)
+          .padding(.horizontal, 6)
       }
     }
   }
