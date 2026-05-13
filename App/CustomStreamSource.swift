@@ -114,14 +114,13 @@ struct CustomStreamSource: StreamSource {
     guard !navSegments.contains(segments.last?.lowercased() ?? "") else { return false }
 
     let text = link.text.lowercased()
-    let hasVsText   = text.contains(" vs ") || text.contains(" vs. ") || text.contains(" @ ") || text.contains(" v. ")
-    let hasVsURL    = path.contains("-vs-") || path.contains("-vs.")
-    // DOM status element is a strong signal the link is a game card
+    let hasVsText    = text.contains(" vs ") || text.contains(" vs. ") || text.contains(" @ ") || text.contains(" v. ")
+    let hasVsURL     = path.contains("-vs-") || path.contains("-vs.")
+    // A non-empty DOM status element (e.g. "Bottom 6th", "Halftime") is a strong
+    // signal this anchor is inside a game card — used as fallback when "vs" is absent.
     let hasDOMStatus = !link.status.isEmpty && link.status.count < 60
-    // Sites like crackstreams organise by league path without "vs" in every slug
-    let hasLeagueURL = Self.detectLeague(href: link.href, text: "") != nil
 
-    return hasVsText || hasVsURL || hasDOMStatus || hasLeagueURL
+    return hasVsText || hasVsURL || hasDOMStatus
   }
 
   private func rootDomain(of host: String) -> String {
