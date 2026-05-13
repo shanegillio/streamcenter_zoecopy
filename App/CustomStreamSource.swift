@@ -203,8 +203,11 @@ struct CustomStreamSource: StreamSource {
       }
 
       let scheduledTime = parseTime(from: link.text)
-      let liveStatus    = parseLiveStatus(domStatus: link.status, linkText: link.text)
-      let isLive        = liveStatus != nil || detectLive(text: link.text, domStatus: link.status, scheduledTime: scheduledTime)
+      // detectLive is the single source of truth — parseLiveStatus only produces the
+      // display string and must NOT be used to infer live state, since it can return
+      // non-nil for non-live content (e.g. a time string scraped from a status element).
+      let isLive     = detectLive(text: link.text, domStatus: link.status, scheduledTime: scheduledTime)
+      let liveStatus = isLive ? parseLiveStatus(domStatus: link.status, linkText: link.text) : nil
 
       return Game(
         id: link.href,
@@ -388,9 +391,17 @@ struct CustomStreamSource: StreamSource {
   }
 
   private func detectLive(text: String, domStatus: String, scheduledTime: Date?) -> Bool {
-    if !domStatus.isEmpty && !domStatus.lowercased().hasPrefix("http") { return true }
+    // Only treat domStatus as a live signal when it actually looks like an active game
+    // state. A non-empty domStatus alone is NOT sufficient — a time string like
+    // "7:05 PM" or "Tomorrow" would otherwise mark every upcoming game as live.
+    if !domStatus.isEmpty {
+      let s = domStatus.lowercased()
+      let isLiveState = s.contains("live") || s.contains("progress") ||
+                        detectPeriod(in: s) != nil || detectScore(in: domStatus) != nil
+      if isLiveState { return true }
+    }
     let lower = text.lowercased()
-    if lower.contains("live") { return true }
+    if lower.contains("live") || lower.contains("in progress") { return true }
     if let t = scheduledTime {
       let diff = Date().timeIntervalSince(t)
       return diff >= -300 && diff < 14400

@@ -82,16 +82,24 @@ final class WebViewScraper: NSObject {
           var text = (a.innerText || a.textContent || '').replace(/\\s+/g, ' ').trim();
           if (href && !seen[href] && href.startsWith('http')) {
             seen[href] = 1;
-            // Walk up the DOM (up to 5 levels) to find a sibling status/score/badge element.
-            // This captures elements like <div class="status status-live">Bottom 6th</div>
-            // that are placed outside the <a> tag in many sports streaming site layouts.
+            // Walk up the DOM looking for a status element that is a DIRECT CHILD
+            // of an ancestor — not a deep descendant. Using querySelector() at a high
+            // ancestor level would match status elements from sibling game cards,
+            // causing every game to inherit one card's live state (the original bug).
             var statusText = '';
             var el = a.parentElement;
-            for (var i = 0; i < 5 && el && !statusText; i++) {
-              var found = el.querySelector('[class*="status"], [class*="score"], [class*="badge"], [class*="live-label"]');
-              if (found && !found.contains(a)) {
-                var t = (found.innerText || found.textContent || '').replace(/\\s+/g, ' ').trim();
-                if (t) statusText = t;
+            for (var i = 0; i < 4 && el && !statusText; i++) {
+              var children = el.children;
+              for (var j = 0; j < children.length && !statusText; j++) {
+                var child = children[j];
+                if (!child.contains(a)) {
+                  var cls = (child.className || '').toLowerCase();
+                  if (cls.indexOf('status') !== -1 || cls.indexOf('score') !== -1 ||
+                      cls.indexOf('badge') !== -1 || cls.indexOf('live-label') !== -1) {
+                    var t = (child.innerText || child.textContent || '').replace(/\\s+/g, ' ').trim();
+                    if (t && t.length < 60) statusText = t;
+                  }
+                }
               }
               el = el.parentElement;
             }
