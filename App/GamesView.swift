@@ -135,10 +135,7 @@ struct GameRow: View {
 struct TeamLogo: View {
   let teamName: String
   let league: SportLeague
-
-  private var logoURL: URL? {
-    TeamLogoService.resolve(teamName: teamName, league: league)
-  }
+  @State private var resolvedURL: URL? = nil
 
   private var initials: String {
     teamName.split(separator: " ").suffix(2).compactMap { $0.first }.map(String.init).joined()
@@ -146,7 +143,7 @@ struct TeamLogo: View {
 
   var body: some View {
     Group {
-      if let url = logoURL {
+      if let url = resolvedURL {
         AsyncImage(url: url) { phase in
           switch phase {
           case .success(let image):
@@ -160,6 +157,9 @@ struct TeamLogo: View {
       }
     }
     .frame(width: 36, height: 36)
+    .task(id: teamName) {
+      resolvedURL = await TeamLogoCache.shared.logoURL(for: teamName, league: league)
+    }
   }
 
   private var initialsView: some View {

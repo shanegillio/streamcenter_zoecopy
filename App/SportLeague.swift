@@ -65,6 +65,21 @@ enum SportLeague: String, CaseIterable, Identifiable, Codable, Hashable {
     }
   }
 
+  var leagueLogoURL: URL? {
+    switch self {
+    case .nfl:          return URL(string: "https://a.espncdn.com/i/teamlogos/leagues/500/nfl.png")
+    case .nba:          return URL(string: "https://a.espncdn.com/i/teamlogos/leagues/500/nba.png")
+    case .mlb:          return URL(string: "https://a.espncdn.com/i/teamlogos/leagues/500/mlb.png")
+    case .nhl:          return URL(string: "https://a.espncdn.com/i/teamlogos/leagues/500/nhl.png")
+    case .wnba:         return URL(string: "https://a.espncdn.com/i/teamlogos/leagues/500/wnba.png")
+    case .premierLeague: return URL(string: "https://a.espncdn.com/i/leaguelogos/soccer/500/23.png")
+    case .laLiga:       return URL(string: "https://a.espncdn.com/i/leaguelogos/soccer/500/15.png")
+    case .serieA:       return URL(string: "https://a.espncdn.com/i/leaguelogos/soccer/500/12.png")
+    case .bundesliga:   return URL(string: "https://a.espncdn.com/i/leaguelogos/soccer/500/10.png")
+    default:            return nil
+    }
+  }
+
   var accentColor: Color {
     switch self {
     case .nfl: return Color(red: 0.17, green: 0.45, blue: 0.75)

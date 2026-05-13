@@ -292,9 +292,23 @@ struct LeagueTile: View {
         .aspectRatio(1, contentMode: .fit)
 
       VStack(spacing: 10) {
-        Image(systemName: league.sfSymbol)
-          .font(.system(size: 36, weight: .bold))
-          .foregroundStyle(league.accentColor)
+        if let logoURL = league.leagueLogoURL {
+          AsyncImage(url: logoURL) { phase in
+            switch phase {
+            case .success(let image):
+              image.resizable().scaledToFit()
+            default:
+              Image(systemName: league.sfSymbol)
+                .font(.system(size: 36, weight: .bold))
+                .foregroundStyle(league.accentColor)
+            }
+          }
+          .frame(width: 44, height: 44)
+        } else {
+          Image(systemName: league.sfSymbol)
+            .font(.system(size: 36, weight: .bold))
+            .foregroundStyle(league.accentColor)
+        }
 
         Text(league.displayName)
           .font(.system(size: 20, weight: .bold))
