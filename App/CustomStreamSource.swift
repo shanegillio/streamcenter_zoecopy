@@ -1,5 +1,21 @@
 import Foundation
 
+// Short-lived cache (60 s TTL) so fetchAvailableLeagues and fetchGames reuse
+// the same scraped pages without re-fetching within the same session.
+private actor ScrapeCache {
+  static let shared = ScrapeCache()
+  private var store: [URL: (links: [ScrapedLink], expiry: Date)] = [:]
+
+  func get(_ url: URL) -> [ScrapedLink]? {
+    guard let entry = store[url], Date() < entry.expiry else { return nil }
+    return entry.links
+  }
+
+  func set(_ links: [ScrapedLink], for url: URL) {
+    store[url] = (links, Date().addingTimeInterval(60))
+  }
+}
+
 struct CustomStreamSource: StreamSource {
   let name: String
   let baseURL: URL
@@ -32,13 +48,14 @@ struct CustomStreamSource: StreamSource {
     ("soccer", .soccer),
   ]
 
-  // Special event keywords that indicate a non-matchup listing (no "vs" expected)
   private static let eventKeywords = [
     "draft", "combine", "all-star", "all star", "pro bowl", "skills challenge",
     "showcase", "awards", "scouting", "super bowl", "superbowl", "nba finals",
-    "world series", "stanley cup", "championship game", "title fight", "press conference",
-    "weigh-in", "open practice",
+    "world series", "stanley cup", "championship game", "title fight",
+    "press conference", "weigh-in", "open practice",
   ]
+
+  // MARK: - League detection
 
   static func detectLeague(href: String, text: String) -> SportLeague? {
     if let url = URL(string: href) {
@@ -62,32 +79,74 @@ struct CustomStreamSource: StreamSource {
 
   // MARK: - Public API
 
+  /// Returns only leagues that have verifiable game listings.
+  /// For one-level sites (games on the home page) this is instant.
+  /// For two-level sites (crackstreams-style) it scrapes each league
+  /// sub-page in parallel to confirm game content exists.
   func fetchAvailableLeagues() async throws -> [SportLeague] {
-    let links = await scrapeLinks()
-    var found = Set<SportLeague>()
-    // Permissive: detect leagues from any same-domain link so two-level sites
-    // (like crackstreams) surface their sports even without game links on the home page.
-    for link in links {
-      guard let linkURL = URL(string: link.href), let linkHost = linkURL.host else { continue }
-      let root = rootDomain(of: baseURL.host ?? "")
-      guard linkHost == baseURL.host || linkHost.hasSuffix("." + root) || linkHost == root else { continue }
+    let homeLinks = await scrapeLinks()
+
+    // One-level sites: games appear directly on the home page
+    var directLeagues = Set<SportLeague>()
+    for link in homeLinks where isGameLink(link) || isEventLink(link) {
       if let league = Self.detectLeague(href: link.href, text: link.text) {
-        found.insert(league)
+        directLeagues.insert(league)
       }
     }
-    return Array(found).sorted { $0.displayName < $1.displayName }
+    if !directLeagues.isEmpty {
+      return Array(directLeagues).sorted { $0.displayName < $1.displayName }
+    }
+
+    // Two-level sites: find the best section link for each candidate league,
+    // then verify in parallel that each section page actually has game listings.
+    var sectionByLeague = [SportLeague: URL]()
+    for link in homeLinks {
+      guard !isGameLink(link), !isEventLink(link),
+            let url = URL(string: link.href),
+            isSameDomain(url),
+            let league = Self.detectLeague(href: link.href, text: link.text),
+            sectionByLeague[league] == nil else { continue }
+      let segs = url.pathComponents.filter { $0 != "/" }
+      guard segs.count >= 1, segs.count <= 3 else { continue }
+      sectionByLeague[league] = url
+    }
+
+    guard !sectionByLeague.isEmpty else { return [] }
+
+    // Run verification in parallel batches of 5 to keep memory reasonable
+    let candidates = Array(sectionByLeague)
+    var verified = Set<SportLeague>()
+    for batchStart in stride(from: 0, to: candidates.count, by: 5) {
+      let batch = Array(candidates[batchStart ..< min(batchStart + 5, candidates.count)])
+      await withTaskGroup(of: SportLeague?.self) { group in
+        for (league, url) in batch {
+          group.addTask {
+            let sub = await self.scrapeLinks(url: url, timeout: 20)
+            return sub.contains { self.isGameLink($0) || self.isEventLink($0) } ? league : nil
+          }
+        }
+        for await result in group { if let l = result { verified.insert(l) } }
+      }
+    }
+
+    return Array(verified).sorted { $0.displayName < $1.displayName }
   }
 
   func fetchGames(for league: SportLeague) async throws -> [Game] {
     let homeLinks = await scrapeLinks()
 
-    // Try to find games directly on the home/base page (e.g. streameast.ga)
-    var games = buildGames(from: homeLinks, for: league)
+    // One-level: games on the home page
+    var games = buildGames(from: homeLinks, for: league, requireLeagueDetection: true)
 
-    // If nothing found, this is likely a two-level site (e.g. crackstreams.ms) where
-    // the home page only lists league categories and games live on sub-pages.
+    // Two-level: follow the league's section page
     if games.isEmpty {
-      games = await fetchGamesFromSubPages(for: league, homeLinks: homeLinks)
+      let sectionURLs = findSectionURLs(for: league, in: homeLinks)
+      for url in sectionURLs.prefix(2) {
+        let subLinks = await scrapeLinks(url: url, timeout: 20)
+        // Don't filter by detectLeague here — game URLs like /stream/... have
+        // no sport keyword, but we know we're on the right league's page.
+        games.append(contentsOf: buildGames(from: subLinks, for: league, requireLeagueDetection: false))
+      }
     }
 
     return games.sorted { a, b in
@@ -100,48 +159,42 @@ struct CustomStreamSource: StreamSource {
     }
   }
 
-  // MARK: - Two-level scraping
+  // MARK: - Internal helpers
 
-  private func fetchGamesFromSubPages(for league: SportLeague, homeLinks: [ScrapedLink]) async -> [Game] {
-    // Find category/section links for this league: same domain, 1 path segment, no "vs" in URL.
-    var seenURLs = Set<String>()
-    let sectionURLs: [URL] = homeLinks.compactMap { link in
-      guard let url = URL(string: link.href), let host = url.host else { return nil }
-      let root = rootDomain(of: baseURL.host ?? "")
-      guard host == baseURL.host || host.hasSuffix("." + root) || host == root else { return nil }
-      let segments = url.pathComponents.filter { $0 != "/" && !$0.isEmpty }
-      guard segments.count == 1,
-            !url.path.lowercased().contains("-vs-"),
-            Self.detectLeague(href: link.href, text: link.text) == league,
-            seenURLs.insert(url.absoluteString).inserted else { return nil }
+  private func findSectionURLs(for league: SportLeague, in homeLinks: [ScrapedLink]) -> [URL] {
+    var seen = Set<String>()
+    return homeLinks.compactMap { link -> URL? in
+      guard !isGameLink(link), !isEventLink(link),
+            let url = URL(string: link.href),
+            isSameDomain(url),
+            let detected = Self.detectLeague(href: link.href, text: link.text),
+            detected == league else { return nil }
+      let segs = url.pathComponents.filter { $0 != "/" }
+      guard segs.count >= 1, segs.count <= 3,
+            seen.insert(url.absoluteString).inserted else { return nil }
       return url
     }
-
-    guard !sectionURLs.isEmpty else { return [] }
-
-    var allGames: [Game] = []
-    // Scrape up to 2 section pages to avoid excessive network requests
-    for sectionURL in sectionURLs.prefix(2) {
-      let subLinks = await scrapeLinks(url: sectionURL, timeout: 20)
-      allGames.append(contentsOf: buildGames(from: subLinks, for: league))
-    }
-    return allGames
   }
 
-  // MARK: - Game building
-
-  private func buildGames(from links: [ScrapedLink], for league: SportLeague) -> [Game] {
+  private func buildGames(from links: [ScrapedLink], for league: SportLeague, requireLeagueDetection: Bool) -> [Game] {
     var seen = Set<String>()
     return links.compactMap { link -> Game? in
       let isMatch = isGameLink(link)
       let isEvt   = !isMatch && isEventLink(link)
-      guard (isMatch || isEvt),
-            Self.detectLeague(href: link.href, text: link.text) == league,
+      guard isMatch || isEvt,
             let url = URL(string: link.href),
+            isSameDomain(url),
             !seen.contains(link.href) else { return nil }
+
+      // When scraping a sub-page we already know the league — skip detectLeague.
+      if requireLeagueDetection {
+        guard Self.detectLeague(href: link.href, text: link.text) == league else { return nil }
+      }
+
       seen.insert(link.href)
 
-      let (home, away): (String, String)
+      let home: String
+      let away: String
       if isEvt {
         home = cleanEventName(from: link.text)
         away = ""
@@ -150,8 +203,8 @@ struct CustomStreamSource: StreamSource {
       }
 
       let scheduledTime = parseTime(from: link.text)
-      let liveStatus = parseLiveStatus(domStatus: link.status, linkText: link.text)
-      let isLive = liveStatus != nil || detectLive(text: link.text, domStatus: link.status, scheduledTime: scheduledTime)
+      let liveStatus    = parseLiveStatus(domStatus: link.status, linkText: link.text)
+      let isLive        = liveStatus != nil || detectLive(text: link.text, domStatus: link.status, scheduledTime: scheduledTime)
 
       return Game(
         id: link.href,
@@ -169,13 +222,28 @@ struct CustomStreamSource: StreamSource {
 
   // MARK: - Link classification
 
-  private func isGameLink(_ link: ScrapedLink) -> Bool {
-    guard passes(domainAndBlocklistCheck: link) else { return false }
-    guard let linkURL = URL(string: link.href) else { return false }
-    let segments = linkURL.pathComponents.filter { $0 != "/" }
-    guard segments.count >= 2 else { return false }
+  private func isSameDomain(_ url: URL) -> Bool {
+    guard let host = url.host else { return false }
+    let root = rootDomain(of: baseURL.host ?? "")
+    return host == baseURL.host || host.hasSuffix("." + root) || host == root
+  }
 
-    let path = linkURL.path.lowercased()
+  private func passes(domainAndBlocklistCheck link: ScrapedLink) -> Bool {
+    guard let url = URL(string: link.href), isSameDomain(url) else { return false }
+    let path = url.path.lowercased()
+    let pathBlocklist = ["/about", "/contact", "/login", "/register", "/signup", "/privacy", "/terms", "/faq", "/home"]
+    guard !pathBlocklist.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) else { return false }
+    let navSegments: Set<String> = ["schedule", "standings", "news", "stats", "category", "tag", "page", "index"]
+    let lastSeg = url.pathComponents.filter { $0 != "/" }.last?.lowercased() ?? ""
+    return !navSegments.contains(lastSeg)
+  }
+
+  private func isGameLink(_ link: ScrapedLink) -> Bool {
+    guard passes(domainAndBlocklistCheck: link),
+          let url = URL(string: link.href) else { return false }
+    let segs = url.pathComponents.filter { $0 != "/" }
+    guard segs.count >= 2 else { return false }
+    let path = url.path.lowercased()
     let text = link.text.lowercased()
     let hasVsText    = text.contains(" vs ") || text.contains(" vs. ") || text.contains(" @ ") || text.contains(" v. ")
     let hasVsURL     = path.contains("-vs-") || path.contains("-vs.")
@@ -184,29 +252,15 @@ struct CustomStreamSource: StreamSource {
   }
 
   private func isEventLink(_ link: ScrapedLink) -> Bool {
-    guard passes(domainAndBlocklistCheck: link) else { return false }
-    guard let linkURL = URL(string: link.href) else { return false }
-    let segments = linkURL.pathComponents.filter { $0 != "/" }
-    guard segments.count >= 2 else { return false }
-    guard Self.detectLeague(href: link.href, text: link.text) != nil else { return false }
+    guard passes(domainAndBlocklistCheck: link),
+          let url = URL(string: link.href),
+          url.pathComponents.filter({ $0 != "/" }).count >= 2,
+          Self.detectLeague(href: link.href, text: link.text) != nil else { return false }
     let combined = (link.text + " " + link.href).lowercased()
     return Self.eventKeywords.contains(where: { combined.contains($0) })
   }
 
-  // Shared domain + blocklist gate used by both isGameLink and isEventLink
-  private func passes(domainAndBlocklistCheck link: ScrapedLink) -> Bool {
-    guard let linkURL = URL(string: link.href), let linkHost = linkURL.host else { return false }
-    let root = rootDomain(of: baseURL.host ?? "")
-    guard linkHost == baseURL.host || linkHost.hasSuffix("." + root) || linkHost == root else { return false }
-    let path = linkURL.path.lowercased()
-    let pathBlocklist = ["/about", "/contact", "/login", "/register", "/signup", "/privacy", "/terms", "/faq", "/home"]
-    guard !pathBlocklist.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) else { return false }
-    let navSegments: Set<String> = ["schedule", "standings", "news", "stats", "category", "tag", "page", "index"]
-    let lastSeg = linkURL.pathComponents.filter { $0 != "/" }.last?.lowercased() ?? ""
-    return !navSegments.contains(lastSeg)
-  }
-
-  // MARK: - Parsing helpers
+  // MARK: - Parsing
 
   private func rootDomain(of host: String) -> String {
     let parts = host.split(separator: ".")
@@ -223,8 +277,7 @@ struct CustomStreamSource: StreamSource {
       guard let range = cleaned.range(of: separator, options: .caseInsensitive) else { continue }
       let home = String(cleaned[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
       var away = String(cleaned[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-      let noisePatterns = [#"\s+\d{1,2}:\d{2}"#, #"\s+LIVE\b"#, #"\s+HD\b"#, #"\s+\|"#]
-      for pattern in noisePatterns {
+      for pattern in [#"\s+\d{1,2}:\d{2}"#, #"\s+LIVE\b"#, #"\s+HD\b"#, #"\s+\|"#] {
         if let r = away.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
           away = String(away[..<r.lowerBound])
         }
@@ -233,9 +286,9 @@ struct CustomStreamSource: StreamSource {
       if !home.isEmpty && !away.isEmpty { return (home, away) }
     }
 
-    // Fall back to URL slug: /nba/detroit-pistons-vs-cleveland-cavaliers-3/
-    if let url = URL(string: href) {
-      let slug = url.pathComponents.last(where: { $0.contains("-vs-") }) ?? ""
+    // Fall back to URL slug
+    if let url = URL(string: href),
+       let slug = url.pathComponents.last(where: { $0.contains("-vs-") }) {
       for sep in ["-vs-", "-vs."] {
         if let r = slug.range(of: sep, options: .caseInsensitive) {
           let homePart = String(slug[..<r.lowerBound])
@@ -255,9 +308,7 @@ struct CustomStreamSource: StreamSource {
     var name = text
       .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
       .trimmingCharacters(in: .whitespacesAndNewlines)
-    // Strip trailing noise like "Live Stream", "HD", "Watch Online"
-    let noisePatterns = [#"\s+(live stream|live|hd|stream|free|watch online|watch|online)$"#]
-    for pattern in noisePatterns {
+    for pattern in [#"\s+(live stream|live|hd|stream|free|watch online|watch|online)$"#] {
       if let r = name.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
         name = String(name[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
       }
@@ -271,8 +322,7 @@ struct CustomStreamSource: StreamSource {
       let isNoise = domLower == "live" || domLower == "watch" || domLower.hasPrefix("http") || domStatus.count > 60
       if !isNoise {
         if let period = detectPeriod(in: domLower) {
-          let score = detectScore(in: domStatus)
-          return score.map { "\($0) • \(period)" } ?? period
+          return detectScore(in: domStatus).map { "\($0) • \(period)" } ?? period
         }
         return domStatus
       }
@@ -289,7 +339,6 @@ struct CustomStreamSource: StreamSource {
 
   private func detectPeriod(in lower: String) -> String? {
     if lower.contains("extra inn") { return "Extra Innings" }
-
     let ordKW = #"((?:top|bot(?:tom)?)\s+)?(\d+(?:st|nd|rd|th))\s+(inning|inn|quarter|qtr|period|half|leg|set|round)"#
     if let regex = try? NSRegularExpression(pattern: ordKW, options: .caseInsensitive),
        let m = regex.firstMatch(in: lower, range: NSRange(lower.startIndex..., in: lower)) {
@@ -312,7 +361,6 @@ struct CustomStreamSource: StreamSource {
       default: break
       }
     }
-
     let qKW = #"\bq([1-4])\b"#
     if let regex = try? NSRegularExpression(pattern: qKW, options: .caseInsensitive),
        let m = regex.firstMatch(in: lower, range: NSRange(lower.startIndex..., in: lower)),
@@ -320,7 +368,6 @@ struct CustomStreamSource: StreamSource {
       let ordinals = ["1": "1st", "2": "2nd", "3": "3rd", "4": "4th"]
       return "\(ordinals[String(lower[r])] ?? String(lower[r])) Quarter"
     }
-
     let statics: [(String, String)] = [
       ("halftime", "Halftime"), ("half time", "Halftime"),
       ("extra time", "Extra Time"), ("overtime", "Overtime"),
@@ -332,8 +379,8 @@ struct CustomStreamSource: StreamSource {
   }
 
   private func detectScore(in text: String) -> String? {
-    let scorePattern = #"\b(\d{1,3})\s*[-:]\s*(\d{1,3})\b(?!\s*[AaPp][Mm])"#
-    guard let regex = try? NSRegularExpression(pattern: scorePattern),
+    let pattern = #"\b(\d{1,3})\s*[-:]\s*(\d{1,3})\b(?!\s*[AaPp][Mm])"#
+    guard let regex = try? NSRegularExpression(pattern: pattern),
           let m = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
           let r1 = Range(m.range(at: 1), in: text),
           let r2 = Range(m.range(at: 2), in: text) else { return nil }
@@ -356,22 +403,18 @@ struct CustomStreamSource: StreamSource {
     guard let regex = try? NSRegularExpression(pattern: pattern),
           let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
           let range = Range(match.range(at: 1), in: text) else { return nil }
-
     var raw = String(text[range])
       .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-      .trimmingCharacters(in: .whitespaces)
-      .uppercased()
+      .trimmingCharacters(in: .whitespaces).uppercased()
     for tz in [" ET", " EST", " EDT", " GMT", " UTC", " PT", " CT", " MT"] {
       raw = raw.replacingOccurrences(of: tz, with: "")
     }
-
     let etTZ = TimeZone(identifier: "America/New_York")!
     var etCal = Calendar(identifier: .gregorian)
     etCal.timeZone = etTZ
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.timeZone = etTZ
-
     for format in ["h:mm a", "hh:mm a"] {
       formatter.dateFormat = format
       guard let parsed = formatter.date(from: raw) else { continue }
@@ -384,7 +427,11 @@ struct CustomStreamSource: StreamSource {
   }
 
   private func scrapeLinks(url: URL? = nil, timeout: TimeInterval = 30) async -> [ScrapedLink] {
+    let target = url ?? baseURL
+    if let cached = await ScrapeCache.shared.get(target) { return cached }
     let scraper = await MainActor.run { WebViewScraper() }
-    return await scraper.scrape(url: url ?? baseURL, timeout: timeout)
+    let links = await scraper.scrape(url: target, timeout: timeout)
+    await ScrapeCache.shared.set(links, for: target)
+    return links
   }
 }
