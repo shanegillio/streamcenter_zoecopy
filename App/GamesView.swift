@@ -97,19 +97,38 @@ struct GameCard: View {
 
   var body: some View {
     HStack(spacing: 14) {
-      VStack(spacing: 6) {
-        TeamLogo(teamName: game.homeTeam, league: game.league)
-        TeamLogo(teamName: game.awayTeam, league: game.league)
+      // Left: stacked team logos for matchups, single league icon for events
+      if game.isEvent {
+        ZStack {
+          Circle().fill(game.league.accentColor.opacity(0.15))
+          Image(systemName: game.league.sfSymbol)
+            .font(.system(size: 22, weight: .bold))
+            .foregroundStyle(game.league.accentColor)
+        }
+        .frame(width: 56, height: 56)
+      } else {
+        VStack(spacing: 6) {
+          TeamLogo(teamName: game.homeTeam, league: game.league)
+          TeamLogo(teamName: game.awayTeam, league: game.league)
+        }
+        .frame(width: 56)
       }
-      .frame(width: 56)
 
-      VStack(alignment: .leading, spacing: 7) {
+      // Center: team names or event name
+      if game.isEvent {
         Text(game.homeTeam)
-          .font(.system(size: 16, weight: .bold)).foregroundStyle(.primary)
-          .lineLimit(1)
-        Text(game.awayTeam)
-          .font(.system(size: 16, weight: .bold)).foregroundStyle(.primary)
-          .lineLimit(1)
+          .font(.system(size: 15, weight: .bold))
+          .foregroundStyle(.primary)
+          .lineLimit(2)
+      } else {
+        VStack(alignment: .leading, spacing: 7) {
+          Text(game.homeTeam)
+            .font(.system(size: 16, weight: .bold)).foregroundStyle(.primary)
+            .lineLimit(1)
+          Text(game.awayTeam)
+            .font(.system(size: 16, weight: .bold)).foregroundStyle(.primary)
+            .lineLimit(1)
+        }
       }
 
       Spacer()

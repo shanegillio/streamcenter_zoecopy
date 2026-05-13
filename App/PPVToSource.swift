@@ -28,16 +28,14 @@ struct PPVToSource: StreamSource {
     ("mls/", .soccer),
   ]
 
+  // Category-based fallback — intentionally narrow. Sports that have multiple leagues
+  // (e.g. american football = NFL + CFL + XFL) are excluded here and rely solely on
+  // uriPrefixToLeague so only correctly-prefixed streams appear in each league view.
   private static let categoryToLeague: [String: SportLeague] = [
-    "baseball": .mlb,
-    "basketball": .nba,
-    "ice hockey": .nhl,
-    "american football": .nfl,
     "football": .soccer,
     "wrestling": .wwe,
     "mma": .mma,
     "boxing": .boxing,
-    "motor racing": .f1,
     "tennis": .tennis,
     "golf": .golf,
   ]

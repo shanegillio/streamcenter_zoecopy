@@ -8,20 +8,33 @@ struct Game: Identifiable, Equatable, Hashable {
   let isLive: Bool
   /// Live game state scraped from the source, e.g. "3-1 • 2nd Half", "3rd Quarter", "Overtime"
   let liveStatus: String?
+  /// True for single-team events (drafts, combines, all-star games, etc.)
+  let isEvent: Bool
   let pageURL: URL
   let league: SportLeague
 
-  var title: String { "\(homeTeam) vs \(awayTeam)" }
+  init(id: String, homeTeam: String, awayTeam: String, scheduledTime: Date?,
+       isLive: Bool, liveStatus: String?, isEvent: Bool = false, pageURL: URL, league: SportLeague) {
+    self.id = id
+    self.homeTeam = homeTeam
+    self.awayTeam = awayTeam
+    self.scheduledTime = scheduledTime
+    self.isLive = isLive
+    self.liveStatus = liveStatus
+    self.isEvent = isEvent
+    self.pageURL = pageURL
+    self.league = league
+  }
+
+  var title: String { isEvent || awayTeam.isEmpty ? homeTeam : "\(homeTeam) vs \(awayTeam)" }
 
   var displayTime: String {
     if isLive { return "LIVE" }
     guard let time = scheduledTime else { return "Time TBD" }
 
-    // Show time in ET to match what the source site displays
     let etTZ = TimeZone(identifier: "America/New_York")!
     var etCal = Calendar(identifier: .gregorian)
     etCal.timeZone = etTZ
-
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.timeZone = etTZ
