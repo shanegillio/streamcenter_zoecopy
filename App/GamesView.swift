@@ -34,13 +34,17 @@ struct GamesView: View {
           LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
             if !liveGames.isEmpty {
               Section {
-                ForEach(liveGames) { game in
-                  NavigationLink(destination: PlayerView(game: game)) {
-                    GameRow(game: game)
+                VStack(spacing: 10) {
+                  ForEach(liveGames) { game in
+                    NavigationLink(destination: PlayerView(game: game)) {
+                      GameCard(game: game)
+                    }
+                    .buttonStyle(.plain)
                   }
-                  .buttonStyle(.plain)
-                  Divider().padding(.leading, 88)
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 6)
               } header: {
                 SectionHeader(title: "Live Now", color: .red)
               }
@@ -48,13 +52,17 @@ struct GamesView: View {
 
             if !upcomingGames.isEmpty {
               Section {
-                ForEach(upcomingGames) { game in
-                  NavigationLink(destination: PlayerView(game: game)) {
-                    GameRow(game: game)
+                VStack(spacing: 10) {
+                  ForEach(upcomingGames) { game in
+                    NavigationLink(destination: PlayerView(game: game)) {
+                      GameCard(game: game)
+                    }
+                    .buttonStyle(.plain)
                   }
-                  .buttonStyle(.plain)
-                  Divider().padding(.leading, 88)
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 6)
               } header: {
                 SectionHeader(title: "Upcoming", color: .secondary)
               }
@@ -82,21 +90,19 @@ struct GamesView: View {
   }
 }
 
-// MARK: - Game row
+// MARK: - Game card
 
-struct GameRow: View {
+struct GameCard: View {
   let game: Game
 
   var body: some View {
     HStack(spacing: 14) {
-      // Stacked team logos
       VStack(spacing: 6) {
         TeamLogo(teamName: game.homeTeam, league: game.league)
         TeamLogo(teamName: game.awayTeam, league: game.league)
       }
       .frame(width: 56)
 
-      // Team names
       VStack(alignment: .leading, spacing: 7) {
         Text(game.homeTeam)
           .font(.system(size: 16, weight: .bold)).foregroundStyle(.primary)
@@ -108,17 +114,8 @@ struct GameRow: View {
 
       Spacer()
 
-      // Status
       if game.isLive {
-        VStack(alignment: .trailing, spacing: 5) {
-          if let status = game.liveStatus {
-            Text(status)
-              .font(.caption).fontWeight(.semibold)
-              .foregroundStyle(.primary)
-              .multilineTextAlignment(.trailing)
-          }
-          LivePill()
-        }
+        LiveStatusBadge(status: game.liveStatus)
       } else {
         Text(game.displayTime)
           .font(.caption).fontWeight(.semibold)
@@ -132,7 +129,41 @@ struct GameRow: View {
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 14)
-    .contentShape(Rectangle())
+    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+    .contentShape(RoundedRectangle(cornerRadius: 16))
+  }
+}
+
+// MARK: - Live status badge (unified scoreboard container)
+
+struct LiveStatusBadge: View {
+  let status: String?
+  @State private var pulse = false
+
+  var body: some View {
+    VStack(alignment: .center, spacing: 4) {
+      if let status {
+        Text(status)
+          .font(.system(size: 11, weight: .bold))
+          .foregroundStyle(.red)
+          .multilineTextAlignment(.center)
+          .lineLimit(2)
+      }
+      HStack(spacing: 4) {
+        Circle()
+          .fill(.red)
+          .frame(width: 5, height: 5)
+          .scaleEffect(pulse ? 1.4 : 0.85)
+          .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: pulse)
+        Text("LIVE")
+          .font(.system(size: 11, weight: .black))
+          .foregroundStyle(.red)
+      }
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 7)
+    .background(.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+    .onAppear { pulse = true }
   }
 }
 
@@ -175,29 +206,6 @@ struct TeamLogo: View {
         .font(.system(size: 11, weight: .bold))
         .foregroundStyle(league.accentColor)
     }
-  }
-}
-
-// MARK: - Live pill
-
-struct LivePill: View {
-  @State private var pulse = false
-
-  var body: some View {
-    HStack(spacing: 5) {
-      Circle()
-        .fill(.red)
-        .frame(width: 6, height: 6)
-        .scaleEffect(pulse ? 1.4 : 0.9)
-        .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: pulse)
-      Text("LIVE")
-        .font(.caption2).fontWeight(.black)
-        .foregroundStyle(.white)
-    }
-    .padding(.horizontal, 8)
-    .padding(.vertical, 4)
-    .background(.red, in: Capsule())
-    .onAppear { pulse = true }
   }
 }
 

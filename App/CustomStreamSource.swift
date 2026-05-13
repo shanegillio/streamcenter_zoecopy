@@ -55,8 +55,12 @@ struct CustomStreamSource: StreamSource {
   func fetchAvailableLeagues() async throws -> [SportLeague] {
     let links = await scrapeLinks()
     var found = Set<SportLeague>()
+    // Use any same-domain link for league detection — much more permissive than isGameLink
+    // so sites that don't use "vs" in their navigation still surface their sports.
     for link in links {
-      guard isGameLink(link) else { continue }
+      guard let linkURL = URL(string: link.href), let linkHost = linkURL.host else { continue }
+      let root = rootDomain(of: baseURL.host ?? "")
+      guard linkHost == baseURL.host || linkHost.hasSuffix("." + root) || linkHost == root else { continue }
       if let league = Self.detectLeague(href: link.href, text: link.text) {
         found.insert(league)
       }
@@ -96,24 +100,28 @@ struct CustomStreamSource: StreamSource {
   private func isGameLink(_ link: ScrapedLink) -> Bool {
     guard let linkURL = URL(string: link.href), let linkHost = linkURL.host else { return false }
 
-    // Must be same root domain
     let root = rootDomain(of: baseURL.host ?? "")
     guard linkHost == baseURL.host || linkHost.hasSuffix("." + root) || linkHost == root else { return false }
 
-    // Reject utility pages
     let path = linkURL.path.lowercased()
-    let blocklist = ["/about", "/contact", "/login", "/register", "/signup", "/privacy", "/terms", "/faq", "/schedule", "/home"]
-    guard !blocklist.contains(where: { path.hasPrefix($0) }) else { return false }
-
-    // Must look like a matchup — check link text AND URL slug
-    let text = link.text.lowercased()
-    let hasVsText = text.contains(" vs ") || text.contains(" vs. ") || text.contains(" @ ")
-    let hasVsURL  = path.contains("-vs-") || path.contains("-vs.")
-    guard hasVsText || hasVsURL else { return false }
-
-    // Must resolve to a specific game (not a category page) — path should have ≥ 2 segments
     let segments = linkURL.pathComponents.filter { $0 != "/" }
-    return segments.count >= 2
+    guard segments.count >= 2 else { return false }
+
+    // Reject utility/nav pages by full path prefix and by last segment
+    let pathBlocklist = ["/about", "/contact", "/login", "/register", "/signup", "/privacy", "/terms", "/faq", "/home"]
+    guard !pathBlocklist.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) else { return false }
+    let navSegments: Set<String> = ["schedule", "standings", "news", "stats", "category", "tag", "page", "index"]
+    guard !navSegments.contains(segments.last?.lowercased() ?? "") else { return false }
+
+    let text = link.text.lowercased()
+    let hasVsText   = text.contains(" vs ") || text.contains(" vs. ") || text.contains(" @ ") || text.contains(" v. ")
+    let hasVsURL    = path.contains("-vs-") || path.contains("-vs.")
+    // DOM status element is a strong signal the link is a game card
+    let hasDOMStatus = !link.status.isEmpty && link.status.count < 60
+    // Sites like crackstreams organise by league path without "vs" in every slug
+    let hasLeagueURL = Self.detectLeague(href: link.href, text: "") != nil
+
+    return hasVsText || hasVsURL || hasDOMStatus || hasLeagueURL
   }
 
   private func rootDomain(of host: String) -> String {
@@ -128,7 +136,7 @@ struct CustomStreamSource: StreamSource {
       .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
       .trimmingCharacters(in: .whitespacesAndNewlines)
 
-    for separator in [" vs. ", " vs ", " @ "] {
+    for separator in [" vs. ", " vs ", " @ ", " v. ", " v "] {
       guard let range = cleaned.range(of: separator, options: .caseInsensitive) else { continue }
       let home = String(cleaned[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
       var away = String(cleaned[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
