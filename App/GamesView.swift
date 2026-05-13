@@ -110,14 +110,14 @@ struct GameRow: View {
 
       // Status
       if game.isLive {
-        VStack(alignment: .trailing, spacing: 4) {
-          LivePill()
+        VStack(alignment: .trailing, spacing: 5) {
           if let status = game.liveStatus {
             Text(status)
-              .font(.caption2).fontWeight(.medium)
-              .foregroundStyle(.secondary)
+              .font(.caption).fontWeight(.semibold)
+              .foregroundStyle(.primary)
               .multilineTextAlignment(.trailing)
           }
+          LivePill()
         }
       } else {
         Text(game.displayTime)

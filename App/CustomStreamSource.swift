@@ -161,39 +161,76 @@ struct CustomStreamSource: StreamSource {
   }
 
   private func parseLiveStatus(from text: String) -> String? {
-    let lower = text.lowercased()
-
-    let periods: [(String, String)] = [
-      ("4th quarter", "4th Quarter"), ("3rd quarter", "3rd Quarter"),
-      ("2nd quarter", "2nd Quarter"), ("1st quarter", "1st Quarter"),
-      ("3rd period", "3rd Period"), ("2nd period", "2nd Period"), ("1st period", "1st Period"),
-      ("2nd half", "2nd Half"), ("1st half", "1st Half"),
-      ("2nd leg", "2nd Leg"), ("1st leg", "1st Leg"),
-      ("halftime", "Halftime"), ("half time", "Halftime"),
-      ("extra time", "Extra Time"), ("overtime", "Overtime"),
-      ("in progress", "In Progress"),
-    ]
-    var period: String? = nil
-    for (keyword, label) in periods {
-      if lower.contains(keyword) { period = label; break }
-    }
-
-    // Score: two numbers around "-" or ":" but not followed by AM/PM (which would be a time)
-    var score: String? = nil
-    let scorePattern = #"\b(\d{1,3})\s*[-:]\s*(\d{1,3})\b(?!\s*[AaPp][Mm])"#
-    if let regex = try? NSRegularExpression(pattern: scorePattern),
-       let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-       let r1 = Range(match.range(at: 1), in: text),
-       let r2 = Range(match.range(at: 2), in: text) {
-      score = "\(text[r1])-\(text[r2])"
-    }
-
+    let period = detectPeriod(in: text.lowercased())
+    let score  = detectScore(in: text)
     switch (score, period) {
     case let (s?, p?): return "\(s) • \(p)"
     case let (s?, nil): return s
     case let (nil, p?): return p
     case (nil, nil): return nil
     }
+  }
+
+  // Detects game period/state for any major sport from lowercased link text.
+  // Uses regex for ordinal patterns (e.g. "8th Inning", "3rd Quarter") so it
+  // handles any inning/quarter/period/round number without hard-coding each one.
+  private func detectPeriod(in lower: String) -> String? {
+    // Baseball: "Extra Innings" / "Extra Inning"
+    if lower.contains("extra inn") { return "Extra Innings" }
+
+    // Ordinal + sport keyword: captures "8th Inning", "Top 3rd", "3rd Quarter", "2nd Leg", etc.
+    // Group 1: optional top/bottom prefix  Group 2: ordinal  Group 3: sport keyword
+    let ordKW = #"((?:top|bot(?:tom)?)\s+)?(\d+(?:st|nd|rd|th))\s+(inning|inn|quarter|qtr|period|half|leg|set|round)"#
+    if let regex = try? NSRegularExpression(pattern: ordKW, options: .caseInsensitive),
+       let m = regex.firstMatch(in: lower, range: NSRange(lower.startIndex..., in: lower)) {
+      let pre = m.range(at: 1).length > 0
+        ? (Range(m.range(at: 1), in: lower).map { String(lower[$0]).trimmingCharacters(in: .whitespaces) } ?? "")
+        : ""
+      let ord = Range(m.range(at: 2), in: lower).map { String(lower[$0]) } ?? ""
+      let kw  = Range(m.range(at: 3), in: lower).map { String(lower[$0]) } ?? ""
+      switch kw {
+      case "inning", "inn":
+        if pre.hasPrefix("top") { return "Top \(ord) Inning" }
+        if pre.hasPrefix("bot") { return "Bot \(ord) Inning" }
+        return "\(ord) Inning"
+      case "quarter", "qtr": return "\(ord) Quarter"
+      case "period":         return "\(ord) Period"
+      case "half":           return "\(ord) Half"
+      case "leg":            return "\(ord) Leg"
+      case "set":            return "\(ord) Set"
+      case "round":          return "\(ord) Round"
+      default: break
+      }
+    }
+
+    // Q1/Q2/Q3/Q4 shorthand (e.g. "Q3")
+    let qKW = #"\bq([1-4])\b"#
+    if let regex = try? NSRegularExpression(pattern: qKW, options: .caseInsensitive),
+       let m = regex.firstMatch(in: lower, range: NSRange(lower.startIndex..., in: lower)),
+       let r = Range(m.range(at: 1), in: lower) {
+      let ordinals = ["1": "1st", "2": "2nd", "3": "3rd", "4": "4th"]
+      return "\(ordinals[String(lower[r])] ?? String(lower[r])) Quarter"
+    }
+
+    // Static keywords (halftime, OT, etc.)
+    let statics: [(String, String)] = [
+      ("halftime", "Halftime"), ("half time", "Halftime"),
+      ("extra time", "Extra Time"), ("overtime", "Overtime"),
+      ("shootout", "Shootout"), ("tiebreak", "Tiebreak"),
+      ("penalties", "Penalties"), ("in progress", "In Progress"),
+    ]
+    for (kw, label) in statics where lower.contains(kw) { return label }
+    return nil
+  }
+
+  // Extracts a score like "3-1" from text; ignores time patterns (e.g. "8:00 PM").
+  private func detectScore(in text: String) -> String? {
+    let scorePattern = #"\b(\d{1,3})\s*[-:]\s*(\d{1,3})\b(?!\s*[AaPp][Mm])"#
+    guard let regex = try? NSRegularExpression(pattern: scorePattern),
+          let m = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+          let r1 = Range(m.range(at: 1), in: text),
+          let r2 = Range(m.range(at: 2), in: text) else { return nil }
+    return "\(text[r1])-\(text[r2])"
   }
 
   private func detectLive(text: String, scheduledTime: Date?) -> Bool {
