@@ -48,6 +48,11 @@ struct CustomStreamSource: StreamSource {
     ("soccer", .soccer),
   ]
 
+  private static let premiumKeywords = [
+    "premium", "vip", "members only", "subscription", "locked", "pro only",
+    "paid", "exclusive", "subscribers", "premium only", "crown",
+  ]
+
   private static let eventKeywords = [
     "draft", "combine", "all-star", "all star", "pro bowl", "skills challenge",
     "showcase", "awards", "scouting", "super bowl", "superbowl", "nba finals",
@@ -214,6 +219,7 @@ struct CustomStreamSource: StreamSource {
       // non-nil for non-live content (e.g. a time string scraped from a status element).
       let isLive     = detectLive(text: link.text, domStatus: link.status, scheduledTime: scheduledTime)
       let liveStatus = isLive ? parseLiveStatus(domStatus: link.status, linkText: link.text) : nil
+      let isPremium  = detectPremium(text: link.text, status: link.status)
 
       return Game(
         id: link.href,
@@ -223,6 +229,7 @@ struct CustomStreamSource: StreamSource {
         isLive: isLive,
         liveStatus: liveStatus,
         isEvent: isEvt,
+        isPremium: isPremium,
         pageURL: url,
         league: league
       )
@@ -394,6 +401,11 @@ struct CustomStreamSource: StreamSource {
           let r1 = Range(m.range(at: 1), in: text),
           let r2 = Range(m.range(at: 2), in: text) else { return nil }
     return "\(text[r1])-\(text[r2])"
+  }
+
+  private func detectPremium(text: String, status: String) -> Bool {
+    let combined = (text + " " + status).lowercased()
+    return Self.premiumKeywords.contains { combined.contains($0) }
   }
 
   private func detectLive(text: String, domStatus: String, scheduledTime: Date?) -> Bool {

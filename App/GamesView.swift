@@ -7,9 +7,13 @@ struct GamesView: View {
   @State private var games: [Game] = []
   @State private var isLoading = true
   @State private var errorMessage: String? = nil
+  @State private var selectedGame: Game? = nil
+  @State private var pendingPremiumGame: Game? = nil
 
   var liveGames: [Game] { games.filter { $0.isLive } }
   var upcomingGames: [Game] { games.filter { !$0.isLive } }
+
+  var sourceDomain: String { source.baseURL.host ?? source.id }
 
   var body: some View {
     ZStack {
@@ -36,10 +40,8 @@ struct GamesView: View {
               Section {
                 VStack(spacing: 10) {
                   ForEach(liveGames) { game in
-                    NavigationLink(destination: PlayerView(game: game)) {
-                      GameCard(game: game)
-                    }
-                    .buttonStyle(.plain)
+                    Button { handleTap(game) } label: { GameCard(game: game) }
+                      .buttonStyle(.plain)
                   }
                 }
                 .padding(.horizontal, 16)
@@ -54,10 +56,8 @@ struct GamesView: View {
               Section {
                 VStack(spacing: 10) {
                   ForEach(upcomingGames) { game in
-                    NavigationLink(destination: PlayerView(game: game)) {
-                      GameCard(game: game)
-                    }
-                    .buttonStyle(.plain)
+                    Button { handleTap(game) } label: { GameCard(game: game) }
+                      .buttonStyle(.plain)
                   }
                 }
                 .padding(.horizontal, 16)
@@ -74,8 +74,25 @@ struct GamesView: View {
     }
     .navigationTitle(league.displayName)
     .navigationBarTitleDisplayMode(.large)
+    .navigationDestination(item: $selectedGame) { game in
+      PlayerView(game: game)
+    }
+    .sheet(item: $pendingPremiumGame) { game in
+      PremiumCredentialSheet(sourceName: source.name, domain: sourceDomain) {
+        pendingPremiumGame = nil
+        selectedGame = game
+      }
+    }
     .task { await loadGames() }
     .refreshable { await loadGames() }
+  }
+
+  private func handleTap(_ game: Game) {
+    if game.isPremium, CredentialStore.credentials(for: sourceDomain) == nil {
+      pendingPremiumGame = game
+    } else {
+      selectedGame = game
+    }
   }
 
   private func loadGames() async {
@@ -90,6 +107,109 @@ struct GamesView: View {
   }
 }
 
+// MARK: - Premium credential sheet
+
+struct PremiumCredentialSheet: View {
+  let sourceName: String
+  let domain: String
+  let onContinue: () -> Void
+
+  @Environment(\.dismiss) private var dismiss
+  @State private var username = ""
+  @State private var password = ""
+
+  var body: some View {
+    NavigationStack {
+      VStack(spacing: 0) {
+        VStack(spacing: 12) {
+          ZStack {
+            Circle()
+              .fill(Color.yellow.opacity(0.15))
+              .frame(width: 72, height: 72)
+            Image(systemName: "crown.fill")
+              .font(.system(size: 32))
+              .foregroundStyle(.yellow)
+          }
+          Text("Premium Content")
+            .font(.title2.bold())
+          Text("This stream on **\(sourceName)** requires a premium account. Enter your credentials to auto sign-in.")
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 24)
+        }
+        .padding(.top, 32)
+        .padding(.bottom, 28)
+
+        VStack(spacing: 12) {
+          TextField("Email or Username", text: $username)
+            .textContentType(.username)
+            .keyboardType(.emailAddress)
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.never)
+            .padding(14)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+
+          SecureField("Password", text: $password)
+            .textContentType(.password)
+            .padding(14)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+        }
+        .padding(.horizontal, 24)
+
+        Text("Credentials are stored locally on your device.")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+          .padding(.top, 10)
+          .padding(.horizontal, 24)
+
+        Spacer()
+
+        VStack(spacing: 10) {
+          Button {
+            if !username.isEmpty || !password.isEmpty {
+              CredentialStore.save(SourceCredentials(username: username, password: password), for: domain)
+            }
+            dismiss()
+            onContinue()
+          } label: {
+            Label("Save & Watch", systemImage: "play.fill")
+              .font(.body.bold())
+              .frame(maxWidth: .infinity)
+              .padding(.vertical, 14)
+              .background(.tint, in: RoundedRectangle(cornerRadius: 14))
+              .foregroundStyle(.white)
+          }
+          .buttonStyle(.plain)
+
+          Button {
+            dismiss()
+            onContinue()
+          } label: {
+            Text("Watch Anyway")
+              .font(.subheadline)
+              .foregroundStyle(.secondary)
+          }
+        }
+        .padding(.horizontal, 24)
+        .padding(.bottom, 32)
+      }
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Cancel") { dismiss() }
+        }
+      }
+    }
+    .presentationDetents([.large])
+    .onAppear {
+      if let saved = CredentialStore.credentials(for: domain) {
+        username = saved.username
+        password = saved.password
+      }
+    }
+  }
+}
+
 // MARK: - Game card
 
 struct GameCard: View {
@@ -97,7 +217,6 @@ struct GameCard: View {
 
   var body: some View {
     HStack(spacing: 14) {
-      // Left: stacked team logos for matchups, single league icon for events
       if game.isEvent {
         ZStack {
           Circle().fill(game.league.accentColor.opacity(0.15))
@@ -114,7 +233,6 @@ struct GameCard: View {
         .frame(width: 56)
       }
 
-      // Center: team names or event name
       if game.isEvent {
         Text(game.homeTeam)
           .font(.system(size: 15, weight: .bold))
@@ -133,13 +251,28 @@ struct GameCard: View {
 
       Spacer()
 
-      if game.isLive {
-        LiveStatusBadge(status: game.liveStatus)
-      } else {
-        Text(game.displayTime)
-          .font(.caption).fontWeight(.semibold)
-          .foregroundStyle(.secondary)
-          .multilineTextAlignment(.trailing)
+      VStack(alignment: .trailing, spacing: 4) {
+        if game.isLive {
+          LiveStatusBadge(status: game.liveStatus)
+        } else {
+          Text(game.displayTime)
+            .font(.caption).fontWeight(.semibold)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.trailing)
+        }
+
+        if game.isPremium {
+          HStack(spacing: 3) {
+            Image(systemName: "crown.fill")
+              .font(.system(size: 9, weight: .bold))
+            Text("Premium")
+              .font(.system(size: 10, weight: .bold))
+          }
+          .foregroundStyle(.yellow)
+          .padding(.horizontal, 7)
+          .padding(.vertical, 3)
+          .background(.yellow.opacity(0.12), in: Capsule())
+        }
       }
 
       Image(systemName: "chevron.right")
@@ -153,7 +286,7 @@ struct GameCard: View {
   }
 }
 
-// MARK: - Live status badge (unified scoreboard container)
+// MARK: - Live status badge
 
 struct LiveStatusBadge: View {
   let status: String?

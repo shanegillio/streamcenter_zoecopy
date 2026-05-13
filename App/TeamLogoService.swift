@@ -10,7 +10,8 @@ enum TeamLogoService {
 
   private static func espnSport(for league: SportLeague) -> String? {
     switch league {
-    case .nba, .wnba: return "nba"
+    case .nba: return "nba"
+    case .wnba: return "wnba"
     case .nfl, .ncaaf: return "nfl"
     case .mlb: return "mlb"
     case .nhl: return "nhl"
@@ -22,7 +23,8 @@ enum TeamLogoService {
 
   private static func abbreviation(for name: String, league: SportLeague) -> String? {
     switch league {
-    case .nba, .wnba: return nba[name]
+    case .nba: return nba[name]
+    case .wnba: return wnba[name]
     case .nfl, .ncaaf: return nfl[name]
     case .mlb: return mlb[name]
     case .nhl: return nhl[name]
@@ -40,9 +42,13 @@ enum TeamLogoService {
     "thunder": "okc", "magic": "orl", "76ers": "phi", "sixers": "phi",
     "suns": "phx", "blazers": "por", "kings": "sac", "spurs": "sa",
     "raptors": "tor", "jazz": "utah", "wizards": "wsh",
-    "sky": "chi", "storm": "sea", "aces": "lv", "liberty": "ny",
-    "fever": "ind", "mystics": "wsh", "lynx": "min", "sparks": "la",
-    "sun": "conn", "wings": "dal", "dream": "atl",
+  ]
+
+  private static let wnba: [String: String] = [
+    "dream": "atl", "sky": "chi", "sun": "conn", "wings": "dal",
+    "fever": "ind", "aces": "lv", "sparks": "la", "lynx": "min",
+    "liberty": "ny", "mercury": "phx", "storm": "sea", "mystics": "wsh",
+    "valkyries": "gs",
   ]
 
   private static let nfl: [String: String] = [
@@ -109,7 +115,8 @@ extension TeamLogoService {
     guard let sport = espnSport(for: league) else { return nil }
     let table: [String: String]
     switch league {
-    case .nba, .wnba: table = nba
+    case .nba: table = nba
+    case .wnba: table = wnba
     case .nfl, .ncaaf: table = nfl
     case .mlb: table = mlb
     case .nhl: table = nhl

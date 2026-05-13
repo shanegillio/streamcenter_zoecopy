@@ -95,7 +95,9 @@ final class WebViewScraper: NSObject {
                 if (!child.contains(a)) {
                   var cls = (child.className || '').toLowerCase();
                   if (cls.indexOf('status') !== -1 || cls.indexOf('score') !== -1 ||
-                      cls.indexOf('badge') !== -1 || cls.indexOf('live-label') !== -1) {
+                      cls.indexOf('badge') !== -1 || cls.indexOf('live-label') !== -1 ||
+                      cls.indexOf('premium') !== -1 || cls.indexOf('vip') !== -1 ||
+                      cls.indexOf('lock') !== -1 || cls.indexOf('crown') !== -1) {
                     var t = (child.innerText || child.textContent || '').replace(/\\s+/g, ' ').trim();
                     if (t && t.length < 60) statusText = t;
                   }

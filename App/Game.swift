@@ -10,11 +10,14 @@ struct Game: Identifiable, Equatable, Hashable {
   let liveStatus: String?
   /// True for single-team events (drafts, combines, all-star games, etc.)
   let isEvent: Bool
+  /// True when the source site indicates this stream requires a paid subscription.
+  let isPremium: Bool
   let pageURL: URL
   let league: SportLeague
 
   init(id: String, homeTeam: String, awayTeam: String, scheduledTime: Date?,
-       isLive: Bool, liveStatus: String?, isEvent: Bool = false, pageURL: URL, league: SportLeague) {
+       isLive: Bool, liveStatus: String?, isEvent: Bool = false, isPremium: Bool = false,
+       pageURL: URL, league: SportLeague) {
     self.id = id
     self.homeTeam = homeTeam
     self.awayTeam = awayTeam
@@ -22,6 +25,7 @@ struct Game: Identifiable, Equatable, Hashable {
     self.isLive = isLive
     self.liveStatus = liveStatus
     self.isEvent = isEvent
+    self.isPremium = isPremium
     self.pageURL = pageURL
     self.league = league
   }

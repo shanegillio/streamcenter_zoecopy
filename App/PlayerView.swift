@@ -102,6 +102,15 @@ struct StreamWebView: UIViewRepresentable {
       source: Self.autoPlayAndInterceptJS, injectionTime: .atDocumentStart, forMainFrameOnly: false
     ))
 
+    // Inject stored credentials if available for this domain
+    if let host = url.host,
+       let creds = CredentialStore.credentials(for: host) {
+      let js = Self.credentialInjectionJS(username: creds.username, password: creds.password)
+      config.userContentController.addUserScript(
+        WKUserScript(source: js, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
+      )
+    }
+
     let webView = WKWebView(frame: .zero, configuration: config)
     webView.uiDelegate = context.coordinator
     webView.navigationDelegate = context.coordinator
@@ -240,6 +249,35 @@ struct StreamWebView: UIViewRepresentable {
       [100,500,1000,2000,3000,5000,8000].forEach(function(t){ setTimeout(scan, t); });
     })();
   """
+
+  static func credentialInjectionJS(username: String, password: String) -> String {
+    let u = username.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
+    let p = password.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
+    return """
+    (function(){
+      var _u = '\(u)', _p = '\(p)';
+      function fill() {
+        var uFields = document.querySelectorAll(
+          'input[type="email"], input[type="text"][name*="user"], input[type="text"][name*="email"], ' +
+          'input[type="text"][id*="user"], input[type="text"][id*="email"], ' +
+          'input[name*="login"], input[id*="login"]'
+        );
+        var pFields = document.querySelectorAll('input[type="password"]');
+        if (!uFields.length || !pFields.length) return false;
+        var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        setter.call(uFields[0], _u);
+        uFields[0].dispatchEvent(new Event('input', {bubbles: true}));
+        setter.call(pFields[0], _p);
+        pFields[0].dispatchEvent(new Event('input', {bubbles: true}));
+        var form = pFields[0].closest('form');
+        var submit = form && (form.querySelector('[type="submit"]') || form.querySelector('button'));
+        if (submit) setTimeout(function(){ submit.click(); }, 400);
+        return true;
+      }
+      [600, 1200, 2500, 4000].forEach(function(t){ setTimeout(fill, t); });
+    })();
+    """
+  }
 
   // MARK: Coordinator
 
