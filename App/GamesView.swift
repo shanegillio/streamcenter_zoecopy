@@ -109,15 +109,21 @@ struct GameRow: View {
       Spacer()
 
       // Status
-      Group {
-        if game.isLive {
+      if game.isLive {
+        VStack(alignment: .trailing, spacing: 4) {
           LivePill()
-        } else {
-          Text(game.displayTime)
-            .font(.caption).fontWeight(.semibold)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.trailing)
+          if let status = game.liveStatus {
+            Text(status)
+              .font(.caption2).fontWeight(.medium)
+              .foregroundStyle(.secondary)
+              .multilineTextAlignment(.trailing)
+          }
         }
+      } else {
+        Text(game.displayTime)
+          .font(.caption).fontWeight(.semibold)
+          .foregroundStyle(.secondary)
+          .multilineTextAlignment(.trailing)
       }
 
       Image(systemName: "chevron.right")

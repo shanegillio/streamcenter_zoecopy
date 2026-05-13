@@ -6,6 +6,8 @@ struct Game: Identifiable, Equatable, Hashable {
   let awayTeam: String
   let scheduledTime: Date?
   let isLive: Bool
+  /// Live game state scraped from the source, e.g. "3-1 • 2nd Half", "3rd Quarter", "Overtime"
+  let liveStatus: String?
   let pageURL: URL
   let league: SportLeague
 

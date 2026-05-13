@@ -76,6 +76,7 @@ struct PPVToSource: StreamSource {
         awayTeam: awayTeam,
         scheduledTime: scheduledTime,
         isLive: isLive,
+        liveStatus: nil,
         pageURL: url,
         league: league
       )

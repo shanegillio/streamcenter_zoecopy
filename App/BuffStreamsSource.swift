@@ -174,6 +174,7 @@ struct BuffStreamsSource: StreamSource {
         awayTeam: awayTeam,
         scheduledTime: scheduledTime,
         isLive: isLive,
+        liveStatus: nil,
         pageURL: pageURL,
         league: league
       ))

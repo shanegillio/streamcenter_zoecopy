@@ -75,13 +75,15 @@ struct CustomStreamSource: StreamSource {
       seen.insert(link.href)
       let (home, away) = parseTeams(from: link.text, href: link.href)
       let scheduledTime = parseTime(from: link.text)
-      let isLive = detectLive(text: link.text, scheduledTime: scheduledTime)
+      let liveStatus = parseLiveStatus(from: link.text)
+      let isLive = liveStatus != nil || detectLive(text: link.text, scheduledTime: scheduledTime)
       return Game(
         id: link.href,
         homeTeam: home,
         awayTeam: away,
         scheduledTime: scheduledTime,
         isLive: isLive,
+        liveStatus: liveStatus,
         pageURL: url,
         league: league
       )
@@ -158,15 +160,45 @@ struct CustomStreamSource: StreamSource {
     return (cleaned.isEmpty ? "TBD" : cleaned, "TBD")
   }
 
+  private func parseLiveStatus(from text: String) -> String? {
+    let lower = text.lowercased()
+
+    let periods: [(String, String)] = [
+      ("4th quarter", "4th Quarter"), ("3rd quarter", "3rd Quarter"),
+      ("2nd quarter", "2nd Quarter"), ("1st quarter", "1st Quarter"),
+      ("3rd period", "3rd Period"), ("2nd period", "2nd Period"), ("1st period", "1st Period"),
+      ("2nd half", "2nd Half"), ("1st half", "1st Half"),
+      ("2nd leg", "2nd Leg"), ("1st leg", "1st Leg"),
+      ("halftime", "Halftime"), ("half time", "Halftime"),
+      ("extra time", "Extra Time"), ("overtime", "Overtime"),
+      ("in progress", "In Progress"),
+    ]
+    var period: String? = nil
+    for (keyword, label) in periods {
+      if lower.contains(keyword) { period = label; break }
+    }
+
+    // Score: two numbers around "-" or ":" but not followed by AM/PM (which would be a time)
+    var score: String? = nil
+    let scorePattern = #"\b(\d{1,3})\s*[-:]\s*(\d{1,3})\b(?!\s*[AaPp][Mm])"#
+    if let regex = try? NSRegularExpression(pattern: scorePattern),
+       let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+       let r1 = Range(match.range(at: 1), in: text),
+       let r2 = Range(match.range(at: 2), in: text) {
+      score = "\(text[r1])-\(text[r2])"
+    }
+
+    switch (score, period) {
+    case let (s?, p?): return "\(s) • \(p)"
+    case let (s?, nil): return s
+    case let (nil, p?): return p
+    case (nil, nil): return nil
+    }
+  }
+
   private func detectLive(text: String, scheduledTime: Date?) -> Bool {
     let lower = text.lowercased()
-    // Text-based indicators
-    if lower.contains("in progress") || lower.contains("live") || lower.contains("halftime") { return true }
-    // Score pattern: two numbers around a separator ("3 - 7", "45:67", "3-7")
-    // Upcoming games never show scores, so this reliably indicates a game in progress.
-    let scorePattern = #"\b\d{1,3}\s*[-:]\s*\d{1,3}\b"#
-    if (try? NSRegularExpression(pattern: scorePattern))?.firstMatch(
-        in: text, range: NSRange(text.startIndex..., in: text)) != nil { return true }
+    if lower.contains("live") { return true }
     // Time-based: game was scheduled within the last 4 hours
     if let t = scheduledTime {
       let diff = Date().timeIntervalSince(t)
