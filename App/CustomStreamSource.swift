@@ -75,8 +75,9 @@ struct CustomStreamSource: StreamSource {
       seen.insert(link.href)
       let (home, away) = parseTeams(from: link.text, href: link.href)
       let scheduledTime = parseTime(from: link.text)
-      let liveStatus = parseLiveStatus(from: link.text)
-      let isLive = liveStatus != nil || detectLive(text: link.text, scheduledTime: scheduledTime)
+      // Prefer the DOM status element (e.g. "Bottom 6th") over anchor text parsing
+      let liveStatus = parseLiveStatus(domStatus: link.status, linkText: link.text)
+      let isLive = liveStatus != nil || detectLive(text: link.text, domStatus: link.status, scheduledTime: scheduledTime)
       return Game(
         id: link.href,
         homeTeam: home,
@@ -160,9 +161,28 @@ struct CustomStreamSource: StreamSource {
     return (cleaned.isEmpty ? "TBD" : cleaned, "TBD")
   }
 
-  private func parseLiveStatus(from text: String) -> String? {
-    let period = detectPeriod(in: text.lowercased())
-    let score  = detectScore(in: text)
+  // domStatus: text from a nearby status DOM element (e.g. "Bottom 6th", "3-1")
+  // linkText:  the anchor's own innerText (fallback source)
+  private func parseLiveStatus(domStatus: String, linkText: String) -> String? {
+    // If the DOM gave us an explicit status element, parse/return it directly.
+    // It's purpose-built for this, so it's the most reliable signal.
+    if !domStatus.isEmpty {
+      let domLower = domStatus.lowercased()
+      // Reject generic noise like "live", "watch", URLs, long marketing copy
+      let isNoise = domLower == "live" || domLower == "watch" || domLower.hasPrefix("http") || domStatus.count > 60
+      if !isNoise {
+        // Try to extract a structured period from the DOM status text
+        if let period = detectPeriod(in: domLower) {
+          let score = detectScore(in: domStatus)
+          return score.map { "\($0) • \(period)" } ?? period
+        }
+        // Return the raw DOM status as-is (e.g. "Bottom 6th" even if ordinal isn't recognized)
+        return domStatus
+      }
+    }
+    // Fall back to parsing the anchor link text
+    let period = detectPeriod(in: linkText.lowercased())
+    let score  = detectScore(in: linkText)
     switch (score, period) {
     case let (s?, p?): return "\(s) • \(p)"
     case let (s?, nil): return s
@@ -233,10 +253,11 @@ struct CustomStreamSource: StreamSource {
     return "\(text[r1])-\(text[r2])"
   }
 
-  private func detectLive(text: String, scheduledTime: Date?) -> Bool {
+  private func detectLive(text: String, domStatus: String, scheduledTime: Date?) -> Bool {
+    // A non-empty DOM status element strongly indicates the game is live
+    if !domStatus.isEmpty && !domStatus.lowercased().hasPrefix("http") { return true }
     let lower = text.lowercased()
     if lower.contains("live") { return true }
-    // Time-based: game was scheduled within the last 4 hours
     if let t = scheduledTime {
       let diff = Date().timeIntervalSince(t)
       return diff >= -300 && diff < 14400

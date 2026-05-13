@@ -5,6 +5,8 @@ import UIKit
 struct ScrapedLink {
   let href: String
   let text: String
+  /// Text scraped from a nearby status/score/badge element in the DOM (e.g. "Bottom 6th", "3-1")
+  let status: String
 }
 
 // Loads a URL in a WKWebView attached to an off-screen UIWindow so Cloudflare JS
@@ -80,7 +82,20 @@ final class WebViewScraper: NSObject {
           var text = (a.innerText || a.textContent || '').replace(/\\s+/g, ' ').trim();
           if (href && !seen[href] && href.startsWith('http')) {
             seen[href] = 1;
-            links.push({href: href, text: text});
+            // Walk up the DOM (up to 5 levels) to find a sibling status/score/badge element.
+            // This captures elements like <div class="status status-live">Bottom 6th</div>
+            // that are placed outside the <a> tag in many sports streaming site layouts.
+            var statusText = '';
+            var el = a.parentElement;
+            for (var i = 0; i < 5 && el && !statusText; i++) {
+              var found = el.querySelector('[class*="status"], [class*="score"], [class*="badge"], [class*="live-label"]');
+              if (found && !found.contains(a)) {
+                var t = (found.innerText || found.textContent || '').replace(/\\s+/g, ' ').trim();
+                if (t) statusText = t;
+              }
+              el = el.parentElement;
+            }
+            links.push({href: href, text: text, status: statusText});
           }
         });
         return JSON.stringify(links);
@@ -94,7 +109,7 @@ final class WebViewScraper: NSObject {
            let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] {
           let links = raw.compactMap { d -> ScrapedLink? in
             guard let href = d["href"], let text = d["text"] else { return nil }
-            return ScrapedLink(href: href, text: text)
+            return ScrapedLink(href: href, text: text, status: d["status"] ?? "")
           }
           self.finish(with: links)
         } else {
