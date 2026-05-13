@@ -202,7 +202,13 @@ struct CustomStreamSource: StreamSource {
         (home, away) = parseTeams(from: link.text, href: link.href)
       }
 
-      let scheduledTime = parseTime(from: link.text)
+      // Parse explicit time from link text; fall back to countdown in DOM status.
+      // Countdown in DOM status also acts as a guard against false-live detection
+      // (isCountdown is checked first inside detectLive).
+      var scheduledTime = parseTime(from: link.text)
+      if scheduledTime == nil, !link.status.isEmpty, isCountdown(link.status) {
+        scheduledTime = parseCountdown(from: link.status)
+      }
       // detectLive is the single source of truth — parseLiveStatus only produces the
       // display string and must NOT be used to infer live state, since it can return
       // non-nil for non-live content (e.g. a time string scraped from a status element).
@@ -391,6 +397,8 @@ struct CustomStreamSource: StreamSource {
   }
 
   private func detectLive(text: String, domStatus: String, scheduledTime: Date?) -> Bool {
+    // Countdown timers ("2d 3h", "02:45:00") mean the game hasn't started — not live.
+    if !domStatus.isEmpty && isCountdown(domStatus) { return false }
     // Only treat domStatus as a live signal when it actually looks like an active game
     // state. A non-empty domStatus alone is NOT sufficient — a time string like
     // "7:05 PM" or "Tomorrow" would otherwise mark every upcoming game as live.
@@ -407,6 +415,66 @@ struct CustomStreamSource: StreamSource {
       return diff >= -300 && diff < 14400
     }
     return false
+  }
+
+  // Returns true when `text` looks like a countdown to a future event rather than a live
+  // game state. Recognized formats: "2d 3h 45m", "1h 30m", "02:45:00", "47:23" (MM:SS).
+  private func isCountdown(_ text: String) -> Bool {
+    let s = text.lowercased()
+    // Days component: "2d", "2 days"
+    if (try? NSRegularExpression(pattern: #"\b\d+\s*d(ay)?s?\b"#))?.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil {
+      return true
+    }
+    // Hours component not in a sports-period context: "3h", "1hr", "2 hours"
+    if (try? NSRegularExpression(pattern: #"\b\d+\s*h(r|our)?s?\b"#))?.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil {
+      let sportsPeriod = s.contains("inning") || s.contains("quarter") || s.contains("period") || s.contains("half")
+      if !sportsPeriod { return true }
+    }
+    // HH:MM:SS three-part time
+    if (try? NSRegularExpression(pattern: #"\b\d{1,2}:\d{2}:\d{2}\b"#))?.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil {
+      return true
+    }
+    return false
+  }
+
+  // Parses a countdown string into an absolute Date by adding the remaining duration
+  // to now. Returns nil if no recognizable countdown pattern is found.
+  private func parseCountdown(from text: String) -> Date? {
+    let s = text.lowercased()
+    var totalSeconds: TimeInterval = 0
+    var matched = false
+
+    let patterns: [(String, TimeInterval)] = [
+      (#"(\d+)\s*d(ay)?s?"#, 86400),
+      (#"(\d+)\s*h(r|our)?s?"#, 3600),
+      (#"(\d+)\s*m(in|inute)?s?"#, 60),
+    ]
+    for (pat, multiplier) in patterns {
+      if let regex = try? NSRegularExpression(pattern: pat),
+         let m = regex.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)),
+         let r = Range(m.range(at: 1), in: s),
+         let val = Double(s[r]) {
+        totalSeconds += val * multiplier
+        matched = true
+      }
+    }
+
+    // HH:MM:SS (only if no d/h/m components already matched)
+    if !matched,
+       let regex = try? NSRegularExpression(pattern: #"\b(\d{1,2}):(\d{2}):(\d{2})\b"#),
+       let m = regex.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)),
+       let rh = Range(m.range(at: 1), in: s),
+       let rm = Range(m.range(at: 2), in: s),
+       let rs = Range(m.range(at: 3), in: s) {
+      let h: TimeInterval = Double(s[rh]) ?? 0
+      let mi: TimeInterval = Double(s[rm]) ?? 0
+      let sec: TimeInterval = Double(s[rs]) ?? 0
+      totalSeconds = h * 3600 + mi * 60 + sec
+      matched = true
+    }
+
+    guard matched, totalSeconds > 60 else { return nil }
+    return Date().addingTimeInterval(totalSeconds)
   }
 
   private func parseTime(from text: String) -> Date? {
