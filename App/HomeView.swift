@@ -2,10 +2,12 @@ import SwiftUI
 
 struct HomeView: View {
   @Environment(SourceRegistry.self) private var registry
+  @Environment(FavoritesStore.self) private var favorites
   @State private var availableLeagues: [SportLeague] = []
   @State private var isLoading = true
   @State private var loadFailed = false
   @State private var showSourceManager = false
+  @State private var showSettings = false
 
   private let columns = [
     GridItem(.flexible()),
@@ -42,6 +44,13 @@ struct HomeView: View {
       }
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
+        ToolbarItem(placement: .topBarLeading) {
+          Button {
+            showSettings = true
+          } label: {
+            Label("Settings", systemImage: "gearshape")
+          }
+        }
         ToolbarItem(placement: .principal) {
           Text("StreamCenter")
             .font(.system(size: 22, weight: .bold))
@@ -53,6 +62,10 @@ struct HomeView: View {
             Label("Sources", systemImage: "antenna.radiowaves.left.and.right")
           }
         }
+      }
+      .sheet(isPresented: $showSettings) {
+        SettingsView()
+          .environment(favorites)
       }
       .sheet(isPresented: $showSourceManager) {
         SourceManagerSheet()
@@ -74,9 +87,18 @@ struct HomeView: View {
         }
         .buttonStyle(.plain)
       }
+
+      // Favorites tile appears when the user has saved favorite teams
+      if !favorites.favoriteTeams.isEmpty {
+        NavigationLink(destination: FavoritesView(source: registry.selectedSource)) {
+          FavoritesTile()
+        }
+        .buttonStyle(.plain)
+      }
+
       ForEach(availableLeagues) { league in
         NavigationLink(destination: GamesView(league: league, source: registry.selectedSource)) {
-          LeagueTile(league: league)
+          LeagueTile(league: league, isFavorite: favorites.isLeagueFavorite(league))
         }
         .buttonStyle(.plain)
       }
@@ -280,13 +302,39 @@ struct BrowseTile: View {
   }
 }
 
+// MARK: - Favorites tile
+
+struct FavoritesTile: View {
+  var body: some View {
+    ZStack {
+      RoundedRectangle(cornerRadius: 16)
+        .fill(Color.yellow.opacity(0.13))
+        .aspectRatio(1, contentMode: .fit)
+
+      VStack(spacing: 10) {
+        Image(systemName: "star.fill")
+          .font(.system(size: 36, weight: .bold))
+          .foregroundStyle(.yellow)
+
+        Text("Favorites")
+          .font(.system(size: 20, weight: .bold))
+          .foregroundStyle(Color.yellow.opacity(0.85))
+          .minimumScaleFactor(0.3)
+          .frame(maxWidth: .infinity)
+          .padding(.horizontal, 6)
+      }
+    }
+  }
+}
+
 // MARK: - League tile
 
 struct LeagueTile: View {
   let league: SportLeague
+  var isFavorite: Bool = false
 
   var body: some View {
-    ZStack {
+    ZStack(alignment: .topTrailing) {
       RoundedRectangle(cornerRadius: 16)
         .fill(league.accentColor.opacity(0.13))
         .aspectRatio(1, contentMode: .fit)
@@ -318,6 +366,13 @@ struct LeagueTile: View {
           .minimumScaleFactor(0.3)
           .frame(maxWidth: .infinity)
           .padding(.horizontal, 6)
+      }
+
+      if isFavorite {
+        Image(systemName: "star.fill")
+          .font(.system(size: 12, weight: .bold))
+          .foregroundStyle(.yellow)
+          .padding(8)
       }
     }
   }

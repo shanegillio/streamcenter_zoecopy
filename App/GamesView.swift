@@ -4,14 +4,20 @@ struct GamesView: View {
   let league: SportLeague
   let source: AnyStreamSource
 
+  @Environment(FavoritesStore.self) private var favorites
+
   @State private var games: [Game] = []
   @State private var isLoading = true
   @State private var errorMessage: String? = nil
   @State private var selectedGame: Game? = nil
   @State private var pendingPremiumGame: Game? = nil
 
-  var liveGames: [Game] { games.filter { $0.isLive } }
-  var upcomingGames: [Game] { games.filter { !$0.isLive } }
+  var liveGames: [Game] {
+    games.filter { $0.isLive }.sorted { favorites.isFavoriteGame($0) && !favorites.isFavoriteGame($1) }
+  }
+  var upcomingGames: [Game] {
+    games.filter { !$0.isLive }.sorted { favorites.isFavoriteGame($0) && !favorites.isFavoriteGame($1) }
+  }
 
   var sourceDomain: String { source.baseURL.host ?? source.id }
 
@@ -214,6 +220,20 @@ struct PremiumCredentialSheet: View {
 
 struct GameCard: View {
   let game: Game
+  @Environment(FavoritesStore.self) private var favorites
+
+  private func teamRow(_ name: String) -> some View {
+    HStack(spacing: 5) {
+      Text(name)
+        .font(.system(size: 16, weight: .bold)).foregroundStyle(.primary)
+        .lineLimit(1)
+      if favorites.isTeamFavorite(name) {
+        Image(systemName: "star.fill")
+          .font(.system(size: 9, weight: .bold))
+          .foregroundStyle(.yellow)
+      }
+    }
+  }
 
   var body: some View {
     HStack(spacing: 14) {
@@ -240,12 +260,8 @@ struct GameCard: View {
           .lineLimit(2)
       } else {
         VStack(alignment: .leading, spacing: 7) {
-          Text(game.homeTeam)
-            .font(.system(size: 16, weight: .bold)).foregroundStyle(.primary)
-            .lineLimit(1)
-          Text(game.awayTeam)
-            .font(.system(size: 16, weight: .bold)).foregroundStyle(.primary)
-            .lineLimit(1)
+          teamRow(game.homeTeam)
+          teamRow(game.awayTeam)
         }
       }
 
