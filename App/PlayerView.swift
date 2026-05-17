@@ -4,33 +4,68 @@ import AVKit
 
 struct PlayerView: View {
   let game: Game
+  @Environment(SourceRegistry.self) private var registry
   @State private var ruleList: WKContentRuleList? = nil
   @State private var avPlayer: AVPlayer? = nil
   @State private var rulesReady = false
-  /// Becomes true after ~20 s with no stream found — reveals the WebView for manual browsing.
+  /// v2.24: sequential attempts across `game.streamURLs`. Each entry is
+  /// `.pending` until tried, then `.failed` if the per-source budget
+  /// elapses without finding an m3u8. The first to succeed promotes us
+  /// to AVPlayer; if every candidate fails we show the retry UI.
+  @State private var attempts: [SourceAttempt] = []
+  @State private var currentAttemptIdx: Int = 0
+  @State private var allFailed: Bool = false
+  /// Per-source budget in seconds. Tight enough to fail-fast through dead
+  /// sources, loose enough to give a flaky-but-working source time to
+  /// load + intercept its m3u8.
+  private static let perSourceBudget: TimeInterval = 10
+  /// Becomes true after the user explicitly hits "Browse manually" on the
+  /// retry UI — reveals the raw WebView for the failing source.
   @State private var showWebFallback = false
+
+  struct SourceAttempt: Identifiable {
+    let id = UUID()
+    let sourceID: String
+    let pageURL: URL
+    var status: Status = .pending
+
+    enum Status { case pending, trying, failed }
+  }
 
   var body: some View {
     ZStack {
       Color.black.ignoresSafeArea()
 
       if rulesReady {
-        // WebView is removed from the hierarchy once AVPlayer starts — this frees
-        // the WKWebContent process and its CPU/memory, which would otherwise compete
-        // with video decoding and cause playback stutter.
         if avPlayer == nil {
-          StreamWebView(url: game.pageURL, ruleList: ruleList) { streamURL, cookies in
-            Task { @MainActor in
-              let p = makePlayer(url: streamURL, cookies: cookies, referer: game.pageURL)
-              avPlayer = p
-              p.play()
+          if allFailed {
+            // All candidates exhausted — show per-source retry UI.
+            retryUI
+          } else if !attempts.isEmpty, currentAttemptIdx < attempts.count {
+            let current = attempts[currentAttemptIdx]
+            // WebView is removed from the hierarchy once AVPlayer starts.
+            // Re-keying on `current.id` means SwiftUI rebuilds StreamWebView
+            // when we advance to the next attempt — discarding the previous
+            // WKWebContent process cleanly.
+            StreamWebView(url: current.pageURL, ruleList: ruleList) { streamURL, cookies in
+              Task { @MainActor in
+                let p = makePlayer(url: streamURL, cookies: cookies, referer: current.pageURL)
+                avPlayer = p
+                p.play()
+              }
             }
-          }
-          .ignoresSafeArea()
-          .opacity(showWebFallback ? 1 : 0)
+            .id(current.id)
+            .ignoresSafeArea()
+            .opacity(showWebFallback ? 1 : 0)
 
-          // Loading state — shown until either AVPlayer or fallback WebView takes over
-          if !showWebFallback {
+            if !showWebFallback {
+              StreamSearchingOverlay(
+                attemptIndex: currentAttemptIdx,
+                totalAttempts: attempts.count,
+                sourceName: sourceName(for: current.sourceID)
+              )
+            }
+          } else {
             StreamLoadingView()
           }
         }
@@ -64,11 +99,115 @@ struct PlayerView: View {
     .task {
       ruleList = await AdBlockRules.compile()
       rulesReady = true
-      // After 22 s with no stream, fall back to showing the raw WebView
-      // so the user can interact with the site manually.
-      try? await Task.sleep(nanoseconds: 22_000_000_000)
-      if avPlayer == nil { showWebFallback = true }
+      buildAttempts()
+      // Each candidate gets its budget; if it doesn't resolve, advance.
+      while currentAttemptIdx < attempts.count {
+        let startedIdx = currentAttemptIdx
+        attempts[startedIdx].status = .trying
+        try? await Task.sleep(nanoseconds: UInt64(Self.perSourceBudget * 1_000_000_000))
+        if avPlayer != nil { return }
+        if currentAttemptIdx == startedIdx {
+          attempts[startedIdx].status = .failed
+          currentAttemptIdx += 1
+        }
+      }
+      // Exhausted all candidates without a stream.
+      if avPlayer == nil { allFailed = true }
     }
+  }
+
+  /// Map `game.streamURLs` into the sequential-attempt list. When empty
+  /// (ESPN-only game with no aggregator match), fall back to a single
+  /// attempt against `game.pageURL` — usually the ESPN page itself,
+  /// which won't play but at least gives the retry UI something to show.
+  private func buildAttempts() {
+    if !game.streamURLs.isEmpty {
+      attempts = game.streamURLs.map { c in
+        SourceAttempt(sourceID: c.sourceID, pageURL: c.pageURL)
+      }
+    } else {
+      attempts = [SourceAttempt(sourceID: "espn", pageURL: game.pageURL)]
+    }
+    currentAttemptIdx = 0
+    allFailed = false
+  }
+
+  private func sourceName(for sourceID: String) -> String {
+    if sourceID == "espn" { return "ESPN page" }
+    return registry.sources.first(where: { $0.id == sourceID })?.name ?? "Source"
+  }
+
+  /// Retry UI when every candidate has been exhausted. Shows per-source
+  /// status + actions to retry (re-run the whole sequence) or browse
+  /// the most-recently-tried URL manually.
+  private var retryUI: some View {
+    VStack(spacing: 18) {
+      Image(systemName: "exclamationmark.triangle")
+        .font(.system(size: 44))
+        .foregroundStyle(.white.opacity(0.7))
+      Text("No stream found")
+        .font(.title3.weight(.semibold))
+        .foregroundStyle(.white)
+      Text(attempts.isEmpty
+           ? "No sources are enabled for this game."
+           : "Tried \(attempts.count) source\(attempts.count == 1 ? "" : "s") without finding a playable stream.")
+        .font(.subheadline)
+        .foregroundStyle(.white.opacity(0.6))
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 32)
+      // Per-source attempt status
+      VStack(alignment: .leading, spacing: 6) {
+        ForEach(attempts) { att in
+          HStack(spacing: 8) {
+            Image(systemName: "xmark.circle.fill")
+              .foregroundStyle(.red.opacity(0.7))
+            Text(sourceName(for: att.sourceID))
+              .font(.subheadline)
+              .foregroundStyle(.white.opacity(0.85))
+          }
+        }
+      }
+      .padding(.vertical, 8)
+      HStack(spacing: 14) {
+        Button {
+          // Retry all candidates from scratch.
+          buildAttempts()
+          allFailed = false
+          Task {
+            while currentAttemptIdx < attempts.count {
+              let startedIdx = currentAttemptIdx
+              attempts[startedIdx].status = .trying
+              try? await Task.sleep(nanoseconds: UInt64(Self.perSourceBudget * 1_000_000_000))
+              if avPlayer != nil { return }
+              if currentAttemptIdx == startedIdx {
+                attempts[startedIdx].status = .failed
+                currentAttemptIdx += 1
+              }
+            }
+            if avPlayer == nil { allFailed = true }
+          }
+        } label: {
+          Label("Try Again", systemImage: "arrow.clockwise")
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .background(Color.white.opacity(0.15), in: Capsule())
+            .foregroundStyle(.white)
+        }
+        if !attempts.isEmpty {
+          Button {
+            showWebFallback = true
+            allFailed = false
+            currentAttemptIdx = max(0, attempts.count - 1)
+          } label: {
+            Label("Browse Manually", systemImage: "safari")
+              .padding(.horizontal, 16).padding(.vertical, 10)
+              .background(Color.white.opacity(0.08), in: Capsule())
+              .foregroundStyle(.white.opacity(0.8))
+          }
+        }
+      }
+      .padding(.top, 4)
+    }
+    .padding(.horizontal, 24)
   }
 
   // Build an AVPlayer that carries the WebView's cookies + UA/Referer so auth
@@ -80,6 +219,45 @@ struct PlayerView: View {
     headers["Origin"]     = (referer.scheme ?? "https") + "://" + (referer.host ?? "")
     let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
     return AVPlayer(playerItem: AVPlayerItem(asset: asset))
+  }
+}
+
+// MARK: - Multi-source searching overlay
+
+/// v2.24: shown while PlayerView is iterating through `game.streamURLs`
+/// candidates. Replaces the v2.21–v2.23 single-source spinner. Updates
+/// per attempt so the user understands work is happening.
+private struct StreamSearchingOverlay: View {
+  let attemptIndex: Int
+  let totalAttempts: Int
+  let sourceName: String
+  @State private var pulse = false
+
+  var body: some View {
+    VStack(spacing: 16) {
+      ZStack {
+        Circle()
+          .fill(Color.white.opacity(0.06))
+          .frame(width: 80, height: 80)
+          .scaleEffect(pulse ? 1.25 : 1.0)
+          .opacity(pulse ? 0 : 0.6)
+          .animation(.easeOut(duration: 1.2).repeatForever(autoreverses: false), value: pulse)
+        Image(systemName: "antenna.radiowaves.left.and.right")
+          .font(.system(size: 28, weight: .semibold))
+          .foregroundStyle(.white.opacity(0.85))
+      }
+      Text("Finding stream…")
+        .font(.headline)
+        .foregroundStyle(.white)
+      Text(totalAttempts > 1
+           ? "Trying \(sourceName) (\(attemptIndex + 1) of \(totalAttempts))"
+           : "Trying \(sourceName)")
+        .font(.subheadline)
+        .foregroundStyle(.white.opacity(0.6))
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 32)
+    }
+    .onAppear { pulse = true }
   }
 }
 
