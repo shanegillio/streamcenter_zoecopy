@@ -858,11 +858,28 @@ struct CustomStreamSource: StreamSource {
         }
         return nil
       }()
-      let league =
-        teamLeague
-        ?? Self.detectLeague(href: dg.pageURL.absoluteString, text: dg.categoryLabel, learned: learned)
-        ?? learned.league(forTextContaining: teamCombined)
-        ?? .other
+      let categoryLeague = Self.detectLeague(
+        href: dg.pageURL.absoluteString, text: dg.categoryLabel, learned: learned
+      )
+      // v2.20: country-team disambiguation. National teams ("Germany",
+      // "Latvia", "Norway") are listed in teams.json under .soccer because
+      // they play soccer internationally — but those same countries also
+      // play ice hockey, basketball, handball, etc., under the same bare
+      // name. When the team match resolves to .soccer AND the category
+      // resolves to a specific non-soccer league, the category is the
+      // more reliable signal (ppv.to literally labels these "Ice Hockey").
+      // Club-level matches (Manchester United, AS Roma) are unaffected
+      // because their team match isn't .soccer — it's already specific.
+      let league: SportLeague = {
+        if teamLeague == .soccer,
+           let cat = categoryLeague, cat != .soccer, cat != .other {
+          return cat
+        }
+        return teamLeague
+          ?? categoryLeague
+          ?? learned.league(forTextContaining: teamCombined)
+          ?? .other
+      }()
 
       let isEvent = dg.awayName.isEmpty
       return Game(
@@ -885,12 +902,32 @@ struct CustomStreamSource: StreamSource {
       )
     }
 
+    // v2.20: dedupe by normalized team-pair. Multi-source merge (v2.18)
+    // can produce two entries for the same fixture from different feeds
+    // (e.g. ppv.to and Streamed-images-json both list "Sevilla vs Real
+    // Madrid"), each with its own pageURL and externalID — the dedupe
+    // in APIDiscovery doesn't catch these because its key is
+    // (externalID, pageURL). Order-insensitive team-pair key + diacritic
+    // folding catches both home/away orientations and accent variants.
+    let deduped = Self.dedupeByTeams(mapped)
+
+    // v2.20: hard past-game filter. Drop games whose scheduledTime is
+    // more than 4 h in the past AND aren't live — these are typically
+    // replays the source kept linked. User intent: "only making game
+    // listings for actual links we found on these pages to active
+    // streams or upcoming streams."
+    let nowGated = deduped.filter { game in
+      if game.isLive { return true }
+      guard let st = game.scheduledTime else { return true }
+      return st.timeIntervalSinceNow > -4 * 60 * 60
+    }
+
     // LLM enrichment pass: hands the candidate games + page context to the
     // on-device model and lets it drop nonsense, correct ambiguous team
     // names ("United" → "Manchester United" on an EPL page), and re-tag
     // wrong-bucket leagues. Conservative by design — leaves entries alone
     // unless it's confident. iOS < 26: silent no-op.
-    let enriched = await applyLLMEnrichment(mapped)
+    let enriched = await applyLLMEnrichment(nowGated)
 
     // Warm URLCache with team-logo PNGs immediately. By the time the user
     // sees the Streams tab, AsyncImage in each LiveGameRow hits the cache
@@ -898,6 +935,61 @@ struct CustomStreamSource: StreamSource {
     await LogoPrefetcher.shared.warm(games: enriched)
 
     return enriched
+  }
+
+  /// Groups Games by a normalized, order-insensitive team-pair key and
+  /// keeps the most-information-rich entry per group. Used after
+  /// mapDiscovered to merge cross-source duplicates (same fixture surfaced
+  /// by ppv.to AND a github.io catalog, etc.).
+  private static func dedupeByTeams(_ games: [Game]) -> [Game] {
+    var byKey: [String: Game] = [:]
+    var orderKeys: [String] = []
+    for game in games {
+      let key = pairKey(home: game.homeTeam, away: game.awayTeam)
+      if let existing = byKey[key] {
+        byKey[key] = preferredGame(existing, game)
+      } else {
+        byKey[key] = game
+        orderKeys.append(key)
+      }
+    }
+    return orderKeys.compactMap { byKey[$0] }
+  }
+
+  /// Order-insensitive canonical pair key — "Real Madrid vs Sevilla"
+  /// and "Sevilla vs Real Madrid" produce the same key, so home/away
+  /// orientation differences across sources collapse to one entry.
+  private static func pairKey(home: String, away: String) -> String {
+    let h = normalizeTeamName(home)
+    let a = normalizeTeamName(away)
+    return h <= a ? "\(h)|\(a)" : "\(a)|\(h)"
+  }
+
+  /// Lowercase + strip diacritics + drop common club suffixes + collapse
+  /// punctuation. "Sevilla FC" / "Sevilla" / "Sevilla F.C." all hash to
+  /// the same key; "Atlético Madrid" matches "Atletico Madrid".
+  private static func normalizeTeamName(_ s: String) -> String {
+    let folded = s.lowercased()
+      .folding(options: .diacriticInsensitive, locale: Locale(identifier: "en_US"))
+    let cleaned = folded
+      .replacingOccurrences(of: "[^a-z0-9 ]", with: " ", options: .regularExpression)
+      .replacingOccurrences(of: "\\b(fc|ac|sc|cf|afc)\\b", with: "",
+                            options: .regularExpression)
+      .replacingOccurrences(of: " +", with: " ", options: .regularExpression)
+    return cleaned.trimmingCharacters(in: .whitespaces)
+  }
+
+  /// Prefer the more informative of two duplicate Game entries:
+  ///   live > upcoming with status > upcoming with time > anything else.
+  private static func preferredGame(_ a: Game, _ b: Game) -> Game {
+    if a.isLive != b.isLive { return a.isLive ? a : b }
+    let aHasStatus = a.liveStatus?.isEmpty == false
+    let bHasStatus = b.liveStatus?.isEmpty == false
+    if aHasStatus != bHasStatus { return aHasStatus ? a : b }
+    let aHasTime = a.scheduledTime != nil && a.timeIsKnown
+    let bHasTime = b.scheduledTime != nil && b.timeIsKnown
+    if aHasTime != bHasTime { return aHasTime ? a : b }
+    return a
   }
 
   /// Runs the FoundationModelScraper enrichment pass over the mapped game
@@ -1027,17 +1119,15 @@ struct CustomStreamSource: StreamSource {
         continue
       }
       let event = result.event
-      // v2.19: when ESPN reports the event as completed, unconditionally
-      // null out scheduledTime + timeIsKnown so the UI falls back to
-      // showing liveStatus ("FT 3-2") rather than the misleading past
-      // clock time the source may have given us. Without this, ppv.to's
-      // past `starts_at` slips through to display because needsTime=false.
-      let scheduledTime: Date? = event.isCompleted
-        ? nil
-        : (needsTime ? event.scheduledDate : game.scheduledTime)
-      let timeIsKnown: Bool = event.isCompleted
-        ? false
-        : (needsTime ? !event.isCompleted : game.timeIsKnown)
+      // v2.20: when ESPN says the event is completed, drop the entry
+      // entirely. ppv.to often keeps a stream URL for past games for
+      // replay/highlight purposes; user intent is "only list active or
+      // upcoming streams." The v2.19 "show FT score" path is gone — no
+      // listing means no listing.
+      if event.isCompleted { continue }
+      // For non-completed events, fill in time from ESPN when missing.
+      let scheduledTime: Date? = needsTime ? event.scheduledDate : game.scheduledTime
+      let timeIsKnown: Bool = needsTime ? true : game.timeIsKnown
       out.append(Game(
         id: game.id,
         homeTeam: game.homeTeam,
