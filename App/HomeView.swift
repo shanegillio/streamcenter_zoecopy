@@ -383,7 +383,27 @@ struct HomeView: View {
     // Dedupe gap-fills across sources (same fixture from multiple
     // aggregators) using v2.20's team-pair key.
     let dedupedGapFills = Self.dedupeGapFills(gapFills)
-    let allGames = espnWithStreams + dedupedGapFills
+    // v2.25: cutoff filter — only list games up through end of tomorrow
+    // ET. Live games always pass through regardless of their scheduled
+    // start. Future-time games more than ~36 h out get dropped to keep
+    // the feed focused on what's happening soon. ESPN games already
+    // respect this via the v2.25 narrower window, but aggregator gap-
+    // fills (cricket, IIHF, MotoGP) come from arbitrary catalogs that
+    // may list weekend fixtures.
+    let cutoff: Date = {
+      let etTZ = TimeZone(identifier: "America/New_York")!
+      var cal = Calendar(identifier: .gregorian)
+      cal.timeZone = etTZ
+      let startOfToday = cal.startOfDay(for: Date())
+      // End of "tomorrow" ET = start of day after tomorrow.
+      return cal.date(byAdding: .day, value: 2, to: startOfToday) ?? Date.distantFuture
+    }()
+    let unfiltered = espnWithStreams + dedupedGapFills
+    let allGames = unfiltered.filter { game in
+      if game.isLive { return true }
+      guard let st = game.scheduledTime else { return true }
+      return st < cutoff
+    }
 
     await LogoPrefetcher.shared.warm(games: allGames)
 

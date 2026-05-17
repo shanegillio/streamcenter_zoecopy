@@ -89,13 +89,13 @@ actor ESPNScoreboardService {
     dateFmt.locale = Locale(identifier: "en_US_POSIX")
     dateFmt.timeZone = etTZ
     dateFmt.dateFormat = "yyyyMMdd"
-    // 7-day window: today + next 6 days. Catches mid-week and weekend
-    // fixtures listed several days out by aggregator sites. Was previously
-    // 2-day (today+tomorrow), which left Wednesday's Champions League and
-    // weekend college slates with no time enrichment. Cost: 14 supported
-    // leagues × 7 dates = 98 parallel HTTP requests on first prewarm vs 28
-    // — still under 10 s on any reasonable connection, cached 60–90 s after.
-    let dateStrings: [String] = (0..<7).map { offset in
+    // v2.25: 2-day window (today + tomorrow ET). User's directive: only
+    // list games within the next day; nothing 2 days or more away.
+    // Trade-off: gives back the wider lookup window v2.19 added, but the
+    // user prefers a tighter, lighter listing over catching every
+    // mid-week / weekend fixture days in advance. Cost: 14 supported
+    // leagues × 2 dates = 28 parallel HTTP requests, cached 60–90 s.
+    let dateStrings: [String] = (0..<2).map { offset in
       let date = etCal.date(byAdding: .day, value: offset, to: Date()) ?? Date()
       return dateFmt.string(from: date)
     }
