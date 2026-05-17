@@ -179,18 +179,60 @@ actor TeamDatabase {
 
   // MARK: - Ingest
 
+  /// Priority order for ingest. Earlier entries win when a team name
+  /// appears in multiple leagues (e.g. "Real Madrid" exists in both
+  /// laLiga and championsLeague). Without this, Swift Dictionary's
+  /// non-deterministic iteration order could classify Real Madrid as
+  /// `.championsLeague` on one launch and `.laLiga` on the next — same
+  /// data, different chip placement. **Domestic / specific leagues
+  /// must come before umbrella competitions (UCL, UEL).**
+  private static let ingestPriority: [SportLeague] = [
+    // Domestic / specific (these own their teams)
+    .nba, .wnba, .ncaab, .nfl, .ncaaf, .mlb, .nhl, .mls,
+    .premierLeague, .laLiga, .serieA, .bundesliga, .ligue1,
+    .eredivisie, .ligaMx,
+    // Niche / single-league sports
+    .cricket, .iihf, .f1, .nascar,
+    .ufc, .mma, .boxing,
+    .tennis, .golf, .wwe,
+    // Umbrella competitions — teams already claimed above, only fills
+    // any gaps from clubs not in their domestic table.
+    .championsLeague, .europaLeague,
+    // Generic catch-alls last
+    .soccer, .other,
+  ]
+
   private func ingest(_ schema: Schema) {
     var newEntries: [(name: String, league: SportLeague)] = []
     var newExact: [String: SportLeague] = [:]
-    for (leagueKey, leagueData) in schema.leagues {
-      // Unknown keys forward-compat: skip leagues we don't have a Swift case
-      // for, rather than failing the entire ingest. Means the database can
-      // ship new leagues (e.g. `.afl`) ahead of the app shipping the
-      // corresponding SportLeague case + chip code.
-      guard let league = SportLeague(rawValue: leagueKey) else { continue }
+    // Walk in priority order so domestic leagues claim teams before
+    // umbrella competitions get a chance.
+    for league in Self.ingestPriority {
+      guard let leagueData = schema.leagues[league.rawValue] else { continue }
       for team in leagueData.teams {
         let canonical = team.name.lowercased()
           .trimmingCharacters(in: .whitespaces)
+        if !canonical.isEmpty, newExact[canonical] == nil {
+          newExact[canonical] = league
+          newEntries.append((canonical, league))
+        }
+        for alias in team.aliases ?? [] {
+          let a = alias.lowercased().trimmingCharacters(in: .whitespaces)
+          if !a.isEmpty, newExact[a] == nil {
+            newExact[a] = league
+            newEntries.append((a, league))
+          }
+        }
+      }
+    }
+    // Any leagues in the schema we don't have priority for (future
+    // unknown leagues like .afl shipped ahead of the Swift case) get
+    // appended at the end. Forward-compat fallback.
+    for (leagueKey, leagueData) in schema.leagues {
+      guard let league = SportLeague(rawValue: leagueKey),
+            !Self.ingestPriority.contains(league) else { continue }
+      for team in leagueData.teams {
+        let canonical = team.name.lowercased().trimmingCharacters(in: .whitespaces)
         if !canonical.isEmpty, newExact[canonical] == nil {
           newExact[canonical] = league
           newEntries.append((canonical, league))

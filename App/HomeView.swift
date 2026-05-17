@@ -46,9 +46,15 @@ struct HomeView: View {
     }
     .onChange(of: registry.selectedSource) { _, _ in Task { await loadLeagues() } }
     .onChange(of: registry.sources)        { _, _ in Task { await loadLeagues() } }
-    .onChange(of: favorites.favoriteLeagues) { _, _ in Task { await loadAllLiveGames() } }
-    .onChange(of: favorites.favoriteTeams)   { _, _ in Task { await loadAllLiveGames() } }
-    .onChange(of: favorites.favoriteSports)  { _, _ in Task { await loadAllLiveGames() } }
+    // v2.22: favorites only RE-SORT the existing arrays. Previously they
+    // re-fetched the entire feed, which under v2.21's ESPN-canonical
+    // pipeline meant a fresh scrape + ESPN reconcile every time the user
+    // toggled a star — visible as "streams briefly disappear" while the
+    // refetch ran. The whole point of favoriting is to reorder what's
+    // already loaded.
+    .onChange(of: favorites.favoriteLeagues) { _, _ in resortGames() }
+    .onChange(of: favorites.favoriteTeams)   { _, _ in resortGames() }
+    .onChange(of: favorites.favoriteSports)  { _, _ in resortGames() }
   }
 
   // MARK: - Main content
@@ -175,6 +181,12 @@ struct HomeView: View {
         .padding(.top, 4)
         .padding(.bottom, 32)
       }
+    }
+    // v2.22: pull-to-refresh is the manual reload trigger. The feed
+    // otherwise loads once per source switch — no background polling,
+    // no per-favorite re-fetch.
+    .refreshable {
+      await loadLeagues()
     }
   }
 
@@ -380,6 +392,42 @@ struct HomeView: View {
     allLiveGames     = all.filter {  $0.isLive }.sorted(by: liveSortFn)
     allUpcomingGames = all.filter { !$0.isLive }.sorted(by: upcomingSortFn)
     isLoadingLive = false
+  }
+
+  /// Re-sorts `allLiveGames` and `allUpcomingGames` against current
+  /// favorites WITHOUT re-fetching. Used by `.onChange(of: favorites.*)`
+  /// to bump favorited content to the top without taking the UI through
+  /// a full reload cycle (which was the v2.21 behavior — visible as
+  /// streams disappearing while the refetch ran).
+  private func resortGames() {
+    let favLeagues = favorites.favoriteLeagues
+    let favTeams   = favorites.favoriteTeams
+    let favSports  = favorites.favoriteSports
+    let liveSortFn: (Game, Game) -> Bool = { a, b in
+      let aFav = isFavorite(a, leagues: favLeagues, teams: favTeams, sports: favSports)
+      let bFav = isFavorite(b, leagues: favLeagues, teams: favTeams, sports: favSports)
+      if aFav != bFav { return aFav }
+      if a.league.popularityRank != b.league.popularityRank {
+        return a.league.popularityRank < b.league.popularityRank
+      }
+      return a.title < b.title
+    }
+    let upcomingSortFn: (Game, Game) -> Bool = { a, b in
+      let aFav = isFavorite(a, leagues: favLeagues, teams: favTeams, sports: favSports)
+      let bFav = isFavorite(b, leagues: favLeagues, teams: favTeams, sports: favSports)
+      if aFav != bFav { return aFav }
+      switch (a.scheduledTime, b.scheduledTime) {
+      case let (at?, bt?): return at < bt
+      case (.some, .none): return true
+      default:
+        if a.league.popularityRank != b.league.popularityRank {
+          return a.league.popularityRank < b.league.popularityRank
+        }
+        return a.title < b.title
+      }
+    }
+    allLiveGames = allLiveGames.sorted(by: liveSortFn)
+    allUpcomingGames = allUpcomingGames.sorted(by: upcomingSortFn)
   }
 
   private func isFavorite(
