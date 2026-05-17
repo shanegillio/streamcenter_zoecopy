@@ -52,9 +52,18 @@ struct Game: Identifiable, Equatable, Hashable {
     return fmt.string(from: time)
   }
 
-  // Clock time only, e.g. "7:00 PM ET". Shows "LIVE" or "Upcoming" when no time is known.
+  // Clock time only, e.g. "7:00 PM ET". Shows "LIVE", a final-score line for
+  // completed ESPN-enriched games, or "Upcoming" when no time/state is known.
   var displayTime: String {
     if isLive { return "LIVE" }
+    // Completed ESPN events come back with scheduledTime=nil + timeIsKnown=false
+    // but with a populated liveStatus ("FT 2-1"). Surface that instead of the
+    // generic "Upcoming" placeholder so the user sees "this game has happened
+    // already" at a glance.
+    if scheduledTime == nil || !timeIsKnown,
+       let status = liveStatus, !status.isEmpty {
+      return status
+    }
     guard let time = scheduledTime, timeIsKnown else { return "Upcoming" }
     let fmt = DateFormatter()
     fmt.locale = Locale(identifier: "en_US_POSIX")

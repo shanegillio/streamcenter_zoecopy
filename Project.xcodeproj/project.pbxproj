@@ -36,6 +36,8 @@
 		DD5E6F7A8B9C0D1E2F304152 /* CachedAsyncImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD5E6F7A8B9C0D1F2A3B4C5D /* CachedAsyncImage.swift */; };
 		EE6F7A8B9C0D1E2F30415263 /* HostFallback.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE6F7A8B9C0D1F2A3B4C5D6E /* HostFallback.swift */; };
 		EC4A1F2B8D3C5E7A9B0D2F4E /* ESPNScoreboardService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC4A1F2B8D3C5E7A9B0D2F4F /* ESPNScoreboardService.swift */; };
+		AB1F2C3D4E5F6789ABCDEF01 /* TeamDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1F2C3D4E5F6789ABCDEF02 /* TeamDatabase.swift */; };
+		CD3E4F5A6B7C8D9EABCDEF03 /* teams.json in Resources */ = {isa = PBXBuildFile; fileRef = CD3E4F5A6B7C8D9EABCDEF04 /* teams.json */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -67,6 +69,8 @@
 		DD5E6F7A8B9C0D1F2A3B4C5D /* CachedAsyncImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CachedAsyncImage.swift; sourceTree = "<group>"; };
 		EE6F7A8B9C0D1F2A3B4C5D6E /* HostFallback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostFallback.swift; sourceTree = "<group>"; };
 		EC4A1F2B8D3C5E7A9B0D2F4F /* ESPNScoreboardService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ESPNScoreboardService.swift; sourceTree = "<group>"; };
+		AB1F2C3D4E5F6789ABCDEF02 /* TeamDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeamDatabase.swift; sourceTree = "<group>"; };
+		CD3E4F5A6B7C8D9EABCDEF04 /* teams.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = teams.json; sourceTree = "<group>"; };
 		F61FD923A4E0905961E4DCB5 /* CredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialStore.swift; sourceTree = "<group>"; };
 		FCFA4080C079EB355C8D66AA /* TeamLogoCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeamLogoCache.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -96,6 +100,8 @@
 				DD5E6F7A8B9C0D1F2A3B4C5D /* CachedAsyncImage.swift */,
 				EE6F7A8B9C0D1F2A3B4C5D6E /* HostFallback.swift */,
 				EC4A1F2B8D3C5E7A9B0D2F4F /* ESPNScoreboardService.swift */,
+				AB1F2C3D4E5F6789ABCDEF02 /* TeamDatabase.swift */,
+				CD3E4F5A6B7C8D9EABCDEF04 /* teams.json */,
 				0E3B8161D65E9ED45FB471A1 /* PlayerView.swift */,
 				7C2AF65F701FFFD95FD505B2 /* SettingsView.swift */,
 				3107DED6A1CE19FF2BC38753 /* SportLeague.swift */,
@@ -179,6 +185,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				557DBD1E350A88A956581C3C /* Assets.xcassets in Resources */,
+				CD3E4F5A6B7C8D9EABCDEF03 /* teams.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -204,6 +211,7 @@
 				DD5E6F7A8B9C0D1E2F304152 /* CachedAsyncImage.swift in Sources */,
 				EE6F7A8B9C0D1E2F30415263 /* HostFallback.swift in Sources */,
 				EC4A1F2B8D3C5E7A9B0D2F4E /* ESPNScoreboardService.swift in Sources */,
+				AB1F2C3D4E5F6789ABCDEF01 /* TeamDatabase.swift in Sources */,
 				0CAFBE3F22ED0EF5B22E52B7 /* FavoritesStore.swift in Sources */,
 				9828E9304E94EAFF0F6DB1A8 /* FavoritesView.swift in Sources */,
 				58112B4E4C2C0F71662140DF /* Game.swift in Sources */,

@@ -1,0 +1,53 @@
+{
+  "displayName": "Cricket",
+  "espnSlug": null,
+  "popularityRank": 28,
+  "teams": [
+    { "name": "Chennai Super Kings", "aliases": ["CSK"] },
+    { "name": "Delhi Capitals", "aliases": ["DC"] },
+    { "name": "Gujarat Titans", "aliases": ["GT"] },
+    { "name": "Kolkata Knight Riders", "aliases": ["KKR"] },
+    { "name": "Lucknow Super Giants", "aliases": ["LSG"] },
+    { "name": "Mumbai Indians", "aliases": ["MI"] },
+    { "name": "Punjab Kings", "aliases": ["PBKS"] },
+    { "name": "Rajasthan Royals", "aliases": ["RR"] },
+    { "name": "Royal Challengers Bengaluru", "aliases": ["RCB", "Royal Challengers Bangalore"] },
+    { "name": "Sunrisers Hyderabad", "aliases": ["SRH"] },
+
+    { "name": "England Cricket", "aliases": ["England"] },
+    { "name": "India Cricket", "aliases": ["India"] },
+    { "name": "Australia Cricket", "aliases": ["Australia"] },
+    { "name": "New Zealand Cricket", "aliases": ["New Zealand"] },
+    { "name": "South Africa Cricket", "aliases": ["South Africa"] },
+    { "name": "Pakistan Cricket", "aliases": ["Pakistan"] },
+    { "name": "Sri Lanka Cricket", "aliases": ["Sri Lanka"] },
+    { "name": "Bangladesh Cricket", "aliases": ["Bangladesh"] },
+    { "name": "West Indies Cricket", "aliases": ["West Indies"] },
+    { "name": "Afghanistan Cricket", "aliases": ["Afghanistan"] },
+    { "name": "Zimbabwe Cricket", "aliases": ["Zimbabwe"] },
+    { "name": "Ireland Cricket", "aliases": ["Ireland"] },
+
+    { "name": "Adelaide Strikers" },
+    { "name": "Brisbane Heat" },
+    { "name": "Hobart Hurricanes" },
+    { "name": "Melbourne Renegades" },
+    { "name": "Melbourne Stars" },
+    { "name": "Perth Scorchers" },
+    { "name": "Sydney Sixers" },
+    { "name": "Sydney Thunder" },
+
+    { "name": "Islamabad United" },
+    { "name": "Karachi Kings" },
+    { "name": "Lahore Qalandars" },
+    { "name": "Multan Sultans" },
+    { "name": "Peshawar Zalmi" },
+    { "name": "Quetta Gladiators" },
+
+    { "name": "Barbados Royals" },
+    { "name": "Guyana Amazon Warriors" },
+    { "name": "Saint Kitts and Nevis Patriots" },
+    { "name": "Saint Lucia Kings" },
+    { "name": "Trinbago Knight Riders" },
+    { "name": "Antigua and Barbuda Falcons" }
+  ]
+}

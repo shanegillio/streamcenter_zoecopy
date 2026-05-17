@@ -559,9 +559,10 @@ extension APIShape {
       ?? (raw["away"] as? String)
       ?? ""
     var isEvent = false
+    let rawTitle: String? = (raw["name"] as? String) ?? (raw["title"] as? String)
 
     if home.isEmpty || away.isEmpty {
-      if let name = raw["name"] as? String ?? raw["title"] as? String {
+      if let name = rawTitle {
         let (h, a, evt) = splitName(name)
         if home.isEmpty { home = h }
         if away.isEmpty { away = a }
@@ -569,6 +570,28 @@ extension APIShape {
       }
     }
     if home.isEmpty && away.isEmpty { return nil }
+
+    // Reject malformed titles that look like "Team vs <nothing>" — these
+    // come from upstream sources whose data feeds get truncated (bintv's
+    // Streamed-images-json had "Norway vs", "England vs", "Kosovo vs.").
+    // `splitName` already returned (home, "", true) — but treating them
+    // as solo events is wrong because the title clearly intends two teams.
+    // Detect the trailing-separator pattern and drop the entry entirely.
+    if let title = rawTitle {
+      let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+      let lower = trimmed.lowercased()
+      let trailingSeparators = [" vs", " vs.", " v", " v.", " @", " versus"]
+      if trailingSeparators.contains(where: { lower.hasSuffix($0) }) {
+        return nil
+      }
+    }
+    // Reject "Home vs X" entries where X is suspiciously short and not in a
+    // team database — these are typically scraping bugs ("Everton vs  United"
+    // where the away team got chopped). 2-character or fewer away names that
+    // aren't recognized team abbreviations get dropped.
+    if !away.isEmpty && away.count <= 2 && !isEvent {
+      return nil
+    }
 
     // Times. Accept epoch ints or ISO strings.
     // Field-name aliases cover the variants we've seen across sources: ppv.to
@@ -590,12 +613,29 @@ extension APIShape {
     // Some APIs (NTVSTREAM-style) include an explicit live boolean. Honor
     // it over the time-window heuristic; otherwise fall through.
     let explicitLive = (raw["is_live"] as? Bool) ?? (raw["live"] as? Bool)
+    // Some sources (bintv's Streamed-images-json) ship a stringly-typed
+    // status field — `time: "Live"` — that doesn't parse as a date. When
+    // present and there's no explicit boolean, treat the literal "live" /
+    // "now" / "in progress" as the live signal.
+    let stringStatus: Bool? = {
+      let statusString = (raw["time"] as? String)
+        ?? (raw["status"] as? String)
+        ?? (raw["state"] as? String)
+      guard let raw = statusString?.lowercased().trimmingCharacters(in: .whitespaces),
+            !raw.isEmpty else { return nil }
+      if raw == "live" || raw == "now" || raw == "in progress" || raw == "in-progress" {
+        return true
+      }
+      return nil
+    }()
 
     let now = Date()
     let isLive: Bool
     if let l = explicitLive {
       isLive = l
     } else if alwaysLive {
+      isLive = true
+    } else if stringStatus == true {
       isLive = true
     } else if let starts = startsAt, let ends = endsAt {
       isLive = now >= starts && now < ends

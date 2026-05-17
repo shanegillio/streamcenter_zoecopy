@@ -65,13 +65,20 @@ actor ESPNScoreboardService {
     dateFmt.locale = Locale(identifier: "en_US_POSIX")
     dateFmt.timeZone = etTZ
     dateFmt.dateFormat = "yyyyMMdd"
-    let today    = dateFmt.string(from: Date())
-    let tomorrow = dateFmt.string(from: etCal.date(byAdding: .day, value: 1, to: Date()) ?? Date())
+    // 7-day window: today + next 6 days. Catches mid-week and weekend
+    // fixtures listed several days out by aggregator sites. Was previously
+    // 2-day (today+tomorrow), which left Wednesday's Champions League and
+    // weekend college slates with no time enrichment. Cost: 14 supported
+    // leagues × 7 dates = 98 parallel HTTP requests on first prewarm vs 28
+    // — still under 10 s on any reasonable connection, cached 60–90 s after.
+    let dateStrings: [String] = (0..<7).map { offset in
+      let date = etCal.date(byAdding: .day, value: offset, to: Date()) ?? Date()
+      return dateFmt.string(from: date)
+    }
 
-    // Fetch today and tomorrow in parallel
     var allRaw: [[String: Any]] = []
     await withTaskGroup(of: [[String: Any]].self) { group in
-      for dateStr in [today, tomorrow] {
+      for dateStr in dateStrings {
         let urlStr = "https://site.api.espn.com/apis/site/v2/sports/\(sport)/\(slug)/scoreboard?dates=\(dateStr)"
         group.addTask {
           guard let url = URL(string: urlStr) else { return [] }
@@ -327,6 +334,24 @@ actor ESPNScoreboardService {
         if let c = clock, c != "0:00", !c.isEmpty { liveStatus = (liveStatus ?? "") + " \(c)" }
       } else {
         liveStatus = score
+      }
+    } else if isCompleted {
+      // Surface a final-score line for completed games. `Game.displayTime`
+      // falls back to `liveStatus` when `scheduledTime` is nil (which it is
+      // for completed events), so without this branch UI shows "Upcoming"
+      // for games that already finished.
+      let hScore = competitors.first(where: { ($0["homeAway"] as? String) == "home" }).flatMap { $0["score"] as? String } ?? ""
+      let aScore = competitors.first(where: { ($0["homeAway"] as? String) == "away" }).flatMap { $0["score"] as? String } ?? ""
+      let score  = (!hScore.isEmpty && !aScore.isEmpty) ? "\(hScore)-\(aScore)" : nil
+      let detail = statusObj.flatMap { ($0["type"] as? [String: Any])?["shortDetail"] as? String }
+      // ESPN's `shortDetail` for completed games is usually "Final" or "FT"
+      // — combine with score when both are present.
+      if let d = detail, !d.isEmpty {
+        liveStatus = (score != nil) ? "\(d) \(score!)" : d
+      } else if let s = score {
+        liveStatus = "Final \(s)"
+      } else {
+        liveStatus = "Final"
       }
     }
 

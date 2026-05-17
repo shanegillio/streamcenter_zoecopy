@@ -136,75 +136,8 @@ struct CustomStreamSource: StreamSource {
     for (_, name) in nhlTeams  { teams.append((name, .nhl))  }
     for (_, name) in wnbaTeams { teams.append((name, .wnba)) }
     for (_, name) in mlsTeams  { teams.append((name, .mls))  }
-    teams.append(contentsOf: soccerTeams)
     return teams
   }()
-
-  /// Top-five European soccer leagues — current 2025/26 club rosters. Static
-  /// classification here is the v2.16 backstop: ESPN reconciliation refines
-  /// time/status, but it can't promote `.soccer` (or `.other`) to a specific
-  /// league when the device's ESPN prewarm hasn't completed yet, or when
-  /// today's ESPN scoreboard doesn't include the exact fixture the source
-  /// is listing (futures / promo entries / cross-week matchups). Listing
-  /// every team by name is mechanical and rosters are stable per season.
-  ///
-  /// Both accented and unaccented forms are listed where applicable
-  /// because `teamLeagueMap` lookup is a lowercased substring match on the
-  /// raw scraped name (no NFD normalization) — "atlético madrid" and
-  /// "atletico madrid" hit different keys.
-  private static let soccerTeams: [(String, SportLeague)] = [
-    // Premier League (2025/26)
-    ("Arsenal", .premierLeague), ("Aston Villa", .premierLeague),
-    ("Bournemouth", .premierLeague), ("Brentford", .premierLeague),
-    ("Brighton", .premierLeague), ("Brighton and Hove Albion", .premierLeague),
-    ("Burnley", .premierLeague), ("Chelsea", .premierLeague),
-    ("Crystal Palace", .premierLeague), ("Everton", .premierLeague),
-    ("Fulham", .premierLeague), ("Leeds United", .premierLeague),
-    ("Liverpool", .premierLeague), ("Manchester City", .premierLeague),
-    ("Manchester United", .premierLeague), ("Newcastle United", .premierLeague),
-    ("Nottingham Forest", .premierLeague), ("Sunderland", .premierLeague),
-    ("Tottenham Hotspur", .premierLeague), ("Tottenham", .premierLeague),
-    ("West Ham United", .premierLeague), ("West Ham", .premierLeague),
-    ("Wolverhampton Wanderers", .premierLeague), ("Wolves", .premierLeague),
-    // La Liga (2025/26)
-    ("Athletic Club", .laLiga), ("Atlético Madrid", .laLiga), ("Atletico Madrid", .laLiga),
-    ("Real Betis", .laLiga), ("Barcelona", .laLiga), ("FC Barcelona", .laLiga),
-    ("Celta Vigo", .laLiga), ("Elche", .laLiga), ("Espanyol", .laLiga),
-    ("Getafe", .laLiga), ("Girona", .laLiga), ("Levante", .laLiga),
-    ("Mallorca", .laLiga), ("Osasuna", .laLiga), ("Rayo Vallecano", .laLiga),
-    ("Real Madrid", .laLiga), ("Real Oviedo", .laLiga), ("Real Sociedad", .laLiga),
-    ("Sevilla", .laLiga), ("Valencia", .laLiga), ("Villarreal", .laLiga),
-    ("Alavés", .laLiga), ("Alaves", .laLiga),
-    // Serie A (2025/26)
-    ("Atalanta", .serieA), ("Bologna", .serieA), ("Cagliari", .serieA),
-    ("Como", .serieA), ("Cremonese", .serieA), ("Fiorentina", .serieA),
-    ("Genoa", .serieA), ("Hellas Verona", .serieA), ("Verona", .serieA),
-    ("Inter Milan", .serieA), ("Internazionale", .serieA),
-    ("Juventus", .serieA), ("Lazio", .serieA), ("Lecce", .serieA),
-    ("AC Milan", .serieA), ("Napoli", .serieA), ("Parma", .serieA),
-    ("Pisa", .serieA), ("AS Roma", .serieA), ("Sassuolo", .serieA),
-    ("Torino", .serieA), ("Udinese", .serieA),
-    // Bundesliga (2025/26) — partial; top-tier sides whose streams are
-    // commonly aggregated. Less popular sides fall back to ESPN reconcile.
-    ("Bayern Munich", .bundesliga), ("Bayer Leverkusen", .bundesliga),
-    ("RB Leipzig", .bundesliga), ("Borussia Dortmund", .bundesliga),
-    ("Eintracht Frankfurt", .bundesliga), ("VfB Stuttgart", .bundesliga),
-    ("Borussia Mönchengladbach", .bundesliga), ("Borussia Monchengladbach", .bundesliga),
-    ("FC Köln", .bundesliga), ("FC Koln", .bundesliga),
-    ("Werder Bremen", .bundesliga), ("Hoffenheim", .bundesliga),
-    ("Mainz", .bundesliga), ("Augsburg", .bundesliga),
-    ("Wolfsburg", .bundesliga), ("Union Berlin", .bundesliga),
-    ("Heidenheim", .bundesliga), ("FC St. Pauli", .bundesliga), ("St. Pauli", .bundesliga),
-    ("Hamburger SV", .bundesliga), ("Freiburg", .bundesliga),
-    // Ligue 1 (2025/26) — partial.
-    ("Paris Saint-Germain", .ligue1), ("PSG", .ligue1),
-    ("Marseille", .ligue1), ("Monaco", .ligue1), ("Lyon", .ligue1),
-    ("Lille", .ligue1), ("Lens", .ligue1), ("Rennes", .ligue1),
-    ("Nice", .ligue1), ("Strasbourg", .ligue1), ("Toulouse", .ligue1),
-    ("Nantes", .ligue1), ("Auxerre", .ligue1), ("Le Havre", .ligue1),
-    ("Brest", .ligue1), ("Metz", .ligue1), ("Angers", .ligue1),
-    ("Paris FC", .ligue1), ("Lorient", .ligue1),
-  ]
 
   // Sport abbreviation tables keyed by lowercase 2-3 char code
   static let mlbTeams: [String: String] = [
@@ -872,6 +805,10 @@ struct CustomStreamSource: StreamSource {
     // own games benefit from the freshest learned team→league pairs.
     await LearnedSportsData.shared.ingest(discovered, resolveCategory: resolveCategory)
     let learned = await LearnedSportsData.shared.snapshot()
+    // Snapshot the team database once (actor crossing is cheap but compactMap
+    // below is sync). Longest names first so "Manchester United" wins over
+    // "Manchester City" on substring matches that contain both.
+    let dbEntries = await TeamDatabase.shared.allEntriesByLengthDescending()
 
     let mapped: [Game] = discovered.compactMap { dg -> Game? in
       // Reject entries whose home team is just a sport-category label —
@@ -888,11 +825,18 @@ struct CustomStreamSource: StreamSource {
       // streamed.pk lump every basketball game under category="basketball",
       // every soccer game under "football", etc. — so the category alone
       // can't tell NBA from WNBA, or MLS from Premier League. A full team
-      // name match in the static team-league map (e.g. "Atlanta Dream")
-      // resolves to the specific league unambiguously and beats the generic
-      // category classification.
+      // name match in the team database (e.g. "Atlanta Dream") resolves to
+      // the specific league unambiguously and beats the generic category.
+      //
+      // Lookup order: TeamDatabase (GitHub-hosted, broadest coverage) →
+      // legacy static `teamLeagueMap` (kept for abbreviation tables that
+      // haven't moved into the DB yet) → category → learned data → .other.
       let teamCombined = (dg.homeName + " " + dg.awayName).lowercased()
       let teamLeague: SportLeague? = {
+        for (name, league) in dbEntries
+          where name.count >= 5 && teamCombined.contains(name) {
+          return league
+        }
         for (teamName, league) in Self.teamLeagueMap
           where teamName.count >= 5 && teamCombined.contains(teamName) {
           return league
@@ -926,12 +870,51 @@ struct CustomStreamSource: StreamSource {
       )
     }
 
+    // LLM sanity validator: ambiguous entries (single-team events, very
+    // short away teams, or .other classifications that no static team table
+    // matched) go through Foundation Models on iOS 26+ to drop obviously-
+    // junk listings. Real games are always kept — the model is conservative
+    // and the validateGames default-true on missing verdicts.
+    let validated = await applyLLMValidation(mapped)
+
     // Warm URLCache with team-logo PNGs immediately. By the time the user
     // sees the Streams tab, AsyncImage in each LiveGameRow hits the cache
     // and paints the logos without a network round-trip.
-    await LogoPrefetcher.shared.warm(games: mapped)
+    await LogoPrefetcher.shared.warm(games: validated)
 
-    return mapped
+    return validated
+  }
+
+  /// Routes ambiguous entries through `FoundationModelScraper.validateGames`
+  /// and drops any the model classifies as implausible. Non-ambiguous games
+  /// (clear two-team match, recognised league) pass through untouched.
+  private func applyLLMValidation(_ games: [Game]) async -> [Game] {
+    // Identify candidates worth validating. A game is "ambiguous" when:
+    //  - it's a would-be solo event (awayTeam.isEmpty) — could be real
+    //    (Indy 500) or junk ("Live TV")
+    //  - the away team is suspiciously short and might be a scraping artifact
+    //  - league wound up `.other` AND neither team showed up in any static
+    //    table — could be niche real sport or could be navigation noise
+    var ambiguousIndexes: [Int] = []
+    var candidates: [(home: String, away: String, league: String)] = []
+    for (i, g) in games.enumerated() {
+      let suspiciousShortAway = !g.awayTeam.isEmpty && g.awayTeam.count <= 3
+      let ambiguousOther = g.league == .other && g.awayTeam.isEmpty
+      if g.awayTeam.isEmpty || suspiciousShortAway || ambiguousOther {
+        ambiguousIndexes.append(i)
+        candidates.append((g.homeTeam, g.awayTeam, g.league.displayName))
+      }
+    }
+    if candidates.isEmpty { return games }
+    let verdicts = await FoundationModelScraper.shared.validateGames(candidates)
+    guard verdicts.count == candidates.count else { return games }
+    var rejected = Set<Int>()
+    for (vIdx, originalIdx) in ambiguousIndexes.enumerated() {
+      if !verdicts[vIdx] { rejected.insert(originalIdx) }
+    }
+    if rejected.isEmpty { return games }
+    return games.enumerated()
+      .compactMap { rejected.contains($0.offset) ? nil : $0.element }
   }
 
   // MARK: - ESPN reconciliation
@@ -1329,6 +1312,7 @@ struct CustomStreamSource: StreamSource {
     case .tennis:        return "tennis"
     case .golf:          return "golf"
     case .nascar:        return "nascar"
+    case .cricket:       return "cricket"
     case .other:         return nil
     }
   }

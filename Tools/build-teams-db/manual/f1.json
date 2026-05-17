@@ -1,0 +1,28 @@
+{
+  "displayName": "F1",
+  "espnSlug": "racing/f1",
+  "popularityRank": 17,
+  "teams": [
+    { "name": "Ferrari", "aliases": ["Scuderia Ferrari"] },
+    { "name": "Mercedes", "aliases": ["Mercedes-AMG Petronas", "Mercedes AMG"] },
+    { "name": "Red Bull Racing", "aliases": ["Red Bull", "Oracle Red Bull"] },
+    { "name": "McLaren", "aliases": ["McLaren F1"] },
+    { "name": "Aston Martin", "aliases": ["Aston Martin Aramco"] },
+    { "name": "Alpine", "aliases": ["BWT Alpine"] },
+    { "name": "Williams" },
+    { "name": "RB", "aliases": ["Visa Cash App RB", "AlphaTauri"] },
+    { "name": "Kick Sauber", "aliases": ["Sauber", "Stake F1"] },
+    { "name": "Haas", "aliases": ["MoneyGram Haas"] },
+
+    { "name": "Max Verstappen" },
+    { "name": "Lando Norris" },
+    { "name": "Charles Leclerc" },
+    { "name": "Oscar Piastri" },
+    { "name": "Lewis Hamilton" },
+    { "name": "George Russell" },
+    { "name": "Carlos Sainz" },
+    { "name": "Fernando Alonso" },
+    { "name": "Sergio Pérez", "aliases": ["Sergio Perez", "Checo"] },
+    { "name": "Pierre Gasly" }
+  ]
+}

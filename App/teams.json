@@ -1,0 +1,4128 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-05-17T17:31:27Z",
+  "leagues": {
+    "nba": {
+      "displayName": "NBA",
+      "espnSlug": "basketball/nba",
+      "popularityRank": 2,
+      "teams": [
+        {
+          "name": "Atlanta Hawks",
+          "aliases": [
+            "Hawks",
+            "ATL",
+            "Atlanta"
+          ]
+        },
+        {
+          "name": "Boston Celtics",
+          "aliases": [
+            "Celtics",
+            "BOS",
+            "Boston"
+          ]
+        },
+        {
+          "name": "Brooklyn Nets",
+          "aliases": [
+            "Nets",
+            "BKN",
+            "Brooklyn"
+          ]
+        },
+        {
+          "name": "Charlotte Hornets",
+          "aliases": [
+            "Hornets",
+            "CHA",
+            "Charlotte"
+          ]
+        },
+        {
+          "name": "Chicago Bulls",
+          "aliases": [
+            "Bulls",
+            "CHI",
+            "Chicago"
+          ]
+        },
+        {
+          "name": "Cleveland Cavaliers",
+          "aliases": [
+            "Cavaliers",
+            "CLE",
+            "Cleveland"
+          ]
+        },
+        {
+          "name": "Dallas Mavericks",
+          "aliases": [
+            "Mavericks",
+            "DAL",
+            "Dallas"
+          ]
+        },
+        {
+          "name": "Denver Nuggets",
+          "aliases": [
+            "Nuggets",
+            "DEN",
+            "Denver"
+          ]
+        },
+        {
+          "name": "Detroit Pistons",
+          "aliases": [
+            "Pistons",
+            "DET",
+            "Detroit"
+          ]
+        },
+        {
+          "name": "Golden State Warriors",
+          "aliases": [
+            "Warriors",
+            "GS",
+            "Golden State"
+          ]
+        },
+        {
+          "name": "Houston Rockets",
+          "aliases": [
+            "Rockets",
+            "HOU",
+            "Houston"
+          ]
+        },
+        {
+          "name": "Indiana Pacers",
+          "aliases": [
+            "Pacers",
+            "IND",
+            "Indiana"
+          ]
+        },
+        {
+          "name": "LA Clippers",
+          "aliases": [
+            "Clippers",
+            "LAC",
+            "LA"
+          ]
+        },
+        {
+          "name": "Los Angeles Lakers",
+          "aliases": [
+            "Lakers",
+            "LAL",
+            "Los Angeles"
+          ]
+        },
+        {
+          "name": "Memphis Grizzlies",
+          "aliases": [
+            "Grizzlies",
+            "MEM",
+            "Memphis"
+          ]
+        },
+        {
+          "name": "Miami Heat",
+          "aliases": [
+            "Heat",
+            "MIA",
+            "Miami"
+          ]
+        },
+        {
+          "name": "Milwaukee Bucks",
+          "aliases": [
+            "Bucks",
+            "MIL",
+            "Milwaukee"
+          ]
+        },
+        {
+          "name": "Minnesota Timberwolves",
+          "aliases": [
+            "Timberwolves",
+            "MIN",
+            "Minnesota"
+          ]
+        },
+        {
+          "name": "New Orleans Pelicans",
+          "aliases": [
+            "Pelicans",
+            "NO",
+            "New Orleans"
+          ]
+        },
+        {
+          "name": "New York Knicks",
+          "aliases": [
+            "Knicks",
+            "NY",
+            "New York"
+          ]
+        },
+        {
+          "name": "Oklahoma City Thunder",
+          "aliases": [
+            "Thunder",
+            "OKC",
+            "Oklahoma City"
+          ]
+        },
+        {
+          "name": "Orlando Magic",
+          "aliases": [
+            "Magic",
+            "ORL",
+            "Orlando"
+          ]
+        },
+        {
+          "name": "Philadelphia 76ers",
+          "aliases": [
+            "76ers",
+            "PHI",
+            "Philadelphia"
+          ]
+        },
+        {
+          "name": "Phoenix Suns",
+          "aliases": [
+            "Suns",
+            "PHX",
+            "Phoenix"
+          ]
+        },
+        {
+          "name": "Portland Trail Blazers",
+          "aliases": [
+            "Trail Blazers",
+            "POR",
+            "Portland"
+          ]
+        },
+        {
+          "name": "Sacramento Kings",
+          "aliases": [
+            "Kings",
+            "SAC",
+            "Sacramento"
+          ]
+        },
+        {
+          "name": "San Antonio Spurs",
+          "aliases": [
+            "Spurs",
+            "SA",
+            "San Antonio"
+          ]
+        },
+        {
+          "name": "Toronto Raptors",
+          "aliases": [
+            "Raptors",
+            "TOR",
+            "Toronto"
+          ]
+        },
+        {
+          "name": "Utah Jazz",
+          "aliases": [
+            "Jazz",
+            "UTAH"
+          ]
+        },
+        {
+          "name": "Washington Wizards",
+          "aliases": [
+            "Wizards",
+            "WSH",
+            "Washington"
+          ]
+        }
+      ]
+    },
+    "wnba": {
+      "displayName": "WNBA",
+      "espnSlug": "basketball/wnba",
+      "popularityRank": 19,
+      "teams": [
+        {
+          "name": "Atlanta Dream",
+          "aliases": [
+            "Dream",
+            "ATL",
+            "Atlanta"
+          ]
+        },
+        {
+          "name": "Chicago Sky",
+          "aliases": [
+            "Sky",
+            "CHI",
+            "Chicago"
+          ]
+        },
+        {
+          "name": "Connecticut Sun",
+          "aliases": [
+            "Sun",
+            "CON",
+            "Connecticut"
+          ]
+        },
+        {
+          "name": "Dallas Wings",
+          "aliases": [
+            "Wings",
+            "DAL",
+            "Dallas"
+          ]
+        },
+        {
+          "name": "Golden State Valkyries",
+          "aliases": [
+            "Valkyries",
+            "GS",
+            "Golden State"
+          ]
+        },
+        {
+          "name": "Indiana Fever",
+          "aliases": [
+            "Fever",
+            "IND",
+            "Indiana"
+          ]
+        },
+        {
+          "name": "Las Vegas Aces",
+          "aliases": [
+            "Aces",
+            "LV",
+            "Las Vegas"
+          ]
+        },
+        {
+          "name": "Los Angeles Sparks",
+          "aliases": [
+            "Sparks",
+            "LA",
+            "Los Angeles"
+          ]
+        },
+        {
+          "name": "Minnesota Lynx",
+          "aliases": [
+            "Lynx",
+            "MIN",
+            "Minnesota"
+          ]
+        },
+        {
+          "name": "New York Liberty",
+          "aliases": [
+            "Liberty",
+            "NY",
+            "New York"
+          ]
+        },
+        {
+          "name": "Phoenix Mercury",
+          "aliases": [
+            "Mercury",
+            "PHX",
+            "Phoenix"
+          ]
+        },
+        {
+          "name": "Portland Fire",
+          "aliases": [
+            "Fire",
+            "POR",
+            "Portland"
+          ]
+        },
+        {
+          "name": "Seattle Storm",
+          "aliases": [
+            "Storm",
+            "SEA",
+            "Seattle"
+          ]
+        },
+        {
+          "name": "Toronto Tempo",
+          "aliases": [
+            "Tempo",
+            "TOR",
+            "Toronto"
+          ]
+        },
+        {
+          "name": "Washington Mystics",
+          "aliases": [
+            "Mystics",
+            "WSH",
+            "Washington"
+          ]
+        }
+      ]
+    },
+    "ncaab": {
+      "displayName": "NCAA Men's Basketball",
+      "espnSlug": "basketball/mens-college-basketball",
+      "popularityRank": 13,
+      "teams": [
+        {
+          "name": "American University Eagles",
+          "aliases": [
+            "Eagles",
+            "American",
+            "AMER"
+          ]
+        },
+        {
+          "name": "Arizona State Sun Devils",
+          "aliases": [
+            "Sun Devils",
+            "Arizona St",
+            "ASU"
+          ]
+        },
+        {
+          "name": "Arizona Wildcats",
+          "aliases": [
+            "Wildcats",
+            "Arizona",
+            "ARIZ"
+          ]
+        },
+        {
+          "name": "Arkansas Razorbacks",
+          "aliases": [
+            "Razorbacks",
+            "Arkansas",
+            "ARK"
+          ]
+        },
+        {
+          "name": "Auburn Tigers",
+          "aliases": [
+            "Tigers",
+            "Auburn",
+            "AUB"
+          ]
+        },
+        {
+          "name": "Bellarmine Knights",
+          "aliases": [
+            "Knights",
+            "Bellarmine",
+            "BELL"
+          ]
+        },
+        {
+          "name": "Boise State Broncos",
+          "aliases": [
+            "Broncos",
+            "Boise St",
+            "BOIS"
+          ]
+        },
+        {
+          "name": "Bradley Braves",
+          "aliases": [
+            "Braves",
+            "Bradley",
+            "BRAD"
+          ]
+        },
+        {
+          "name": "Cal Poly Mustangs",
+          "aliases": [
+            "Mustangs",
+            "Cal Poly",
+            "CP"
+          ]
+        },
+        {
+          "name": "California Golden Bears",
+          "aliases": [
+            "Golden Bears",
+            "California",
+            "CAL"
+          ]
+        },
+        {
+          "name": "Colorado Buffaloes",
+          "aliases": [
+            "Buffaloes",
+            "Colorado",
+            "COLO"
+          ]
+        },
+        {
+          "name": "Colorado State Rams",
+          "aliases": [
+            "Rams",
+            "Colorado St",
+            "CSU"
+          ]
+        },
+        {
+          "name": "Delaware Blue Hens",
+          "aliases": [
+            "Blue Hens",
+            "Delaware",
+            "DEL"
+          ]
+        },
+        {
+          "name": "Florida A&M Rattlers",
+          "aliases": [
+            "Rattlers",
+            "Florida A&M",
+            "FAMU"
+          ]
+        },
+        {
+          "name": "Florida Gators",
+          "aliases": [
+            "Gators",
+            "Florida",
+            "FLA"
+          ]
+        },
+        {
+          "name": "Florida State Seminoles",
+          "aliases": [
+            "Seminoles",
+            "Florida St",
+            "FSU"
+          ]
+        },
+        {
+          "name": "George Washington Revolutionaries",
+          "aliases": [
+            "Revolutionaries",
+            "G Washington",
+            "GW"
+          ]
+        },
+        {
+          "name": "Georgetown Hoyas",
+          "aliases": [
+            "Hoyas",
+            "Georgetown",
+            "GTWN"
+          ]
+        },
+        {
+          "name": "Georgia Bulldogs",
+          "aliases": [
+            "Bulldogs",
+            "Georgia",
+            "UGA"
+          ]
+        },
+        {
+          "name": "Georgia Tech Yellow Jackets",
+          "aliases": [
+            "Yellow Jackets",
+            "Georgia Tech",
+            "GT"
+          ]
+        },
+        {
+          "name": "Hawai'i Rainbow Warriors",
+          "aliases": [
+            "Rainbow Warriors",
+            "Hawai'i",
+            "HAW"
+          ]
+        },
+        {
+          "name": "Howard Bison",
+          "aliases": [
+            "Bison",
+            "Howard",
+            "HOW"
+          ]
+        },
+        {
+          "name": "IU Indianapolis Jaguars",
+          "aliases": [
+            "Jaguars",
+            "IU Indy",
+            "IUIN"
+          ]
+        },
+        {
+          "name": "Idaho Vandals",
+          "aliases": [
+            "Vandals",
+            "Idaho",
+            "IDHO"
+          ]
+        },
+        {
+          "name": "Indiana Hoosiers",
+          "aliases": [
+            "Hoosiers",
+            "Indiana",
+            "IU"
+          ]
+        },
+        {
+          "name": "Iowa State Cyclones",
+          "aliases": [
+            "Cyclones",
+            "Iowa State",
+            "ISU"
+          ]
+        },
+        {
+          "name": "Jacksonville State Gamecocks",
+          "aliases": [
+            "Gamecocks",
+            "Jax State",
+            "JXST"
+          ]
+        },
+        {
+          "name": "Kentucky Wildcats",
+          "aliases": [
+            "Wildcats",
+            "Kentucky",
+            "UK"
+          ]
+        },
+        {
+          "name": "Louisville Cardinals",
+          "aliases": [
+            "Cardinals",
+            "Louisville",
+            "LOU"
+          ]
+        },
+        {
+          "name": "Murray State Racers",
+          "aliases": [
+            "Racers",
+            "Murray St",
+            "MUR"
+          ]
+        },
+        {
+          "name": "Northern Kentucky Norse",
+          "aliases": [
+            "Norse",
+            "N Kentucky",
+            "NKU"
+          ]
+        },
+        {
+          "name": "Northwestern Wildcats",
+          "aliases": [
+            "Wildcats",
+            "Northwestern",
+            "NU"
+          ]
+        },
+        {
+          "name": "Notre Dame Fighting Irish",
+          "aliases": [
+            "Fighting Irish",
+            "Notre Dame",
+            "ND"
+          ]
+        },
+        {
+          "name": "Sacramento State Hornets",
+          "aliases": [
+            "Hornets",
+            "Sacramento St",
+            "SAC"
+          ]
+        },
+        {
+          "name": "San Diego State Aztecs",
+          "aliases": [
+            "Aztecs",
+            "San Diego St",
+            "SDSU"
+          ]
+        },
+        {
+          "name": "San José State Spartans",
+          "aliases": [
+            "Spartans",
+            "San José St",
+            "SJSU"
+          ]
+        },
+        {
+          "name": "South Alabama Jaguars",
+          "aliases": [
+            "Jaguars",
+            "South Alabama",
+            "USA"
+          ]
+        },
+        {
+          "name": "South Florida Bulls",
+          "aliases": [
+            "Bulls",
+            "South Florida",
+            "USF"
+          ]
+        },
+        {
+          "name": "Southern Illinois Salukis",
+          "aliases": [
+            "Salukis",
+            "S Illinois",
+            "SIU"
+          ]
+        },
+        {
+          "name": "Stanford Cardinal",
+          "aliases": [
+            "Cardinal",
+            "Stanford",
+            "STAN"
+          ]
+        },
+        {
+          "name": "Stetson Hatters",
+          "aliases": [
+            "Hatters",
+            "Stetson",
+            "STET"
+          ]
+        },
+        {
+          "name": "UAB Blazers",
+          "aliases": [
+            "Blazers",
+            "UAB"
+          ]
+        },
+        {
+          "name": "UC Riverside Highlanders",
+          "aliases": [
+            "Highlanders",
+            "UC Riverside",
+            "UCR"
+          ]
+        },
+        {
+          "name": "UC San Diego Tritons",
+          "aliases": [
+            "Tritons",
+            "UC San Diego",
+            "UCSD"
+          ]
+        },
+        {
+          "name": "UCLA Bruins",
+          "aliases": [
+            "Bruins",
+            "UCLA"
+          ]
+        },
+        {
+          "name": "UConn Huskies",
+          "aliases": [
+            "Huskies",
+            "UConn",
+            "CONN"
+          ]
+        },
+        {
+          "name": "UIC Flames",
+          "aliases": [
+            "Flames",
+            "UIC"
+          ]
+        },
+        {
+          "name": "USC Trojans",
+          "aliases": [
+            "Trojans",
+            "USC"
+          ]
+        },
+        {
+          "name": "Western Kentucky Hilltoppers",
+          "aliases": [
+            "Hilltoppers",
+            "Western KY",
+            "WKU"
+          ]
+        },
+        {
+          "name": "Yale Bulldogs",
+          "aliases": [
+            "Bulldogs",
+            "Yale"
+          ]
+        }
+      ]
+    },
+    "nfl": {
+      "displayName": "NFL",
+      "espnSlug": "football/nfl",
+      "popularityRank": 1,
+      "teams": [
+        {
+          "name": "Arizona Cardinals",
+          "aliases": [
+            "Cardinals",
+            "ARI"
+          ]
+        },
+        {
+          "name": "Atlanta Falcons",
+          "aliases": [
+            "Falcons",
+            "ATL"
+          ]
+        },
+        {
+          "name": "Baltimore Ravens",
+          "aliases": [
+            "Ravens",
+            "BAL"
+          ]
+        },
+        {
+          "name": "Buffalo Bills",
+          "aliases": [
+            "Bills",
+            "BUF"
+          ]
+        },
+        {
+          "name": "Carolina Panthers",
+          "aliases": [
+            "Panthers",
+            "CAR"
+          ]
+        },
+        {
+          "name": "Chicago Bears",
+          "aliases": [
+            "Bears",
+            "CHI"
+          ]
+        },
+        {
+          "name": "Cincinnati Bengals",
+          "aliases": [
+            "Bengals",
+            "CIN"
+          ]
+        },
+        {
+          "name": "Cleveland Browns",
+          "aliases": [
+            "Browns",
+            "CLE"
+          ]
+        },
+        {
+          "name": "Dallas Cowboys",
+          "aliases": [
+            "Cowboys",
+            "DAL"
+          ]
+        },
+        {
+          "name": "Denver Broncos",
+          "aliases": [
+            "Broncos",
+            "DEN"
+          ]
+        },
+        {
+          "name": "Detroit Lions",
+          "aliases": [
+            "Lions",
+            "DET"
+          ]
+        },
+        {
+          "name": "Green Bay Packers",
+          "aliases": [
+            "Packers",
+            "GB"
+          ]
+        },
+        {
+          "name": "Houston Texans",
+          "aliases": [
+            "Texans",
+            "HOU"
+          ]
+        },
+        {
+          "name": "Indianapolis Colts",
+          "aliases": [
+            "Colts",
+            "IND"
+          ]
+        },
+        {
+          "name": "Jacksonville Jaguars",
+          "aliases": [
+            "Jaguars",
+            "JAX"
+          ]
+        },
+        {
+          "name": "Kansas City Chiefs",
+          "aliases": [
+            "Chiefs",
+            "KC"
+          ]
+        },
+        {
+          "name": "Las Vegas Raiders",
+          "aliases": [
+            "Raiders",
+            "LV"
+          ]
+        },
+        {
+          "name": "Los Angeles Chargers",
+          "aliases": [
+            "Chargers",
+            "LAC"
+          ]
+        },
+        {
+          "name": "Los Angeles Rams",
+          "aliases": [
+            "Rams",
+            "LAR"
+          ]
+        },
+        {
+          "name": "Miami Dolphins",
+          "aliases": [
+            "Dolphins",
+            "MIA"
+          ]
+        },
+        {
+          "name": "Minnesota Vikings",
+          "aliases": [
+            "Vikings",
+            "MIN"
+          ]
+        },
+        {
+          "name": "New England Patriots",
+          "aliases": [
+            "Patriots",
+            "NE"
+          ]
+        },
+        {
+          "name": "New Orleans Saints",
+          "aliases": [
+            "Saints",
+            "NO"
+          ]
+        },
+        {
+          "name": "New York Giants",
+          "aliases": [
+            "Giants",
+            "NYG"
+          ]
+        },
+        {
+          "name": "New York Jets",
+          "aliases": [
+            "Jets",
+            "NYJ"
+          ]
+        },
+        {
+          "name": "Philadelphia Eagles",
+          "aliases": [
+            "Eagles",
+            "PHI"
+          ]
+        },
+        {
+          "name": "Pittsburgh Steelers",
+          "aliases": [
+            "Steelers",
+            "PIT"
+          ]
+        },
+        {
+          "name": "San Francisco 49ers",
+          "aliases": [
+            "49ers",
+            "SF"
+          ]
+        },
+        {
+          "name": "Seattle Seahawks",
+          "aliases": [
+            "Seahawks",
+            "SEA"
+          ]
+        },
+        {
+          "name": "Tampa Bay Buccaneers",
+          "aliases": [
+            "Buccaneers",
+            "TB"
+          ]
+        },
+        {
+          "name": "Tennessee Titans",
+          "aliases": [
+            "Titans",
+            "TEN"
+          ]
+        },
+        {
+          "name": "Washington Commanders",
+          "aliases": [
+            "Commanders",
+            "WSH"
+          ]
+        }
+      ]
+    },
+    "ncaaf": {
+      "displayName": "NCAA Football",
+      "espnSlug": "football/college-football",
+      "popularityRank": 11,
+      "teams": [
+        {
+          "name": "Amherst Mammoths",
+          "aliases": [
+            "Mammoths",
+            "Amherst",
+            "AMH"
+          ]
+        },
+        {
+          "name": "Anna Maria Amcats",
+          "aliases": [
+            "Amcats",
+            "Anna Maria",
+            "ANMR"
+          ]
+        },
+        {
+          "name": "Arizona State Sun Devils",
+          "aliases": [
+            "Sun Devils",
+            "Arizona St",
+            "ASU"
+          ]
+        },
+        {
+          "name": "Arizona Wildcats",
+          "aliases": [
+            "Wildcats",
+            "Arizona",
+            "ARIZ"
+          ]
+        },
+        {
+          "name": "Arkansas Razorbacks",
+          "aliases": [
+            "Razorbacks",
+            "Arkansas",
+            "ARK"
+          ]
+        },
+        {
+          "name": "Auburn Tigers",
+          "aliases": [
+            "Tigers",
+            "Auburn",
+            "AUB"
+          ]
+        },
+        {
+          "name": "Boise State Broncos",
+          "aliases": [
+            "Broncos",
+            "Boise St",
+            "BOIS"
+          ]
+        },
+        {
+          "name": "Bridgewater State Bears",
+          "aliases": [
+            "Bears",
+            "Bridgewater St",
+            "BRIS"
+          ]
+        },
+        {
+          "name": "Buena Vista Beavers",
+          "aliases": [
+            "Beavers",
+            "Buena Vista",
+            "BVU"
+          ]
+        },
+        {
+          "name": "Cal Poly Mustangs",
+          "aliases": [
+            "Mustangs",
+            "Cal Poly",
+            "CP"
+          ]
+        },
+        {
+          "name": "California Golden Bears",
+          "aliases": [
+            "Golden Bears",
+            "California",
+            "CAL"
+          ]
+        },
+        {
+          "name": "Carroll (WI) Pioneers",
+          "aliases": [
+            "Pioneers",
+            "Carroll (WI)",
+            "CRU"
+          ]
+        },
+        {
+          "name": "Claremont Mudd Scripps Stags/Athenas",
+          "aliases": [
+            "Stags/Athenas",
+            "Claremont-M-S",
+            "CMS"
+          ]
+        },
+        {
+          "name": "Colby White Mules",
+          "aliases": [
+            "White Mules",
+            "Colby",
+            "CLBY"
+          ]
+        },
+        {
+          "name": "Colorado Buffaloes",
+          "aliases": [
+            "Buffaloes",
+            "Colorado",
+            "COLO"
+          ]
+        },
+        {
+          "name": "Colorado Mesa Mavericks",
+          "aliases": [
+            "Mavericks",
+            "Colorado Mesa",
+            "COMU"
+          ]
+        },
+        {
+          "name": "Colorado State Rams",
+          "aliases": [
+            "Rams",
+            "Colorado St",
+            "CSU"
+          ]
+        },
+        {
+          "name": "Curry Colonels",
+          "aliases": [
+            "Colonels",
+            "Curry",
+            "CC"
+          ]
+        },
+        {
+          "name": "Delaware Blue Hens",
+          "aliases": [
+            "Blue Hens",
+            "Delaware",
+            "DEL"
+          ]
+        },
+        {
+          "name": "Dubuque Spartans",
+          "aliases": [
+            "Spartans",
+            "Dubuque",
+            "DBQ"
+          ]
+        },
+        {
+          "name": "Elmhurst Bluejays",
+          "aliases": [
+            "Bluejays",
+            "Elmhurst",
+            "ELMH"
+          ]
+        },
+        {
+          "name": "Florida A&M Rattlers",
+          "aliases": [
+            "Rattlers",
+            "Florida A&M",
+            "FAMU"
+          ]
+        },
+        {
+          "name": "Florida Gators",
+          "aliases": [
+            "Gators",
+            "Florida",
+            "FLA"
+          ]
+        },
+        {
+          "name": "Florida State Seminoles",
+          "aliases": [
+            "Seminoles",
+            "Florida St",
+            "FSU"
+          ]
+        },
+        {
+          "name": "Georgetown Hoyas",
+          "aliases": [
+            "Hoyas",
+            "Georgetown",
+            "GTWN"
+          ]
+        },
+        {
+          "name": "Georgia Bulldogs",
+          "aliases": [
+            "Bulldogs",
+            "Georgia",
+            "UGA"
+          ]
+        },
+        {
+          "name": "Georgia Tech Yellow Jackets",
+          "aliases": [
+            "Yellow Jackets",
+            "Georgia Tech",
+            "GT"
+          ]
+        },
+        {
+          "name": "Grinnell Pioneers",
+          "aliases": [
+            "Pioneers",
+            "Grinnell",
+            "GRNL"
+          ]
+        },
+        {
+          "name": "Hawai'i Rainbow Warriors",
+          "aliases": [
+            "Rainbow Warriors",
+            "Hawai'i",
+            "HAW"
+          ]
+        },
+        {
+          "name": "Howard Bison",
+          "aliases": [
+            "Bison",
+            "Howard",
+            "HOW"
+          ]
+        },
+        {
+          "name": "Idaho Vandals",
+          "aliases": [
+            "Vandals",
+            "Idaho",
+            "IDHO"
+          ]
+        },
+        {
+          "name": "Iowa State Cyclones",
+          "aliases": [
+            "Cyclones",
+            "Iowa State",
+            "ISU"
+          ]
+        },
+        {
+          "name": "Jacksonville State Gamecocks",
+          "aliases": [
+            "Gamecocks",
+            "Jax State",
+            "JXST"
+          ]
+        },
+        {
+          "name": "Luther Norse",
+          "aliases": [
+            "Norse",
+            "Luther",
+            "LUTH"
+          ]
+        },
+        {
+          "name": "Millikin Big Blue",
+          "aliases": [
+            "Big Blue",
+            "Millikin",
+            "MILK"
+          ]
+        },
+        {
+          "name": "Morehouse Maroon Tigers",
+          "aliases": [
+            "Maroon Tigers",
+            "Morehouse",
+            "MRHO"
+          ]
+        },
+        {
+          "name": "North Park Vikings",
+          "aliases": [
+            "Vikings",
+            "North Park",
+            "NPU"
+          ]
+        },
+        {
+          "name": "Redlands Bulldogs",
+          "aliases": [
+            "Bulldogs",
+            "Redlands",
+            "REDL"
+          ]
+        },
+        {
+          "name": "Sacramento State Hornets",
+          "aliases": [
+            "Hornets",
+            "Sacramento St",
+            "SAC"
+          ]
+        },
+        {
+          "name": "San Diego State Aztecs",
+          "aliases": [
+            "Aztecs",
+            "San Diego St",
+            "SDSU"
+          ]
+        },
+        {
+          "name": "San José State Spartans",
+          "aliases": [
+            "Spartans",
+            "San José St",
+            "SJSU"
+          ]
+        },
+        {
+          "name": "South Alabama Jaguars",
+          "aliases": [
+            "Jaguars",
+            "South Alabama",
+            "USA"
+          ]
+        },
+        {
+          "name": "South Florida Bulls",
+          "aliases": [
+            "Bulls",
+            "South Florida",
+            "USF"
+          ]
+        },
+        {
+          "name": "Stanford Cardinal",
+          "aliases": [
+            "Cardinal",
+            "Stanford",
+            "STAN"
+          ]
+        },
+        {
+          "name": "Stetson Hatters",
+          "aliases": [
+            "Hatters",
+            "Stetson",
+            "STET"
+          ]
+        },
+        {
+          "name": "UAB Blazers",
+          "aliases": [
+            "Blazers",
+            "UAB"
+          ]
+        },
+        {
+          "name": "UCLA Bruins",
+          "aliases": [
+            "Bruins",
+            "UCLA"
+          ]
+        },
+        {
+          "name": "UConn Huskies",
+          "aliases": [
+            "Huskies",
+            "UConn",
+            "CONN"
+          ]
+        },
+        {
+          "name": "USC Trojans",
+          "aliases": [
+            "Trojans",
+            "USC"
+          ]
+        },
+        {
+          "name": "Yale Bulldogs",
+          "aliases": [
+            "Bulldogs",
+            "Yale"
+          ]
+        }
+      ]
+    },
+    "mlb": {
+      "displayName": "MLB",
+      "espnSlug": "baseball/mlb",
+      "popularityRank": 4,
+      "teams": [
+        {
+          "name": "Arizona Diamondbacks",
+          "aliases": [
+            "Diamondbacks",
+            "ARI",
+            "Arizona"
+          ]
+        },
+        {
+          "name": "Athletics",
+          "aliases": [
+            "ATH"
+          ]
+        },
+        {
+          "name": "Atlanta Braves",
+          "aliases": [
+            "Braves",
+            "ATL",
+            "Atlanta"
+          ]
+        },
+        {
+          "name": "Baltimore Orioles",
+          "aliases": [
+            "Orioles",
+            "BAL",
+            "Baltimore"
+          ]
+        },
+        {
+          "name": "Boston Red Sox",
+          "aliases": [
+            "Red Sox",
+            "BOS",
+            "Boston"
+          ]
+        },
+        {
+          "name": "Chicago Cubs",
+          "aliases": [
+            "Cubs",
+            "CHC",
+            "Chicago"
+          ]
+        },
+        {
+          "name": "Chicago White Sox",
+          "aliases": [
+            "White Sox",
+            "CHW",
+            "Chicago"
+          ]
+        },
+        {
+          "name": "Cincinnati Reds",
+          "aliases": [
+            "Reds",
+            "CIN",
+            "Cincinnati"
+          ]
+        },
+        {
+          "name": "Cleveland Guardians",
+          "aliases": [
+            "Guardians",
+            "CLE",
+            "Cleveland"
+          ]
+        },
+        {
+          "name": "Colorado Rockies",
+          "aliases": [
+            "Rockies",
+            "COL",
+            "Colorado"
+          ]
+        },
+        {
+          "name": "Detroit Tigers",
+          "aliases": [
+            "Tigers",
+            "DET",
+            "Detroit"
+          ]
+        },
+        {
+          "name": "Houston Astros",
+          "aliases": [
+            "Astros",
+            "HOU",
+            "Houston"
+          ]
+        },
+        {
+          "name": "Kansas City Royals",
+          "aliases": [
+            "Royals",
+            "KC",
+            "Kansas City"
+          ]
+        },
+        {
+          "name": "Los Angeles Angels",
+          "aliases": [
+            "Angels",
+            "LAA",
+            "Los Angeles"
+          ]
+        },
+        {
+          "name": "Los Angeles Dodgers",
+          "aliases": [
+            "Dodgers",
+            "LAD",
+            "Los Angeles"
+          ]
+        },
+        {
+          "name": "Miami Marlins",
+          "aliases": [
+            "Marlins",
+            "MIA",
+            "Miami"
+          ]
+        },
+        {
+          "name": "Milwaukee Brewers",
+          "aliases": [
+            "Brewers",
+            "MIL",
+            "Milwaukee"
+          ]
+        },
+        {
+          "name": "Minnesota Twins",
+          "aliases": [
+            "Twins",
+            "MIN",
+            "Minnesota"
+          ]
+        },
+        {
+          "name": "New York Mets",
+          "aliases": [
+            "Mets",
+            "NYM",
+            "New York"
+          ]
+        },
+        {
+          "name": "New York Yankees",
+          "aliases": [
+            "Yankees",
+            "NYY",
+            "New York"
+          ]
+        },
+        {
+          "name": "Philadelphia Phillies",
+          "aliases": [
+            "Phillies",
+            "PHI",
+            "Philadelphia"
+          ]
+        },
+        {
+          "name": "Pittsburgh Pirates",
+          "aliases": [
+            "Pirates",
+            "PIT",
+            "Pittsburgh"
+          ]
+        },
+        {
+          "name": "San Diego Padres",
+          "aliases": [
+            "Padres",
+            "SD",
+            "San Diego"
+          ]
+        },
+        {
+          "name": "San Francisco Giants",
+          "aliases": [
+            "Giants",
+            "SF",
+            "San Francisco"
+          ]
+        },
+        {
+          "name": "Seattle Mariners",
+          "aliases": [
+            "Mariners",
+            "SEA",
+            "Seattle"
+          ]
+        },
+        {
+          "name": "St. Louis Cardinals",
+          "aliases": [
+            "Cardinals",
+            "STL",
+            "St. Louis"
+          ]
+        },
+        {
+          "name": "Tampa Bay Rays",
+          "aliases": [
+            "Rays",
+            "TB",
+            "Tampa Bay"
+          ]
+        },
+        {
+          "name": "Texas Rangers",
+          "aliases": [
+            "Rangers",
+            "TEX",
+            "Texas"
+          ]
+        },
+        {
+          "name": "Toronto Blue Jays",
+          "aliases": [
+            "Blue Jays",
+            "TOR",
+            "Toronto"
+          ]
+        },
+        {
+          "name": "Washington Nationals",
+          "aliases": [
+            "Nationals",
+            "WSH",
+            "Washington"
+          ]
+        }
+      ]
+    },
+    "nhl": {
+      "displayName": "NHL",
+      "espnSlug": "hockey/nhl",
+      "popularityRank": 5,
+      "teams": [
+        {
+          "name": "Anaheim Ducks",
+          "aliases": [
+            "Ducks",
+            "ANA",
+            "Anaheim"
+          ]
+        },
+        {
+          "name": "Boston Bruins",
+          "aliases": [
+            "Bruins",
+            "BOS",
+            "Boston"
+          ]
+        },
+        {
+          "name": "Buffalo Sabres",
+          "aliases": [
+            "Sabres",
+            "BUF",
+            "Buffalo"
+          ]
+        },
+        {
+          "name": "Calgary Flames",
+          "aliases": [
+            "Flames",
+            "CGY",
+            "Calgary"
+          ]
+        },
+        {
+          "name": "Carolina Hurricanes",
+          "aliases": [
+            "Hurricanes",
+            "CAR",
+            "Carolina"
+          ]
+        },
+        {
+          "name": "Chicago Blackhawks",
+          "aliases": [
+            "Blackhawks",
+            "CHI",
+            "Chicago"
+          ]
+        },
+        {
+          "name": "Colorado Avalanche",
+          "aliases": [
+            "Avalanche",
+            "COL",
+            "Colorado"
+          ]
+        },
+        {
+          "name": "Columbus Blue Jackets",
+          "aliases": [
+            "Blue Jackets",
+            "CBJ",
+            "Columbus"
+          ]
+        },
+        {
+          "name": "Dallas Stars",
+          "aliases": [
+            "Stars",
+            "DAL",
+            "Dallas"
+          ]
+        },
+        {
+          "name": "Detroit Red Wings",
+          "aliases": [
+            "Red Wings",
+            "DET",
+            "Detroit"
+          ]
+        },
+        {
+          "name": "Edmonton Oilers",
+          "aliases": [
+            "Oilers",
+            "EDM",
+            "Edmonton"
+          ]
+        },
+        {
+          "name": "Florida Panthers",
+          "aliases": [
+            "Panthers",
+            "FLA",
+            "Florida"
+          ]
+        },
+        {
+          "name": "Los Angeles Kings",
+          "aliases": [
+            "Kings",
+            "LA",
+            "Los Angeles"
+          ]
+        },
+        {
+          "name": "Minnesota Wild",
+          "aliases": [
+            "Wild",
+            "MIN",
+            "Minnesota"
+          ]
+        },
+        {
+          "name": "Montreal Canadiens",
+          "aliases": [
+            "Canadiens",
+            "MTL",
+            "Montreal"
+          ]
+        },
+        {
+          "name": "Nashville Predators",
+          "aliases": [
+            "Predators",
+            "NSH",
+            "Nashville"
+          ]
+        },
+        {
+          "name": "New Jersey Devils",
+          "aliases": [
+            "Devils",
+            "NJ",
+            "New Jersey"
+          ]
+        },
+        {
+          "name": "New York Islanders",
+          "aliases": [
+            "Islanders",
+            "NYI",
+            "New York"
+          ]
+        },
+        {
+          "name": "New York Rangers",
+          "aliases": [
+            "Rangers",
+            "NYR",
+            "New York"
+          ]
+        },
+        {
+          "name": "Ottawa Senators",
+          "aliases": [
+            "Senators",
+            "OTT",
+            "Ottawa"
+          ]
+        },
+        {
+          "name": "Philadelphia Flyers",
+          "aliases": [
+            "Flyers",
+            "PHI",
+            "Philadelphia"
+          ]
+        },
+        {
+          "name": "Pittsburgh Penguins",
+          "aliases": [
+            "Penguins",
+            "PIT",
+            "Pittsburgh"
+          ]
+        },
+        {
+          "name": "San Jose Sharks",
+          "aliases": [
+            "Sharks",
+            "SJ",
+            "San Jose"
+          ]
+        },
+        {
+          "name": "Seattle Kraken",
+          "aliases": [
+            "Kraken",
+            "SEA",
+            "Seattle"
+          ]
+        },
+        {
+          "name": "St. Louis Blues",
+          "aliases": [
+            "Blues",
+            "STL",
+            "St. Louis"
+          ]
+        },
+        {
+          "name": "Tampa Bay Lightning",
+          "aliases": [
+            "Lightning",
+            "TB",
+            "Tampa Bay"
+          ]
+        },
+        {
+          "name": "Toronto Maple Leafs",
+          "aliases": [
+            "Maple Leafs",
+            "TOR",
+            "Toronto"
+          ]
+        },
+        {
+          "name": "Utah Mammoth",
+          "aliases": [
+            "Mammoth",
+            "UTAH"
+          ]
+        },
+        {
+          "name": "Vancouver Canucks",
+          "aliases": [
+            "Canucks",
+            "VAN",
+            "Vancouver"
+          ]
+        },
+        {
+          "name": "Vegas Golden Knights",
+          "aliases": [
+            "Golden Knights",
+            "VGK",
+            "Vegas"
+          ]
+        },
+        {
+          "name": "Washington Capitals",
+          "aliases": [
+            "Capitals",
+            "WSH",
+            "Washington"
+          ]
+        },
+        {
+          "name": "Winnipeg Jets",
+          "aliases": [
+            "Jets",
+            "WPG",
+            "Winnipeg"
+          ]
+        }
+      ]
+    },
+    "mls": {
+      "displayName": "MLS",
+      "espnSlug": "soccer/usa.1",
+      "popularityRank": 20,
+      "teams": [
+        {
+          "name": "Atlanta United FC",
+          "aliases": [
+            "Atlanta",
+            "ATL"
+          ]
+        },
+        {
+          "name": "Austin FC",
+          "aliases": [
+            "Austin",
+            "ATX"
+          ]
+        },
+        {
+          "name": "CF Montréal",
+          "aliases": [
+            "MTL",
+            "Impact"
+          ]
+        },
+        {
+          "name": "Charlotte FC",
+          "aliases": [
+            "Charlotte",
+            "CLT"
+          ]
+        },
+        {
+          "name": "Chicago Fire FC",
+          "aliases": [
+            "Chicago",
+            "CHI",
+            "Fire"
+          ]
+        },
+        {
+          "name": "Colorado Rapids",
+          "aliases": [
+            "Colorado",
+            "COL",
+            "Rapids"
+          ]
+        },
+        {
+          "name": "Columbus Crew",
+          "aliases": [
+            "Columbus",
+            "CLB",
+            "Crew"
+          ]
+        },
+        {
+          "name": "D.C. United",
+          "aliases": [
+            "DC",
+            "United"
+          ]
+        },
+        {
+          "name": "FC Cincinnati",
+          "aliases": [
+            "Cincinnati",
+            "CIN"
+          ]
+        },
+        {
+          "name": "FC Dallas",
+          "aliases": [
+            "Dallas",
+            "DAL"
+          ]
+        },
+        {
+          "name": "Houston Dynamo FC",
+          "aliases": [
+            "Houston",
+            "HOU",
+            "Dynamo"
+          ]
+        },
+        {
+          "name": "Inter Miami CF",
+          "aliases": [
+            "Miami",
+            "MIA"
+          ]
+        },
+        {
+          "name": "LA Galaxy",
+          "aliases": [
+            "LA",
+            "Galaxy"
+          ]
+        },
+        {
+          "name": "LAFC"
+        },
+        {
+          "name": "Minnesota United FC",
+          "aliases": [
+            "Minnesota",
+            "MIN"
+          ]
+        },
+        {
+          "name": "Nashville SC",
+          "aliases": [
+            "Nashville",
+            "NSH"
+          ]
+        },
+        {
+          "name": "New England Revolution",
+          "aliases": [
+            "New England",
+            "NE",
+            "Revolution"
+          ]
+        },
+        {
+          "name": "New York City FC",
+          "aliases": [
+            "NYCFC",
+            "NYC",
+            "NYC FC"
+          ]
+        },
+        {
+          "name": "Orlando City SC",
+          "aliases": [
+            "Orlando",
+            "ORL"
+          ]
+        },
+        {
+          "name": "Philadelphia Union",
+          "aliases": [
+            "Philadelphia",
+            "PHI",
+            "Union"
+          ]
+        },
+        {
+          "name": "Portland Timbers",
+          "aliases": [
+            "Portland",
+            "POR",
+            "Timbers"
+          ]
+        },
+        {
+          "name": "Real Salt Lake",
+          "aliases": [
+            "Salt Lake",
+            "RSL"
+          ]
+        },
+        {
+          "name": "Red Bull New York",
+          "aliases": [
+            "Red Bull NY",
+            "RBNY",
+            "Red Bulls"
+          ]
+        },
+        {
+          "name": "San Diego FC",
+          "aliases": [
+            "San Diego",
+            "SD"
+          ]
+        },
+        {
+          "name": "San Jose Earthquakes",
+          "aliases": [
+            "San Jose",
+            "SJ",
+            "Earthquakes"
+          ]
+        },
+        {
+          "name": "Seattle Sounders FC",
+          "aliases": [
+            "Seattle",
+            "SEA",
+            "Sounders"
+          ]
+        },
+        {
+          "name": "Sporting Kansas City",
+          "aliases": [
+            "Kansas City",
+            "SKC",
+            "Sporting"
+          ]
+        },
+        {
+          "name": "St. Louis CITY SC",
+          "aliases": [
+            "St. Louis",
+            "STL"
+          ]
+        },
+        {
+          "name": "Toronto FC",
+          "aliases": [
+            "Toronto",
+            "TOR"
+          ]
+        },
+        {
+          "name": "Vancouver Whitecaps",
+          "aliases": [
+            "Vancouver",
+            "VAN",
+            "Whitecaps"
+          ]
+        }
+      ]
+    },
+    "premierLeague": {
+      "displayName": "Premier League",
+      "espnSlug": "soccer/eng.1",
+      "popularityRank": 8,
+      "teams": [
+        {
+          "name": "AFC Bournemouth",
+          "aliases": [
+            "Bournemouth",
+            "BOU"
+          ]
+        },
+        {
+          "name": "Arsenal",
+          "aliases": [
+            "ARS",
+            "Gunners"
+          ]
+        },
+        {
+          "name": "Aston Villa",
+          "aliases": [
+            "AVL"
+          ]
+        },
+        {
+          "name": "Brentford",
+          "aliases": [
+            "BRE"
+          ]
+        },
+        {
+          "name": "Brighton & Hove Albion",
+          "aliases": [
+            "Brighton",
+            "BHA",
+            "Seagulls"
+          ]
+        },
+        {
+          "name": "Burnley",
+          "aliases": [
+            "BUR"
+          ]
+        },
+        {
+          "name": "Chelsea",
+          "aliases": [
+            "CHE",
+            "Blues"
+          ]
+        },
+        {
+          "name": "Crystal Palace",
+          "aliases": [
+            "C Palace",
+            "CRY",
+            "Eagles"
+          ]
+        },
+        {
+          "name": "Everton",
+          "aliases": [
+            "EVE",
+            "Toffees"
+          ]
+        },
+        {
+          "name": "Fulham",
+          "aliases": [
+            "FUL"
+          ]
+        },
+        {
+          "name": "Leeds United",
+          "aliases": [
+            "Leeds",
+            "LEE"
+          ]
+        },
+        {
+          "name": "Liverpool",
+          "aliases": [
+            "LIV",
+            "Reds"
+          ]
+        },
+        {
+          "name": "Manchester City",
+          "aliases": [
+            "Man City",
+            "MNC",
+            "Sky Blues"
+          ]
+        },
+        {
+          "name": "Manchester United",
+          "aliases": [
+            "Man United",
+            "MAN",
+            "Red Devils"
+          ]
+        },
+        {
+          "name": "Newcastle United",
+          "aliases": [
+            "Newcastle",
+            "NEW",
+            "Magpies/Toon"
+          ]
+        },
+        {
+          "name": "Nottingham Forest",
+          "aliases": [
+            "Nottm Forest",
+            "NFO",
+            "Nottingham F."
+          ]
+        },
+        {
+          "name": "Sunderland",
+          "aliases": [
+            "SUN",
+            "Black Cats/Wearsiders"
+          ]
+        },
+        {
+          "name": "Tottenham Hotspur",
+          "aliases": [
+            "Spurs",
+            "TOT"
+          ]
+        },
+        {
+          "name": "West Ham United",
+          "aliases": [
+            "West Ham",
+            "WHU",
+            "Hammers/Iron"
+          ]
+        },
+        {
+          "name": "Wolverhampton Wanderers",
+          "aliases": [
+            "Wolves",
+            "WOL"
+          ]
+        }
+      ]
+    },
+    "laLiga": {
+      "displayName": "La Liga",
+      "espnSlug": "soccer/esp.1",
+      "popularityRank": 9,
+      "teams": [
+        {
+          "name": "Alavés",
+          "aliases": [
+            "ALA"
+          ]
+        },
+        {
+          "name": "Athletic Club",
+          "aliases": [
+            "Athletic",
+            "ATH"
+          ]
+        },
+        {
+          "name": "Atlético Madrid",
+          "aliases": [
+            "Atlético",
+            "ATM"
+          ]
+        },
+        {
+          "name": "Barcelona",
+          "aliases": [
+            "BAR",
+            "Barça"
+          ]
+        },
+        {
+          "name": "Celta Vigo",
+          "aliases": [
+            "CEL"
+          ]
+        },
+        {
+          "name": "Elche",
+          "aliases": [
+            "ELC"
+          ]
+        },
+        {
+          "name": "Espanyol",
+          "aliases": [
+            "ESP"
+          ]
+        },
+        {
+          "name": "Getafe",
+          "aliases": [
+            "GET"
+          ]
+        },
+        {
+          "name": "Girona",
+          "aliases": [
+            "GIR"
+          ]
+        },
+        {
+          "name": "Levante",
+          "aliases": [
+            "LEV"
+          ]
+        },
+        {
+          "name": "Mallorca",
+          "aliases": [
+            "MLL"
+          ]
+        },
+        {
+          "name": "Osasuna",
+          "aliases": [
+            "OSA"
+          ]
+        },
+        {
+          "name": "Rayo Vallecano",
+          "aliases": [
+            "Rayo",
+            "RAY"
+          ]
+        },
+        {
+          "name": "Real Betis",
+          "aliases": [
+            "Betis",
+            "BET"
+          ]
+        },
+        {
+          "name": "Real Madrid",
+          "aliases": [
+            "RMA"
+          ]
+        },
+        {
+          "name": "Real Oviedo",
+          "aliases": [
+            "OVI"
+          ]
+        },
+        {
+          "name": "Real Sociedad",
+          "aliases": [
+            "RSO"
+          ]
+        },
+        {
+          "name": "Sevilla",
+          "aliases": [
+            "SEV"
+          ]
+        },
+        {
+          "name": "Valencia",
+          "aliases": [
+            "VAL"
+          ]
+        },
+        {
+          "name": "Villarreal",
+          "aliases": [
+            "VIL"
+          ]
+        }
+      ]
+    },
+    "serieA": {
+      "displayName": "Serie A",
+      "espnSlug": "soccer/ita.1",
+      "popularityRank": 14,
+      "teams": [
+        {
+          "name": "AC Milan",
+          "aliases": [
+            "Milan",
+            "MIL"
+          ]
+        },
+        {
+          "name": "AS Roma",
+          "aliases": [
+            "ROMA"
+          ]
+        },
+        {
+          "name": "Atalanta",
+          "aliases": [
+            "ATA"
+          ]
+        },
+        {
+          "name": "Bologna",
+          "aliases": [
+            "BOL"
+          ]
+        },
+        {
+          "name": "Cagliari",
+          "aliases": [
+            "CAG"
+          ]
+        },
+        {
+          "name": "Como",
+          "aliases": [
+            "COMO"
+          ]
+        },
+        {
+          "name": "Cremonese",
+          "aliases": [
+            "CRE"
+          ]
+        },
+        {
+          "name": "Fiorentina",
+          "aliases": [
+            "FIO"
+          ]
+        },
+        {
+          "name": "Genoa",
+          "aliases": [
+            "GEN"
+          ]
+        },
+        {
+          "name": "Hellas Verona",
+          "aliases": [
+            "Verona",
+            "VER"
+          ]
+        },
+        {
+          "name": "Internazionale",
+          "aliases": [
+            "Inter Milan",
+            "INT"
+          ]
+        },
+        {
+          "name": "Juventus",
+          "aliases": [
+            "JUV"
+          ]
+        },
+        {
+          "name": "Lazio",
+          "aliases": [
+            "LAZ"
+          ]
+        },
+        {
+          "name": "Lecce",
+          "aliases": [
+            "LEC"
+          ]
+        },
+        {
+          "name": "Napoli",
+          "aliases": [
+            "NAP"
+          ]
+        },
+        {
+          "name": "Parma",
+          "aliases": [
+            "PAR"
+          ]
+        },
+        {
+          "name": "Pisa",
+          "aliases": [
+            "PIS"
+          ]
+        },
+        {
+          "name": "Sassuolo",
+          "aliases": [
+            "SAS"
+          ]
+        },
+        {
+          "name": "Torino",
+          "aliases": [
+            "TOR"
+          ]
+        },
+        {
+          "name": "Udinese",
+          "aliases": [
+            "UDI"
+          ]
+        }
+      ]
+    },
+    "bundesliga": {
+      "displayName": "Bundesliga",
+      "espnSlug": "soccer/ger.1",
+      "popularityRank": 15,
+      "teams": [
+        {
+          "name": "1. FC Heidenheim 1846",
+          "aliases": [
+            "Heidenheim",
+            "HDH"
+          ]
+        },
+        {
+          "name": "1. FC Union Berlin",
+          "aliases": [
+            "Union Berlin",
+            "FCU"
+          ]
+        },
+        {
+          "name": "Bayer Leverkusen",
+          "aliases": [
+            "Leverkusen",
+            "B04"
+          ]
+        },
+        {
+          "name": "Bayern Munich",
+          "aliases": [
+            "Bayern",
+            "MUN"
+          ]
+        },
+        {
+          "name": "Borussia Dortmund",
+          "aliases": [
+            "Dortmund",
+            "DOR"
+          ]
+        },
+        {
+          "name": "Borussia Mönchengladbach",
+          "aliases": [
+            "Gladbach",
+            "BMG"
+          ]
+        },
+        {
+          "name": "Eintracht Frankfurt",
+          "aliases": [
+            "Frankfurt",
+            "SGE"
+          ]
+        },
+        {
+          "name": "FC Augsburg",
+          "aliases": [
+            "Augsburg",
+            "FCA"
+          ]
+        },
+        {
+          "name": "FC Cologne",
+          "aliases": [
+            "Cologne",
+            "KOE"
+          ]
+        },
+        {
+          "name": "Hamburg SV",
+          "aliases": [
+            "Hamburg",
+            "HSV"
+          ]
+        },
+        {
+          "name": "Mainz",
+          "aliases": [
+            "M05"
+          ]
+        },
+        {
+          "name": "RB Leipzig",
+          "aliases": [
+            "RBL"
+          ]
+        },
+        {
+          "name": "SC Freiburg",
+          "aliases": [
+            "Freiburg",
+            "SCF"
+          ]
+        },
+        {
+          "name": "St. Pauli",
+          "aliases": [
+            "STP"
+          ]
+        },
+        {
+          "name": "TSG Hoffenheim",
+          "aliases": [
+            "Hoffenheim",
+            "TSG"
+          ]
+        },
+        {
+          "name": "VfB Stuttgart",
+          "aliases": [
+            "Stuttgart",
+            "VFB"
+          ]
+        },
+        {
+          "name": "VfL Wolfsburg",
+          "aliases": [
+            "Wolfsburg",
+            "WOB"
+          ]
+        },
+        {
+          "name": "Werder Bremen",
+          "aliases": [
+            "Bremen",
+            "SVW"
+          ]
+        }
+      ]
+    },
+    "ligue1": {
+      "displayName": "Ligue 1",
+      "espnSlug": "soccer/fra.1",
+      "popularityRank": 16,
+      "teams": [
+        {
+          "name": "AJ Auxerre",
+          "aliases": [
+            "Auxerre",
+            "AUX"
+          ]
+        },
+        {
+          "name": "AS Monaco",
+          "aliases": [
+            "Monaco",
+            "MON"
+          ]
+        },
+        {
+          "name": "Angers",
+          "aliases": [
+            "ANG"
+          ]
+        },
+        {
+          "name": "Brest",
+          "aliases": [
+            "BRE"
+          ]
+        },
+        {
+          "name": "Le Havre AC",
+          "aliases": [
+            "HAC"
+          ]
+        },
+        {
+          "name": "Lens",
+          "aliases": [
+            "RCL"
+          ]
+        },
+        {
+          "name": "Lille",
+          "aliases": [
+            "LILL"
+          ]
+        },
+        {
+          "name": "Lorient",
+          "aliases": [
+            "LOR"
+          ]
+        },
+        {
+          "name": "Lyon",
+          "aliases": [
+            "LYON"
+          ]
+        },
+        {
+          "name": "Marseille",
+          "aliases": [
+            "OLM"
+          ]
+        },
+        {
+          "name": "Metz",
+          "aliases": [
+            "METZ"
+          ]
+        },
+        {
+          "name": "Nantes",
+          "aliases": [
+            "NAN"
+          ]
+        },
+        {
+          "name": "Nice",
+          "aliases": [
+            "NICE"
+          ]
+        },
+        {
+          "name": "Paris FC",
+          "aliases": [
+            "PAR"
+          ]
+        },
+        {
+          "name": "Paris Saint-Germain",
+          "aliases": [
+            "PSG"
+          ]
+        },
+        {
+          "name": "Stade Rennais",
+          "aliases": [
+            "Rennes",
+            "REN"
+          ]
+        },
+        {
+          "name": "Strasbourg",
+          "aliases": [
+            "STR"
+          ]
+        },
+        {
+          "name": "Toulouse",
+          "aliases": [
+            "TOU"
+          ]
+        }
+      ]
+    },
+    "eredivisie": {
+      "displayName": "Eredivisie",
+      "espnSlug": "soccer/ned.1",
+      "popularityRank": 24,
+      "teams": [
+        {
+          "name": "AZ Alkmaar",
+          "aliases": [
+            "AZ"
+          ]
+        },
+        {
+          "name": "Ajax Amsterdam",
+          "aliases": [
+            "Ajax",
+            "AJA"
+          ]
+        },
+        {
+          "name": "Excelsior",
+          "aliases": [
+            "EXC"
+          ]
+        },
+        {
+          "name": "FC Groningen",
+          "aliases": [
+            "GRO"
+          ]
+        },
+        {
+          "name": "FC Twente",
+          "aliases": [
+            "TWE"
+          ]
+        },
+        {
+          "name": "FC Utrecht",
+          "aliases": [
+            "UTR"
+          ]
+        },
+        {
+          "name": "FC Volendam",
+          "aliases": [
+            "VOL"
+          ]
+        },
+        {
+          "name": "Feyenoord Rotterdam",
+          "aliases": [
+            "Feyenoord",
+            "FEY"
+          ]
+        },
+        {
+          "name": "Fortuna Sittard",
+          "aliases": [
+            "Fortuna",
+            "FOR"
+          ]
+        },
+        {
+          "name": "Go Ahead Eagles",
+          "aliases": [
+            "GAE"
+          ]
+        },
+        {
+          "name": "Heerenveen",
+          "aliases": [
+            "HEE"
+          ]
+        },
+        {
+          "name": "Heracles Almelo",
+          "aliases": [
+            "Heracles",
+            "HER"
+          ]
+        },
+        {
+          "name": "NAC Breda",
+          "aliases": [
+            "NAC"
+          ]
+        },
+        {
+          "name": "NEC Nijmegen",
+          "aliases": [
+            "NEC"
+          ]
+        },
+        {
+          "name": "PEC Zwolle",
+          "aliases": [
+            "PEC"
+          ]
+        },
+        {
+          "name": "PSV Eindhoven",
+          "aliases": [
+            "PSV"
+          ]
+        },
+        {
+          "name": "Sparta Rotterdam",
+          "aliases": [
+            "Sparta",
+            "SPA"
+          ]
+        },
+        {
+          "name": "Telstar",
+          "aliases": [
+            "TEL"
+          ]
+        }
+      ]
+    },
+    "ligaMx": {
+      "displayName": "Liga MX",
+      "espnSlug": "soccer/mex.1",
+      "popularityRank": 23,
+      "teams": [
+        {
+          "name": "América",
+          "aliases": [
+            "AME"
+          ]
+        },
+        {
+          "name": "Atlas",
+          "aliases": [
+            "ATS"
+          ]
+        },
+        {
+          "name": "Atlético de San Luis",
+          "aliases": [
+            "Atl. San Luis",
+            "ASL"
+          ]
+        },
+        {
+          "name": "Cruz Azul",
+          "aliases": [
+            "CAZ"
+          ]
+        },
+        {
+          "name": "FC Juarez",
+          "aliases": [
+            "Juarez",
+            "JUA"
+          ]
+        },
+        {
+          "name": "Guadalajara",
+          "aliases": [
+            "GDL",
+            "Chivas"
+          ]
+        },
+        {
+          "name": "León",
+          "aliases": [
+            "LEO",
+            "Panzas Verdes"
+          ]
+        },
+        {
+          "name": "Mazatlán FC",
+          "aliases": [
+            "Mazatlán",
+            "MAZ"
+          ]
+        },
+        {
+          "name": "Monterrey",
+          "aliases": [
+            "MTY",
+            "Rayados"
+          ]
+        },
+        {
+          "name": "Necaxa",
+          "aliases": [
+            "NCX",
+            "Rayos"
+          ]
+        },
+        {
+          "name": "Pachuca",
+          "aliases": [
+            "PAC"
+          ]
+        },
+        {
+          "name": "Puebla",
+          "aliases": [
+            "PUE",
+            "La Franja"
+          ]
+        },
+        {
+          "name": "Pumas UNAM",
+          "aliases": [
+            "UNAM",
+            "Pumas"
+          ]
+        },
+        {
+          "name": "Querétaro",
+          "aliases": [
+            "Queretaro",
+            "QRO"
+          ]
+        },
+        {
+          "name": "Santos",
+          "aliases": [
+            "SAN",
+            "Santos Laguna"
+          ]
+        },
+        {
+          "name": "Tigres UANL",
+          "aliases": [
+            "Tigres",
+            "UANL"
+          ]
+        },
+        {
+          "name": "Tijuana",
+          "aliases": [
+            "TIJ"
+          ]
+        },
+        {
+          "name": "Toluca",
+          "aliases": [
+            "TOL",
+            "Rojos"
+          ]
+        }
+      ]
+    },
+    "championsLeague": {
+      "displayName": "Champions League",
+      "espnSlug": "soccer/uefa.champions",
+      "popularityRank": 10,
+      "teams": [
+        {
+          "name": "AS Monaco",
+          "aliases": [
+            "Monaco",
+            "MON"
+          ]
+        },
+        {
+          "name": "Ajax Amsterdam",
+          "aliases": [
+            "Ajax",
+            "AJA"
+          ]
+        },
+        {
+          "name": "Arsenal",
+          "aliases": [
+            "ARS",
+            "Gunners"
+          ]
+        },
+        {
+          "name": "Atalanta",
+          "aliases": [
+            "ATA"
+          ]
+        },
+        {
+          "name": "Athletic Club",
+          "aliases": [
+            "Athletic",
+            "ATH"
+          ]
+        },
+        {
+          "name": "Atlético Madrid",
+          "aliases": [
+            "Atlético",
+            "ATM"
+          ]
+        },
+        {
+          "name": "Barcelona",
+          "aliases": [
+            "BAR",
+            "Barça"
+          ]
+        },
+        {
+          "name": "Bayer Leverkusen",
+          "aliases": [
+            "Leverkusen",
+            "B04"
+          ]
+        },
+        {
+          "name": "Bayern Munich",
+          "aliases": [
+            "Bayern",
+            "MUN"
+          ]
+        },
+        {
+          "name": "Benfica",
+          "aliases": [
+            "SLB"
+          ]
+        },
+        {
+          "name": "Bodo/Glimt",
+          "aliases": [
+            "BODO"
+          ]
+        },
+        {
+          "name": "Borussia Dortmund",
+          "aliases": [
+            "Dortmund",
+            "DOR"
+          ]
+        },
+        {
+          "name": "Chelsea",
+          "aliases": [
+            "CHE",
+            "Blues"
+          ]
+        },
+        {
+          "name": "Club Brugge",
+          "aliases": [
+            "BRU"
+          ]
+        },
+        {
+          "name": "Eintracht Frankfurt",
+          "aliases": [
+            "Frankfurt",
+            "SGE"
+          ]
+        },
+        {
+          "name": "F.C. København",
+          "aliases": [
+            "København",
+            "KBH"
+          ]
+        },
+        {
+          "name": "FK Qarabag",
+          "aliases": [
+            "QAR"
+          ]
+        },
+        {
+          "name": "Galatasaray",
+          "aliases": [
+            "GAL"
+          ]
+        },
+        {
+          "name": "Internazionale",
+          "aliases": [
+            "Inter Milan",
+            "INT"
+          ]
+        },
+        {
+          "name": "Juventus",
+          "aliases": [
+            "JUV"
+          ]
+        },
+        {
+          "name": "Kairat Almaty",
+          "aliases": [
+            "KAI"
+          ]
+        },
+        {
+          "name": "Liverpool",
+          "aliases": [
+            "LIV",
+            "Reds"
+          ]
+        },
+        {
+          "name": "Manchester City",
+          "aliases": [
+            "Man City",
+            "MNC",
+            "Sky Blues"
+          ]
+        },
+        {
+          "name": "Marseille",
+          "aliases": [
+            "OLM"
+          ]
+        },
+        {
+          "name": "Napoli",
+          "aliases": [
+            "NAP"
+          ]
+        },
+        {
+          "name": "Newcastle United",
+          "aliases": [
+            "Newcastle",
+            "NEW",
+            "Magpies/Toon"
+          ]
+        },
+        {
+          "name": "Olympiacos",
+          "aliases": [
+            "OLY"
+          ]
+        },
+        {
+          "name": "PSV Eindhoven",
+          "aliases": [
+            "PSV"
+          ]
+        },
+        {
+          "name": "Pafos",
+          "aliases": [
+            "PAF"
+          ]
+        },
+        {
+          "name": "Paris Saint-Germain",
+          "aliases": [
+            "PSG"
+          ]
+        },
+        {
+          "name": "Real Madrid",
+          "aliases": [
+            "RMA"
+          ]
+        },
+        {
+          "name": "Slavia Prague",
+          "aliases": [
+            "SLP"
+          ]
+        },
+        {
+          "name": "Sporting CP",
+          "aliases": [
+            "Sporting",
+            "SCP"
+          ]
+        },
+        {
+          "name": "Tottenham Hotspur",
+          "aliases": [
+            "Spurs",
+            "TOT"
+          ]
+        },
+        {
+          "name": "Union St.-Gilloise",
+          "aliases": [
+            "Union SG",
+            "USG"
+          ]
+        },
+        {
+          "name": "Villarreal",
+          "aliases": [
+            "VIL"
+          ]
+        }
+      ]
+    },
+    "europaLeague": {
+      "displayName": "Europa League",
+      "espnSlug": "soccer/uefa.europa",
+      "popularityRank": 22,
+      "teams": [
+        {
+          "name": "AS Roma",
+          "aliases": [
+            "ROMA"
+          ]
+        },
+        {
+          "name": "Aston Villa",
+          "aliases": [
+            "AVL"
+          ]
+        },
+        {
+          "name": "Bologna",
+          "aliases": [
+            "BOL"
+          ]
+        },
+        {
+          "name": "Braga",
+          "aliases": [
+            "SCB"
+          ]
+        },
+        {
+          "name": "Celta Vigo",
+          "aliases": [
+            "CEL"
+          ]
+        },
+        {
+          "name": "Celtic",
+          "aliases": [
+            "CEL"
+          ]
+        },
+        {
+          "name": "Dinamo Zagreb",
+          "aliases": [
+            "DZG"
+          ]
+        },
+        {
+          "name": "FC Basel",
+          "aliases": [
+            "FCB"
+          ]
+        },
+        {
+          "name": "FC Midtjylland",
+          "aliases": [
+            "Midtjylland",
+            "MID"
+          ]
+        },
+        {
+          "name": "FC Porto",
+          "aliases": [
+            "FCP"
+          ]
+        },
+        {
+          "name": "FC Utrecht",
+          "aliases": [
+            "UTR"
+          ]
+        },
+        {
+          "name": "FCSB"
+        },
+        {
+          "name": "Fenerbahce",
+          "aliases": [
+            "FEN"
+          ]
+        },
+        {
+          "name": "Ferencvaros",
+          "aliases": [
+            "FER"
+          ]
+        },
+        {
+          "name": "Feyenoord Rotterdam",
+          "aliases": [
+            "Feyenoord",
+            "FEY"
+          ]
+        },
+        {
+          "name": "Go Ahead Eagles",
+          "aliases": [
+            "GAE"
+          ]
+        },
+        {
+          "name": "Lille",
+          "aliases": [
+            "LILL"
+          ]
+        },
+        {
+          "name": "Ludogorets Razgrad",
+          "aliases": [
+            "Ludogorets",
+            "LUD"
+          ]
+        },
+        {
+          "name": "Lyon",
+          "aliases": [
+            "LYON"
+          ]
+        },
+        {
+          "name": "Maccabi Tel-Aviv",
+          "aliases": [
+            "MTA"
+          ]
+        },
+        {
+          "name": "Malmö FF",
+          "aliases": [
+            "Malmö",
+            "MAL"
+          ]
+        },
+        {
+          "name": "Nice",
+          "aliases": [
+            "NICE"
+          ]
+        },
+        {
+          "name": "Nottingham Forest",
+          "aliases": [
+            "Nottm Forest",
+            "NFO",
+            "Nottingham F."
+          ]
+        },
+        {
+          "name": "PAOK Salonika",
+          "aliases": [
+            "PAOK"
+          ]
+        },
+        {
+          "name": "Panathinaikos",
+          "aliases": [
+            "PAO"
+          ]
+        },
+        {
+          "name": "RB Salzburg",
+          "aliases": [
+            "SLZ"
+          ]
+        },
+        {
+          "name": "Racing Genk",
+          "aliases": [
+            "Genk"
+          ]
+        },
+        {
+          "name": "Rangers",
+          "aliases": [
+            "RAN"
+          ]
+        },
+        {
+          "name": "Real Betis",
+          "aliases": [
+            "Betis",
+            "BET"
+          ]
+        },
+        {
+          "name": "Red Star Belgrade",
+          "aliases": [
+            "Red Star",
+            "RSB"
+          ]
+        },
+        {
+          "name": "SC Freiburg",
+          "aliases": [
+            "Freiburg",
+            "SCF"
+          ]
+        },
+        {
+          "name": "SK Brann",
+          "aliases": [
+            "SKBR"
+          ]
+        },
+        {
+          "name": "SK Sturm Graz",
+          "aliases": [
+            "Sturm Graz",
+            "STG"
+          ]
+        },
+        {
+          "name": "VfB Stuttgart",
+          "aliases": [
+            "Stuttgart",
+            "VFB"
+          ]
+        },
+        {
+          "name": "Viktoria Plzen",
+          "aliases": [
+            "PLZ"
+          ]
+        },
+        {
+          "name": "Young Boys",
+          "aliases": [
+            "YB"
+          ]
+        }
+      ]
+    },
+    "cricket": {
+      "displayName": "Cricket",
+      "espnSlug": null,
+      "popularityRank": 28,
+      "teams": [
+        {
+          "name": "Chennai Super Kings",
+          "aliases": [
+            "CSK"
+          ]
+        },
+        {
+          "name": "Delhi Capitals",
+          "aliases": [
+            "DC"
+          ]
+        },
+        {
+          "name": "Gujarat Titans",
+          "aliases": [
+            "GT"
+          ]
+        },
+        {
+          "name": "Kolkata Knight Riders",
+          "aliases": [
+            "KKR"
+          ]
+        },
+        {
+          "name": "Lucknow Super Giants",
+          "aliases": [
+            "LSG"
+          ]
+        },
+        {
+          "name": "Mumbai Indians",
+          "aliases": [
+            "MI"
+          ]
+        },
+        {
+          "name": "Punjab Kings",
+          "aliases": [
+            "PBKS"
+          ]
+        },
+        {
+          "name": "Rajasthan Royals",
+          "aliases": [
+            "RR"
+          ]
+        },
+        {
+          "name": "Royal Challengers Bengaluru",
+          "aliases": [
+            "RCB",
+            "Royal Challengers Bangalore"
+          ]
+        },
+        {
+          "name": "Sunrisers Hyderabad",
+          "aliases": [
+            "SRH"
+          ]
+        },
+        {
+          "name": "England Cricket",
+          "aliases": [
+            "England"
+          ]
+        },
+        {
+          "name": "India Cricket",
+          "aliases": [
+            "India"
+          ]
+        },
+        {
+          "name": "Australia Cricket",
+          "aliases": [
+            "Australia"
+          ]
+        },
+        {
+          "name": "New Zealand Cricket",
+          "aliases": [
+            "New Zealand"
+          ]
+        },
+        {
+          "name": "South Africa Cricket",
+          "aliases": [
+            "South Africa"
+          ]
+        },
+        {
+          "name": "Pakistan Cricket",
+          "aliases": [
+            "Pakistan"
+          ]
+        },
+        {
+          "name": "Sri Lanka Cricket",
+          "aliases": [
+            "Sri Lanka"
+          ]
+        },
+        {
+          "name": "Bangladesh Cricket",
+          "aliases": [
+            "Bangladesh"
+          ]
+        },
+        {
+          "name": "West Indies Cricket",
+          "aliases": [
+            "West Indies"
+          ]
+        },
+        {
+          "name": "Afghanistan Cricket",
+          "aliases": [
+            "Afghanistan"
+          ]
+        },
+        {
+          "name": "Zimbabwe Cricket",
+          "aliases": [
+            "Zimbabwe"
+          ]
+        },
+        {
+          "name": "Ireland Cricket",
+          "aliases": [
+            "Ireland"
+          ]
+        },
+        {
+          "name": "Adelaide Strikers"
+        },
+        {
+          "name": "Brisbane Heat"
+        },
+        {
+          "name": "Hobart Hurricanes"
+        },
+        {
+          "name": "Melbourne Renegades"
+        },
+        {
+          "name": "Melbourne Stars"
+        },
+        {
+          "name": "Perth Scorchers"
+        },
+        {
+          "name": "Sydney Sixers"
+        },
+        {
+          "name": "Sydney Thunder"
+        },
+        {
+          "name": "Islamabad United"
+        },
+        {
+          "name": "Karachi Kings"
+        },
+        {
+          "name": "Lahore Qalandars"
+        },
+        {
+          "name": "Multan Sultans"
+        },
+        {
+          "name": "Peshawar Zalmi"
+        },
+        {
+          "name": "Quetta Gladiators"
+        },
+        {
+          "name": "Barbados Royals"
+        },
+        {
+          "name": "Guyana Amazon Warriors"
+        },
+        {
+          "name": "Saint Kitts and Nevis Patriots"
+        },
+        {
+          "name": "Saint Lucia Kings"
+        },
+        {
+          "name": "Trinbago Knight Riders"
+        },
+        {
+          "name": "Antigua and Barbuda Falcons"
+        }
+      ]
+    },
+    "f1": {
+      "displayName": "F1",
+      "espnSlug": "racing/f1",
+      "popularityRank": 17,
+      "teams": [
+        {
+          "name": "Ferrari",
+          "aliases": [
+            "Scuderia Ferrari"
+          ]
+        },
+        {
+          "name": "Mercedes",
+          "aliases": [
+            "Mercedes-AMG Petronas",
+            "Mercedes AMG"
+          ]
+        },
+        {
+          "name": "Red Bull Racing",
+          "aliases": [
+            "Red Bull",
+            "Oracle Red Bull"
+          ]
+        },
+        {
+          "name": "McLaren",
+          "aliases": [
+            "McLaren F1"
+          ]
+        },
+        {
+          "name": "Aston Martin",
+          "aliases": [
+            "Aston Martin Aramco"
+          ]
+        },
+        {
+          "name": "Alpine",
+          "aliases": [
+            "BWT Alpine"
+          ]
+        },
+        {
+          "name": "Williams"
+        },
+        {
+          "name": "RB",
+          "aliases": [
+            "Visa Cash App RB",
+            "AlphaTauri"
+          ]
+        },
+        {
+          "name": "Kick Sauber",
+          "aliases": [
+            "Sauber",
+            "Stake F1"
+          ]
+        },
+        {
+          "name": "Haas",
+          "aliases": [
+            "MoneyGram Haas"
+          ]
+        },
+        {
+          "name": "Max Verstappen"
+        },
+        {
+          "name": "Lando Norris"
+        },
+        {
+          "name": "Charles Leclerc"
+        },
+        {
+          "name": "Oscar Piastri"
+        },
+        {
+          "name": "Lewis Hamilton"
+        },
+        {
+          "name": "George Russell"
+        },
+        {
+          "name": "Carlos Sainz"
+        },
+        {
+          "name": "Fernando Alonso"
+        },
+        {
+          "name": "Sergio Pérez",
+          "aliases": [
+            "Sergio Perez",
+            "Checo"
+          ]
+        },
+        {
+          "name": "Pierre Gasly"
+        }
+      ]
+    },
+    "soccer": {
+      "displayName": "Soccer",
+      "espnSlug": "soccer/usa.1",
+      "popularityRank": 30,
+      "teams": [
+        {
+          "name": "Argentina"
+        },
+        {
+          "name": "Australia",
+          "aliases": [
+            "Socceroos"
+          ]
+        },
+        {
+          "name": "Austria"
+        },
+        {
+          "name": "Belgium",
+          "aliases": [
+            "Red Devils"
+          ]
+        },
+        {
+          "name": "Bolivia"
+        },
+        {
+          "name": "Bosnia and Herzegovina",
+          "aliases": [
+            "Bosnia"
+          ]
+        },
+        {
+          "name": "Brazil",
+          "aliases": [
+            "Seleção"
+          ]
+        },
+        {
+          "name": "Bulgaria"
+        },
+        {
+          "name": "Cameroon",
+          "aliases": [
+            "Indomitable Lions"
+          ]
+        },
+        {
+          "name": "Canada"
+        },
+        {
+          "name": "Chile",
+          "aliases": [
+            "La Roja"
+          ]
+        },
+        {
+          "name": "Colombia",
+          "aliases": [
+            "Cafeteros"
+          ]
+        },
+        {
+          "name": "Costa Rica"
+        },
+        {
+          "name": "Croatia"
+        },
+        {
+          "name": "Czech Republic",
+          "aliases": [
+            "Czechia"
+          ]
+        },
+        {
+          "name": "Denmark"
+        },
+        {
+          "name": "Ecuador"
+        },
+        {
+          "name": "Egypt"
+        },
+        {
+          "name": "England",
+          "aliases": [
+            "Three Lions"
+          ]
+        },
+        {
+          "name": "Finland"
+        },
+        {
+          "name": "France",
+          "aliases": [
+            "Les Bleus"
+          ]
+        },
+        {
+          "name": "Germany",
+          "aliases": [
+            "Die Mannschaft"
+          ]
+        },
+        {
+          "name": "Ghana",
+          "aliases": [
+            "Black Stars"
+          ]
+        },
+        {
+          "name": "Greece"
+        },
+        {
+          "name": "Haiti"
+        },
+        {
+          "name": "Honduras"
+        },
+        {
+          "name": "Hungary"
+        },
+        {
+          "name": "Iceland"
+        },
+        {
+          "name": "Iran"
+        },
+        {
+          "name": "Iraq"
+        },
+        {
+          "name": "Republic of Ireland",
+          "aliases": [
+            "Ireland"
+          ]
+        },
+        {
+          "name": "Italy",
+          "aliases": [
+            "Azzurri"
+          ]
+        },
+        {
+          "name": "Ivory Coast",
+          "aliases": [
+            "Côte d'Ivoire",
+            "Cote d'Ivoire"
+          ]
+        },
+        {
+          "name": "Jamaica",
+          "aliases": [
+            "Reggae Boyz"
+          ]
+        },
+        {
+          "name": "Japan"
+        },
+        {
+          "name": "Kosovo"
+        },
+        {
+          "name": "Mexico",
+          "aliases": [
+            "El Tri"
+          ]
+        },
+        {
+          "name": "Morocco",
+          "aliases": [
+            "Atlas Lions"
+          ]
+        },
+        {
+          "name": "Netherlands",
+          "aliases": [
+            "Holland",
+            "Oranje"
+          ]
+        },
+        {
+          "name": "New Zealand"
+        },
+        {
+          "name": "Nigeria",
+          "aliases": [
+            "Super Eagles"
+          ]
+        },
+        {
+          "name": "Northern Ireland"
+        },
+        {
+          "name": "Norway"
+        },
+        {
+          "name": "Panama"
+        },
+        {
+          "name": "Paraguay"
+        },
+        {
+          "name": "Peru"
+        },
+        {
+          "name": "Poland"
+        },
+        {
+          "name": "Portugal",
+          "aliases": [
+            "Seleção das Quinas"
+          ]
+        },
+        {
+          "name": "Qatar"
+        },
+        {
+          "name": "Romania"
+        },
+        {
+          "name": "Russia"
+        },
+        {
+          "name": "Saudi Arabia"
+        },
+        {
+          "name": "Scotland"
+        },
+        {
+          "name": "Senegal",
+          "aliases": [
+            "Lions of Teranga"
+          ]
+        },
+        {
+          "name": "Serbia"
+        },
+        {
+          "name": "Slovakia"
+        },
+        {
+          "name": "Slovenia"
+        },
+        {
+          "name": "South Korea",
+          "aliases": [
+            "Korea Republic"
+          ]
+        },
+        {
+          "name": "Spain",
+          "aliases": [
+            "La Roja"
+          ]
+        },
+        {
+          "name": "Sweden"
+        },
+        {
+          "name": "Switzerland"
+        },
+        {
+          "name": "Türkiye",
+          "aliases": [
+            "Turkey"
+          ]
+        },
+        {
+          "name": "Tunisia"
+        },
+        {
+          "name": "Ukraine"
+        },
+        {
+          "name": "United States",
+          "aliases": [
+            "USA",
+            "USMNT"
+          ]
+        },
+        {
+          "name": "Uruguay",
+          "aliases": [
+            "La Celeste"
+          ]
+        },
+        {
+          "name": "Venezuela"
+        },
+        {
+          "name": "Wales"
+        }
+      ]
+    }
+  }
+}

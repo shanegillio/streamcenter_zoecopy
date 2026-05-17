@@ -49,6 +49,26 @@ private struct LLMGamesList {
   @Guide(description: "Every game or event listing found. Exclude navigation, schedule, standings, and account links.")
   var games: [LLMGameEntry]
 }
+
+// Sanity-validator schema. The model returns one verdict per input entry,
+// keyed by the index supplied in the prompt — that keeps the response
+// order-independent and resilient to the model dropping/reordering items.
+@available(iOS 26.0, macOS 26.0, *)
+@Generable
+private struct LLMValidationVerdict {
+  @Guide(description: "0-based index from the input list this verdict refers to.")
+  var index: Int
+
+  @Guide(description: "true if the entry looks like a real sports game/event listing; false if it's malformed, navigational, or nonsensical.")
+  var isPlausible: Bool
+}
+
+@available(iOS 26.0, macOS 26.0, *)
+@Generable
+private struct LLMValidationList {
+  @Guide(description: "Verdict for every input entry. Return one entry per input index.")
+  var verdicts: [LLMValidationVerdict]
+}
 #endif
 
 // MARK: - Scraper actor
@@ -137,6 +157,122 @@ actor FoundationModelScraper {
   - When you include a card with a placeholder href, set pageURL to the league section URL
     if you can construct one (e.g. site + "/live/" + league slug), otherwise the site base URL.
   """
+
+  // MARK: - Sanity validator
+
+  /// Asks the on-device LLM whether each candidate entry looks like a real
+  /// sports game / event listing. Returns one Bool per input in input order.
+  /// Used by `CustomStreamSource.mapDiscovered` to filter ambiguous entries
+  /// (empty away team, very short away team, no static team-table match)
+  /// before they reach the UI.
+  ///
+  /// Returns all-true when:
+  ///   - Foundation Models isn't available (iOS < 26 / not downloaded)
+  ///   - The LLM call times out (5s cap, tighter than the extract path)
+  ///   - The response is malformed (missing indices, etc.)
+  /// "Best effort" — never drops entries we can't validate; only drops the
+  /// ones the model explicitly rejects.
+  func validateGames(_ candidates: [(home: String, away: String, league: String)]) async -> [Bool] {
+    guard !candidates.isEmpty else { return [] }
+    #if canImport(FoundationModels)
+    if #available(iOS 26.0, macOS 26.0, *),
+       SystemLanguageModel.default.availability == .available {
+      return await runValidateGames(candidates)
+    }
+    #endif
+    return Array(repeating: true, count: candidates.count)
+  }
+
+  #if canImport(FoundationModels)
+  @available(iOS 26.0, macOS 26.0, *)
+  private func runValidateGames(_ candidates: [(home: String, away: String, league: String)]) async -> [Bool] {
+    // Build the numbered prompt body. Sample real-vs-implausible cases
+    // bias the model toward the rejection patterns we actually see:
+    // trailing-vs truncations ("England vs"), mirror/nav labels ("Stream 2",
+    // "More Sports"), and category headers ("Live TV").
+    var lines: [String] = []
+    for (i, c) in candidates.enumerated() {
+      let pair = c.away.isEmpty
+        ? c.home
+        : "\(c.home) vs \(c.away)"
+      lines.append("\(i). \"\(pair)\" (league: \(c.league))")
+    }
+    let body = lines.joined(separator: "\n")
+
+    let prompt = """
+    Validate these candidate sports game / event listings scraped from a
+    streaming aggregator. For each numbered entry, decide whether it looks
+    like a real, watchable game or event listing.
+
+    PLAUSIBLE examples (return true):
+    - "Detroit Pistons vs Orlando Magic" — real NBA game
+    - "UFC 300: Pereira vs Hill" — solo event card, real fight
+    - "Brazilian Grand Prix 2026" — real F1 race, solo event
+    - "England Cricket vs New Zealand Cricket" — real international cricket
+    - "Indy 500" — real solo event
+
+    IMPLAUSIBLE examples (return false):
+    - "England vs" — trailing separator, no second team
+    - "Norway vs" — same
+    - "Home Live TV" — nav label, not a game
+    - "Watch Streams" — nav label
+    - "More Sports" — category header
+    - "Stream 2" — mirror selector
+    - "Detroit vs Detroit" — duplicated team
+    - "Live" — just the status word
+
+    Return one verdict per input index. Be conservative: when in doubt,
+    return true. Only reject entries that are clearly malformed or
+    navigational.
+
+    Entries:
+    \(body)
+    """
+
+    // 5-second hard timeout: tighter than the 60s extract cache TTL since
+    // we want validation to be a fast filter, not a blocking step.
+    let result = await withTaskGroup(of: [Bool]?.self) { group in
+      group.addTask {
+        do {
+          let session = LanguageModelSession(instructions: Self.validateInstructions)
+          let response = try await session.respond(to: prompt, generating: LLMValidationList.self)
+          var verdicts = Array(repeating: true, count: candidates.count)
+          for v in response.content.verdicts where v.index >= 0 && v.index < verdicts.count {
+            verdicts[v.index] = v.isPlausible
+          }
+          return verdicts
+        } catch {
+          return nil
+        }
+      }
+      group.addTask {
+        try? await Task.sleep(nanoseconds: 5_000_000_000)
+        return nil
+      }
+      let winner = await group.next() ?? nil
+      group.cancelAll()
+      return winner
+    }
+    return result ?? Array(repeating: true, count: candidates.count)
+  }
+
+  private static let validateInstructions = """
+  You decide whether each given sports listing is a real watchable game
+  or event versus a malformed entry, a navigation label, or junk.
+
+  Be conservative — when in doubt, return true. Don't reject entries just
+  because the team names are unfamiliar (international cricket, niche
+  leagues, women's sports, college sports are all legitimate). Only
+  reject entries that are obviously broken:
+  - One team name followed by "vs" or "v" or "@" with nothing after.
+  - Two identical team names where no time/event context disambiguates.
+  - Pure navigation labels ("Home", "Streams", "More", "TV", "Live TV").
+  - Mirror/source selectors ("Stream 1", "Mirror 2", "Source A").
+  - Sport category headers without team names ("Soccer", "Basketball").
+
+  Return a verdict for every input index.
+  """
+  #endif
 
   func extractGames(from links: [ScrapedLink], baseURL: URL, pageTitle: String? = nil) async -> [ExtractedGame]? {
     if let cached = cache[baseURL], Date() < cached.expiry { return cached.games }
