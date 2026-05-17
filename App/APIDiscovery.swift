@@ -44,6 +44,20 @@ actor APIDiscovery {
   /// tried yet" (key missing) from "tried, no API" (value nil).
   private var workingEndpoint: [String: URL?] = [:]
   private var endpointExpiry:  [String: Date] = [:]
+  /// Referer/Origin headers that the initial successful fetch used. Bintv-
+  /// style sources serve their JSON from cross-origin endpoints (github.io,
+  /// old.ppv.to) that reject bare requests; the initial `decodeObservedURLs`
+  /// call passed the scrape's source URL as Referer + Origin to satisfy
+  /// CORS. Subsequent `fetchGames(for:)` calls also need those headers,
+  /// otherwise the cached endpoint fails on the second hit and games
+  /// silently regress to "Upcoming" via the rule-based fallback path.
+  private var workingReferer: [String: String] = [:]
+  private var workingOrigin:  [String: String] = [:]
+  /// All observed-URL endpoints that returned non-empty data on this host
+  /// (not just the first to win the race). Used by `fetchGames(for:)` to
+  /// re-fetch every source on cache refresh — bintv merges ppv.to + a
+  /// github.io catalog, and dropping either silently loses entire leagues.
+  private var workingObservedSources: [String: [URL]] = [:]
 
   // MARK: - Public API
 
@@ -57,10 +71,29 @@ actor APIDiscovery {
   func fetchGames(for baseURL: URL) async -> Result? {
     let host = baseURL.host?.lowercased() ?? baseURL.absoluteString.lowercased()
 
-    // Cache check
+    // Cache check. Two layers:
+    //   1. Multi-source observed-URL refresh: when the original discovery
+    //      came from `decodeObservedURLs` and observed several non-empty
+    //      sources (bintv: ppv.to + Streamed-images-json), refresh all of
+    //      them in parallel and merge — dropping any one source on refresh
+    //      loses an entire league.
+    //   2. Single-endpoint refresh: same URL, with the cached referer/origin
+    //      so cross-origin endpoints don't reject the bare request.
     if let until = endpointExpiry[host], Date() < until {
-      if let cached = workingEndpoint[host], let url = cached {
-        if let games = await fetchAndDecode(url), !games.isEmpty {
+      let observed = workingObservedSources[host] ?? []
+      if observed.count > 1 {
+        let referer = workingReferer[host]
+        let origin = workingOrigin[host]
+        if let merged = await fetchAndMerge(observed, referer: referer, origin: origin),
+           !merged.games.isEmpty {
+          return merged
+        }
+      } else if let cached = workingEndpoint[host], let url = cached {
+        if let games = await fetchAndDecode(
+             url,
+             referer: workingReferer[host],
+             origin: workingOrigin[host]
+           ), !games.isEmpty {
           return Result(endpoint: url, games: games)
         }
       }
@@ -86,6 +119,44 @@ actor APIDiscovery {
     }
   }
 
+  /// Refresh multiple known-good observed-URL endpoints in parallel and
+  /// merge their game lists. Dedupe key = (externalID, pageURL) — externalID
+  /// alone collides across sources, pageURL alone collides across days.
+  private func fetchAndMerge(
+    _ urls: [URL],
+    referer: String?,
+    origin: String?
+  ) async -> Result? {
+    var collected: [(URL, [DiscoveredGame])] = []
+    await withTaskGroup(of: (URL, [DiscoveredGame])?.self) { group in
+      for url in urls {
+        group.addTask { [weak self] in
+          guard let self else { return nil }
+          if let games = await self.fetchAndDecode(url, referer: referer, origin: origin),
+             !games.isEmpty {
+            return (url, games)
+          }
+          return nil
+        }
+      }
+      for await pair in group {
+        if let pair { collected.append(pair) }
+      }
+    }
+    guard !collected.isEmpty else { return nil }
+    var seenKeys = Set<String>()
+    var mergedGames: [DiscoveredGame] = []
+    for (_, games) in collected {
+      for g in games {
+        let key = "\(g.externalID)|\(g.pageURL.absoluteString)"
+        if seenKeys.insert(key).inserted {
+          mergedGames.append(g)
+        }
+      }
+    }
+    return Result(endpoint: collected[0].0, games: mergedGames)
+  }
+
   /// Most recent endpoint hit for this host, for surfacing in DiagnosticsView.
   func cachedEndpoint(for baseURL: URL) -> URL? {
     let host = baseURL.host?.lowercased() ?? ""
@@ -109,31 +180,57 @@ actor APIDiscovery {
       guard let scheme = referer.scheme, let host = referer.host else { return referHeader }
       return "\(scheme)://\(host)"
     }()
-    return await withTaskGroup(of: Result?.self) { group in
+
+    // Race every observed URL in parallel, but collect ALL non-empty
+    // results — bintv combines ppv.to (US sports) + a github.io catalog
+    // (international cricket / specialty fixtures). Returning only the
+    // first to finish drops entire leagues from the UI.
+    var collected: [(URL, [DiscoveredGame])] = []
+    await withTaskGroup(of: (URL, [DiscoveredGame])?.self) { group in
       for url in urls {
         group.addTask { [weak self] in
           guard let self else { return nil }
           if let games = await self.fetchAndDecode(url, referer: referHeader, origin: originHeader),
              !games.isEmpty {
-            return Result(endpoint: url, games: games)
+            return (url, games)
           }
           return nil
         }
       }
-      for await result in group {
-        if let result {
-          group.cancelAll()
-          // Cache as a working endpoint for this host so subsequent calls
-          // to `fetchGames(for:)` skip the candidate-path probe and go
-          // straight here.
-          let host = referer.host?.lowercased() ?? ""
-          workingEndpoint[host] = .some(result.endpoint)
-          endpointExpiry[host] = Date().addingTimeInterval(Self.positiveTTL)
-          return result
+      for await pair in group {
+        if let pair { collected.append(pair) }
+      }
+    }
+    guard !collected.isEmpty else { return nil }
+
+    // Dedupe across sources: (externalID, pageURL) is unique-ish even when
+    // both ppv.to and bintv-json list the same MLB game.
+    var seenKeys = Set<String>()
+    var mergedGames: [DiscoveredGame] = []
+    for (_, games) in collected {
+      for g in games {
+        let key = "\(g.externalID)|\(g.pageURL.absoluteString)"
+        if seenKeys.insert(key).inserted {
+          mergedGames.append(g)
         }
       }
-      return nil
     }
+
+    // Cache state needed for subsequent `fetchGames(for:)` refreshes:
+    //   - workingEndpoint: the first winning URL (still satisfies the
+    //     single-endpoint cache contract used by other callers)
+    //   - workingObservedSources: every winning URL so refresh re-merges
+    //   - workingReferer / workingOrigin: headers the original successful
+    //     fetch used, so refreshes don't trip CORS / referer checks
+    let host = referer.host?.lowercased() ?? ""
+    let firstWinner = collected[0].0
+    workingEndpoint[host] = .some(firstWinner)
+    workingObservedSources[host] = collected.map(\.0)
+    workingReferer[host] = referHeader
+    workingOrigin[host] = originHeader
+    endpointExpiry[host] = Date().addingTimeInterval(Self.positiveTTL)
+
+    return Result(endpoint: firstWinner, games: mergedGames)
   }
 
   // MARK: - Probing
@@ -584,12 +681,22 @@ extension APIShape {
       if trailingSeparators.contains(where: { lower.hasSuffix($0) }) {
         return nil
       }
+      // Double-space-around-vs is a malformed-title signature from sources
+      // whose catalog has lost the away team and left an artifact. bintv's
+      // Streamed-images-json had "Everton vs  United" — splitName trims and
+      // hands "Everton"/"United" to the rest of the pipeline, and the logo
+      // resolver matches "United" to the United States national flag for an
+      // ostensibly Premier League game. Dropping these here makes the bad
+      // logo problem disappear at the source.
+      if lower.contains("vs  ") || lower.contains("  vs") || lower.contains(" v  ") {
+        return nil
+      }
     }
-    // Reject "Home vs X" entries where X is suspiciously short and not in a
-    // team database — these are typically scraping bugs ("Everton vs  United"
-    // where the away team got chopped). 2-character or fewer away names that
-    // aren't recognized team abbreviations get dropped.
-    if !away.isEmpty && away.count <= 2 && !isEvent {
+    // Reject "Home vs X" entries where X is suspiciously short — typically
+    // scraping bugs leaving "FC"/"AC"/"vs" as the away. No legitimate team
+    // in our seed database is 3 characters or fewer, so this is safe to
+    // tighten from <=2 to <=3.
+    if !away.isEmpty && away.count <= 3 && !isEvent {
       return nil
     }
 

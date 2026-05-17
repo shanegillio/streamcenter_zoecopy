@@ -870,51 +870,95 @@ struct CustomStreamSource: StreamSource {
       )
     }
 
-    // LLM sanity validator: ambiguous entries (single-team events, very
-    // short away teams, or .other classifications that no static team table
-    // matched) go through Foundation Models on iOS 26+ to drop obviously-
-    // junk listings. Real games are always kept — the model is conservative
-    // and the validateGames default-true on missing verdicts.
-    let validated = await applyLLMValidation(mapped)
+    // LLM enrichment pass: hands the candidate games + page context to the
+    // on-device model and lets it drop nonsense, correct ambiguous team
+    // names ("United" → "Manchester United" on an EPL page), and re-tag
+    // wrong-bucket leagues. Conservative by design — leaves entries alone
+    // unless it's confident. iOS < 26: silent no-op.
+    let enriched = await applyLLMEnrichment(mapped)
 
     // Warm URLCache with team-logo PNGs immediately. By the time the user
     // sees the Streams tab, AsyncImage in each LiveGameRow hits the cache
     // and paints the logos without a network round-trip.
-    await LogoPrefetcher.shared.warm(games: validated)
+    await LogoPrefetcher.shared.warm(games: enriched)
 
-    return validated
+    return enriched
   }
 
-  /// Routes ambiguous entries through `FoundationModelScraper.validateGames`
-  /// and drops any the model classifies as implausible. Non-ambiguous games
-  /// (clear two-team match, recognised league) pass through untouched.
-  private func applyLLMValidation(_ games: [Game]) async -> [Game] {
-    // Identify candidates worth validating. A game is "ambiguous" when:
-    //  - it's a would-be solo event (awayTeam.isEmpty) — could be real
-    //    (Indy 500) or junk ("Live TV")
-    //  - the away team is suspiciously short and might be a scraping artifact
-    //  - league wound up `.other` AND neither team showed up in any static
-    //    table — could be niche real sport or could be navigation noise
-    var ambiguousIndexes: [Int] = []
-    var candidates: [(home: String, away: String, league: String)] = []
+  /// Runs the FoundationModelScraper enrichment pass over the mapped game
+  /// list, then applies the verdicts: drops `keep=false` entries, and for
+  /// the rest applies `correctedHome` / `correctedAway` / `correctedLeague`
+  /// when the model returned them. Non-enrichable cases (Foundation Models
+  /// unavailable, model timed out) pass through unchanged.
+  private func applyLLMEnrichment(_ games: [Game]) async -> [Game] {
+    guard !games.isEmpty else { return games }
+
+    // Build the candidate tuples and the original title for each game, so
+    // the model can see what the source called the entry (helps when a
+    // team name has been pre-canonicalized in our pipeline but the model
+    // wants to refer back to the raw source string).
+    let candidates: [(home: String, away: String, league: String, sourceTitle: String?)] =
+      games.map { g in
+        let title = g.awayTeam.isEmpty ? g.homeTeam : "\(g.homeTeam) vs \(g.awayTeam)"
+        return (g.homeTeam, g.awayTeam, g.league.rawValue, title)
+      }
+
+    // Page context: source URL + the most recent scrape's title + meta
+    // description if available. The scraper persists these into
+    // `SourceRegistry.recentScrapes` (read on the main actor).
+    let sid = self.id
+    let base = baseURL
+    let diag = await MainActor.run {
+      SourceRegistry.shared.recentScrapes(for: sid).first { $0.url == base }
+    }
+    let pageContext = FoundationModelScraper.PageContext(
+      sourceURL: baseURL,
+      pageTitle: diag?.pageTitle,
+      metaDescription: diag?.metaDescription
+    )
+
+    let verdicts = await FoundationModelScraper.shared.enrich(
+      candidates: candidates,
+      pageContext: pageContext
+    )
+    guard verdicts.count == games.count else { return games }
+
+    var out: [Game] = []
+    out.reserveCapacity(games.count)
     for (i, g) in games.enumerated() {
-      let suspiciousShortAway = !g.awayTeam.isEmpty && g.awayTeam.count <= 3
-      let ambiguousOther = g.league == .other && g.awayTeam.isEmpty
-      if g.awayTeam.isEmpty || suspiciousShortAway || ambiguousOther {
-        ambiguousIndexes.append(i)
-        candidates.append((g.homeTeam, g.awayTeam, g.league.displayName))
+      let v = verdicts[i]
+      if !v.keep { continue }
+      // Apply corrections only when the model returned a non-empty value.
+      // Map corrected league raw value back to SportLeague (silently ignore
+      // unknown values so a model hallucination can't crash classification).
+      let newLeague: SportLeague = {
+        if let raw = v.correctedLeague,
+           let parsed = SportLeague(rawValue: raw) {
+          return parsed
+        }
+        return g.league
+      }()
+      let newHome = v.correctedHome ?? g.homeTeam
+      let newAway = v.correctedAway ?? g.awayTeam
+      if newLeague == g.league && newHome == g.homeTeam && newAway == g.awayTeam {
+        out.append(g)
+      } else {
+        out.append(Game(
+          id: g.id,
+          homeTeam: newHome,
+          awayTeam: newAway,
+          scheduledTime: g.scheduledTime,
+          timeIsKnown: g.timeIsKnown,
+          isLive: g.isLive,
+          liveStatus: g.liveStatus,
+          isEvent: g.isEvent,
+          isPremium: g.isPremium,
+          pageURL: g.pageURL,
+          league: newLeague
+        ))
       }
     }
-    if candidates.isEmpty { return games }
-    let verdicts = await FoundationModelScraper.shared.validateGames(candidates)
-    guard verdicts.count == candidates.count else { return games }
-    var rejected = Set<Int>()
-    for (vIdx, originalIdx) in ambiguousIndexes.enumerated() {
-      if !verdicts[vIdx] { rejected.insert(originalIdx) }
-    }
-    if rejected.isEmpty { return games }
-    return games.enumerated()
-      .compactMap { rejected.contains($0.offset) ? nil : $0.element }
+    return out
   }
 
   // MARK: - ESPN reconciliation

@@ -50,24 +50,35 @@ private struct LLMGamesList {
   var games: [LLMGameEntry]
 }
 
-// Sanity-validator schema. The model returns one verdict per input entry,
-// keyed by the index supplied in the prompt — that keeps the response
-// order-independent and resilient to the model dropping/reordering items.
+// Enrichment-pass schema. For each candidate game, the model returns a
+// verdict that may DROP the entry, CORRECT one or more fields, or KEEP
+// it unchanged — backed by the page context (source URL, title, meta
+// description). The corrected* fields are empty strings when the entry
+// should be left alone; the actor maps empty → nil at the boundary.
 @available(iOS 26.0, macOS 26.0, *)
 @Generable
-private struct LLMValidationVerdict {
+private struct LLMEnrichmentVerdict {
   @Guide(description: "0-based index from the input list this verdict refers to.")
   var index: Int
 
-  @Guide(description: "true if the entry looks like a real sports game/event listing; false if it's malformed, navigational, or nonsensical.")
-  var isPlausible: Bool
+  @Guide(description: "true to keep the entry, false to drop it from the UI (use for navigation labels, mirror selectors, malformed listings).")
+  var keep: Bool
+
+  @Guide(description: "Corrected canonical home team name when the input was ambiguous (e.g., 'United' → 'Manchester United' on a Premier League page). Empty string to leave unchanged.")
+  var correctedHome: String
+
+  @Guide(description: "Corrected canonical away team name. Empty string to leave unchanged.")
+  var correctedAway: String
+
+  @Guide(description: "Corrected SportLeague raw value when the existing classification is wrong (e.g., 'soccer' → 'premierLeague'). Use one of: nfl, nba, mlb, nhl, mma, ufc, boxing, soccer, premierLeague, laLiga, serieA, bundesliga, ligue1, eredivisie, mls, ligaMx, championsLeague, europaLeague, f1, ncaaf, ncaab, wnba, wwe, tennis, golf, nascar, cricket, other. Empty string to leave unchanged.")
+  var correctedLeague: String
 }
 
 @available(iOS 26.0, macOS 26.0, *)
 @Generable
-private struct LLMValidationList {
-  @Guide(description: "Verdict for every input entry. Return one entry per input index.")
-  var verdicts: [LLMValidationVerdict]
+private struct LLMEnrichmentList {
+  @Guide(description: "Verdict for every input entry, one per index.")
+  var verdicts: [LLMEnrichmentVerdict]
 }
 #endif
 
@@ -158,87 +169,143 @@ actor FoundationModelScraper {
     if you can construct one (e.g. site + "/live/" + league slug), otherwise the site base URL.
   """
 
-  // MARK: - Sanity validator
+  // MARK: - LLM enrichment pass
 
-  /// Asks the on-device LLM whether each candidate entry looks like a real
-  /// sports game / event listing. Returns one Bool per input in input order.
-  /// Used by `CustomStreamSource.mapDiscovered` to filter ambiguous entries
-  /// (empty away team, very short away team, no static team-table match)
-  /// before they reach the UI.
+  /// Public verdict surface for the enrichment pass. Each field is optional
+  /// because the model may leave the entry unchanged (`keep == true` and
+  /// every corrected* field nil) or modify only a subset.
+  struct EnrichmentVerdict: Sendable {
+    let index: Int
+    let keep: Bool
+    let correctedHome: String?
+    let correctedAway: String?
+    let correctedLeague: String?
+  }
+
+  struct PageContext: Sendable {
+    let sourceURL: URL
+    let pageTitle: String?
+    let metaDescription: String?
+  }
+
+  /// Asks the on-device LLM to interpret each candidate game in light of
+  /// the source page's context, then per entry: keep / drop / correct
+  /// fields. Supersedes the v2.17 boolean `validateGames` — the model is
+  /// allowed to fix ambiguous team names ("United" → "Manchester United"
+  /// on a Premier League aggregator), re-tag wrong leagues, and reject
+  /// nonsense, all in one pass. Caller is responsible for applying the
+  /// returned corrections.
   ///
-  /// Returns all-true when:
-  ///   - Foundation Models isn't available (iOS < 26 / not downloaded)
-  ///   - The LLM call times out (5s cap, tighter than the extract path)
-  ///   - The response is malformed (missing indices, etc.)
-  /// "Best effort" — never drops entries we can't validate; only drops the
-  /// ones the model explicitly rejects.
-  func validateGames(_ candidates: [(home: String, away: String, league: String)]) async -> [Bool] {
+  /// Returns all-keep / no-corrections when Foundation Models isn't
+  /// available (iOS < 26 / not downloaded) or the call times out.
+  func enrich(
+    candidates: [(home: String, away: String, league: String, sourceTitle: String?)],
+    pageContext: PageContext
+  ) async -> [EnrichmentVerdict] {
     guard !candidates.isEmpty else { return [] }
+    let defaultVerdicts = candidates.enumerated().map { (i, _) in
+      EnrichmentVerdict(index: i, keep: true,
+                        correctedHome: nil, correctedAway: nil, correctedLeague: nil)
+    }
     #if canImport(FoundationModels)
     if #available(iOS 26.0, macOS 26.0, *),
        SystemLanguageModel.default.availability == .available {
-      return await runValidateGames(candidates)
+      return await runEnrich(candidates: candidates, pageContext: pageContext)
+        ?? defaultVerdicts
     }
     #endif
-    return Array(repeating: true, count: candidates.count)
+    return defaultVerdicts
   }
 
   #if canImport(FoundationModels)
   @available(iOS 26.0, macOS 26.0, *)
-  private func runValidateGames(_ candidates: [(home: String, away: String, league: String)]) async -> [Bool] {
-    // Build the numbered prompt body. Sample real-vs-implausible cases
-    // bias the model toward the rejection patterns we actually see:
-    // trailing-vs truncations ("England vs"), mirror/nav labels ("Stream 2",
-    // "More Sports"), and category headers ("Live TV").
+  private func runEnrich(
+    candidates: [(home: String, away: String, league: String, sourceTitle: String?)],
+    pageContext: PageContext
+  ) async -> [EnrichmentVerdict]? {
+    // Cap candidates per call: ppv.to can list 200+ streams; the model's
+    // useful context is shorter than that. Caller (mapDiscovered) is
+    // responsible for prioritising live + soonest-to-start.
+    let cap = 60
+    let working = Array(candidates.prefix(cap))
+
     var lines: [String] = []
-    for (i, c) in candidates.enumerated() {
-      let pair = c.away.isEmpty
-        ? c.home
-        : "\(c.home) vs \(c.away)"
-      lines.append("\(i). \"\(pair)\" (league: \(c.league))")
+    for (i, c) in working.enumerated() {
+      let pair = c.away.isEmpty ? c.home : "\(c.home) vs \(c.away)"
+      var line = "\(i). \"\(pair)\" (current league: \(c.league)"
+      if let t = c.sourceTitle, !t.isEmpty, t != pair { line += "; original title: \"\(t)\"" }
+      line += ")"
+      lines.append(line)
     }
     let body = lines.joined(separator: "\n")
 
+    var contextHeader = "Source URL: \(pageContext.sourceURL.absoluteString)"
+    if let t = pageContext.pageTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !t.isEmpty, t.count < 200 {
+      contextHeader += "\nPage title: \(t)"
+    }
+    if let m = pageContext.metaDescription?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !m.isEmpty, m.count < 400 {
+      contextHeader += "\nMeta description: \(m)"
+    }
+
     let prompt = """
-    Validate these candidate sports game / event listings scraped from a
-    streaming aggregator. For each numbered entry, decide whether it looks
-    like a real, watchable game or event listing.
+    \(contextHeader)
 
-    PLAUSIBLE examples (return true):
-    - "Detroit Pistons vs Orlando Magic" — real NBA game
-    - "UFC 300: Pereira vs Hill" — solo event card, real fight
-    - "Brazilian Grand Prix 2026" — real F1 race, solo event
-    - "England Cricket vs New Zealand Cricket" — real international cricket
-    - "Indy 500" — real solo event
+    Below are candidate sports game listings scraped from the streaming site
+    above. For each numbered entry, decide what to do based on the page's
+    context (a Premier League aggregator implies "United" means Manchester
+    United; an international friendly card means "England" stays as England).
 
-    IMPLAUSIBLE examples (return false):
-    - "England vs" — trailing separator, no second team
-    - "Norway vs" — same
-    - "Home Live TV" — nav label, not a game
-    - "Watch Streams" — nav label
-    - "More Sports" — category header
-    - "Stream 2" — mirror selector
-    - "Detroit vs Detroit" — duplicated team
-    - "Live" — just the status word
+    PER-ENTRY VERDICT:
+    - keep=true with no corrections: entry is fine as-is.
+    - keep=true with correctedHome/correctedAway: ambiguous or partial team
+      names you can canonicalize using the page context. Use the team's
+      official full name (e.g. "Manchester United", "Real Madrid",
+      "England Cricket"). Leave a field as the empty string to keep it.
+    - keep=true with correctedLeague: existing classification is wrong.
+      Use the SportLeague raw value (e.g. "premierLeague", "cricket",
+      "laLiga"). Empty string to keep.
+    - keep=false: drop the entry. Use for navigation labels ("Home",
+      "Live TV", "More Sports"), mirror selectors ("Stream 2", "Mirror 1"),
+      malformed listings ("Norway vs", "Live"), duplicated teams.
 
-    Return one verdict per input index. Be conservative: when in doubt,
-    return true. Only reject entries that are clearly malformed or
-    navigational.
+    PRESERVE — don't correct these (they ARE the canonical names):
+    - "England Cricket", "India Cricket", etc. — the "Cricket" suffix
+      distinguishes the national side from any club of the same country.
+    - International soccer national teams like "Norway", "Hungary",
+      "Brazil" — when the page is about international competition.
+
+    Be conservative. When in doubt, keep=true with no corrections.
+    Return exactly one verdict per input index.
 
     Entries:
     \(body)
     """
 
-    // 5-second hard timeout: tighter than the 60s extract cache TTL since
-    // we want validation to be a fast filter, not a blocking step.
-    let result = await withTaskGroup(of: [Bool]?.self) { group in
+    // 6 s timeout — a bit looser than the v2.17 validateGames cap because
+    // enrichment is doing more work per entry (interpretation, not just
+    // yes/no). Still tighter than the extractGames cache TTL.
+    let result = await withTaskGroup(of: [EnrichmentVerdict]?.self) { group in
       group.addTask {
         do {
-          let session = LanguageModelSession(instructions: Self.validateInstructions)
-          let response = try await session.respond(to: prompt, generating: LLMValidationList.self)
-          var verdicts = Array(repeating: true, count: candidates.count)
-          for v in response.content.verdicts where v.index >= 0 && v.index < verdicts.count {
-            verdicts[v.index] = v.isPlausible
+          let session = LanguageModelSession(instructions: Self.enrichInstructions)
+          let response = try await session.respond(to: prompt, generating: LLMEnrichmentList.self)
+          var verdicts = candidates.enumerated().map { (i, _) in
+            EnrichmentVerdict(index: i, keep: true,
+                              correctedHome: nil, correctedAway: nil, correctedLeague: nil)
+          }
+          for v in response.content.verdicts where v.index >= 0 && v.index < working.count {
+            let trimmedHome   = v.correctedHome.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedAway   = v.correctedAway.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedLeague = v.correctedLeague.trimmingCharacters(in: .whitespacesAndNewlines)
+            verdicts[v.index] = EnrichmentVerdict(
+              index: v.index,
+              keep: v.keep,
+              correctedHome:   trimmedHome.isEmpty   ? nil : trimmedHome,
+              correctedAway:   trimmedAway.isEmpty   ? nil : trimmedAway,
+              correctedLeague: trimmedLeague.isEmpty ? nil : trimmedLeague
+            )
           }
           return verdicts
         } catch {
@@ -246,31 +313,36 @@ actor FoundationModelScraper {
         }
       }
       group.addTask {
-        try? await Task.sleep(nanoseconds: 5_000_000_000)
+        try? await Task.sleep(nanoseconds: 6_000_000_000)
         return nil
       }
       let winner = await group.next() ?? nil
       group.cancelAll()
       return winner
     }
-    return result ?? Array(repeating: true, count: candidates.count)
+    return result
   }
 
-  private static let validateInstructions = """
-  You decide whether each given sports listing is a real watchable game
-  or event versus a malformed entry, a navigation label, or junk.
+  private static let enrichInstructions = """
+  You interpret candidate sports game listings scraped from streaming
+  aggregator sites. The site context (URL, page title, meta description)
+  comes first, then a numbered list of candidates. For each, you decide
+  whether to keep, drop, or correct fields.
 
-  Be conservative — when in doubt, return true. Don't reject entries just
-  because the team names are unfamiliar (international cricket, niche
-  leagues, women's sports, college sports are all legitimate). Only
-  reject entries that are obviously broken:
-  - One team name followed by "vs" or "v" or "@" with nothing after.
-  - Two identical team names where no time/event context disambiguates.
-  - Pure navigation labels ("Home", "Streams", "More", "TV", "Live TV").
-  - Mirror/source selectors ("Stream 1", "Mirror 2", "Source A").
-  - Sport category headers without team names ("Soccer", "Basketball").
+  Use the page context to canonicalize ambiguous entries:
+  - On a Premier League page, an entry "Everton vs United" likely means
+    "Everton vs Manchester United" (correctedAway = "Manchester United").
+  - On an international friendly card, "Norway vs Brazil" stays as-is.
+  - When the title says "Watch IPL", treat T20 cricket franchise entries
+    as league=cricket.
 
-  Return a verdict for every input index.
+  Do NOT invent games that aren't in the candidate list. Do NOT remove
+  the "Cricket" suffix from national cricket sides ("England Cricket").
+
+  When uncertain, return keep=true with no corrections — never make up
+  team names from thin air. Empty-string fields mean "leave unchanged".
+
+  Return exactly one verdict per input index.
   """
   #endif
 
