@@ -707,14 +707,12 @@ struct LeagueChip: View {
             CachedAsyncImage(url: logoURL) { image in
               image.resizable().scaledToFit().padding(12)
             } placeholder: {
-              Image(systemName: league.sfSymbol)
-                .font(.system(size: 26, weight: .bold))
-                .foregroundStyle(isSelected ? .white : league.accentColor)
+              Text(league.emoji)
+                .font(.system(size: 30))
             }
           } else {
-            Image(systemName: league.sfSymbol)
-              .font(.system(size: 26, weight: .bold))
-              .foregroundStyle(isSelected ? .white : league.accentColor)
+            Text(league.emoji)
+              .font(.system(size: 30))
           }
         }
         .frame(width: 64, height: 64)
@@ -815,12 +813,18 @@ struct LiveGameRow: View {
     .padding(.vertical, 12)
     .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
     .overlay(alignment: .topLeading) {
-      LeagueIcon(league: game.league, size: 22)
-        .offset(x: -8, y: -8)
+      // v2.26: only show the small league-badge overlay when the row
+      // is using stacked team logos. When the row already shows a big
+      // league-icon circle (events / leagues with no ESPN coverage),
+      // a second small badge for the same league reads as duplicated.
+      if !game.isEvent && !usesLeagueFallback {
+        LeagueIcon(league: game.league, size: 22)
+          .offset(x: -8, y: -8)
+      }
     }
   }
 
-  /// League logo image (ESPN CDN) when available, SF symbol otherwise —
+  /// League logo image (ESPN CDN) when available, emoji otherwise —
   /// inside a coloured circle matching the league accent.
   private var leagueIconCircle: some View {
     ZStack {
@@ -829,14 +833,12 @@ struct LiveGameRow: View {
         CachedAsyncImage(url: logoURL) { image in
           image.resizable().scaledToFit().padding(8)
         } placeholder: {
-          Image(systemName: game.league.sfSymbol)
-            .font(.system(size: 22, weight: .bold))
-            .foregroundStyle(game.league.accentColor)
+          Text(game.league.emoji)
+            .font(.system(size: 28))
         }
       } else {
-        Image(systemName: game.league.sfSymbol)
-          .font(.system(size: 22, weight: .bold))
-          .foregroundStyle(game.league.accentColor)
+        Text(game.league.emoji)
+          .font(.system(size: 28))
       }
     }
     .frame(width: 52, height: 52)
@@ -910,15 +912,13 @@ struct LeagueTile: View {
           CachedAsyncImage(url: logoURL) { image in
             image.resizable().scaledToFit()
           } placeholder: {
-            Image(systemName: league.sfSymbol)
-              .font(.system(size: 36, weight: .bold))
-              .foregroundStyle(league.accentColor)
+            Text(league.emoji)
+              .font(.system(size: 42))
           }
           .frame(maxWidth: 68, maxHeight: 42)
         } else {
-          Image(systemName: league.sfSymbol)
-            .font(.system(size: 36, weight: .bold))
-            .foregroundStyle(league.accentColor)
+          Text(league.emoji)
+            .font(.system(size: 42))
         }
 
         Text(league.displayName)

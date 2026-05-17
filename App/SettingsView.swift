@@ -416,15 +416,13 @@ struct LeagueIcon: View {
           image.resizable().scaledToFit()
             .padding(size * 0.12)
         } placeholder: {
-          Image(systemName: league.sfSymbol)
-            .font(.system(size: size * 0.42, weight: .semibold))
-            .foregroundStyle(league.accentColor)
+          Text(league.emoji)
+            .font(.system(size: size * 0.55))
         }
         .frame(width: size, height: size)
       } else {
-        Image(systemName: league.sfSymbol)
-          .font(.system(size: size * 0.42, weight: .semibold))
-          .foregroundStyle(league.accentColor)
+        Text(league.emoji)
+          .font(.system(size: size * 0.55))
       }
     }
   }

@@ -124,6 +124,32 @@ enum SportLeague: String, CaseIterable, Identifiable, Codable, Hashable {
     }
   }
 
+  /// v2.26: native sport emojis used as the visual icon when a league
+  /// has no logo PNG to fetch and no team logos to stack. Emojis are
+  /// always colourful, render uniformly across iOS versions, and look
+  /// more native than monochrome SF Symbols in the streams feed.
+  var emoji: String {
+    switch self {
+    case .nfl, .ncaaf: return "🏈"
+    case .nba, .ncaab, .wnba: return "🏀"
+    case .mlb: return "⚾"
+    case .nhl: return "🏒"
+    case .mma, .ufc: return "🥋"
+    case .boxing: return "🥊"
+    case .soccer, .premierLeague, .laLiga, .serieA, .bundesliga,
+         .ligue1, .eredivisie, .mls, .ligaMx,
+         .championsLeague, .europaLeague: return "⚽"
+    case .f1: return "🏎️"
+    case .nascar: return "🏁"
+    case .wwe: return "🤼"
+    case .tennis: return "🎾"
+    case .golf: return "⛳"
+    case .cricket: return "🏏"
+    case .iihf: return "🏒"
+    case .other: return "🏟️"
+    }
+  }
+
   var leagueLogoURL: URL? {
     switch self {
     case .nfl:          return URL(string: "https://a.espncdn.com/i/teamlogos/leagues/500/nfl.png")
