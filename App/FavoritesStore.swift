@@ -112,7 +112,15 @@ final class FavoritesStore {
   }
 
   func isLeagueFavorite(_ league: SportLeague) -> Bool {
-    favoriteLeagues.contains(league)
+    if favoriteLeagues.contains(league) { return true }
+    // v2.27: also treat a league as favorited when its parent sport is.
+    // Favoriting "Basketball" as a sport should star the NBA / WNBA /
+    // NCAAB chips too — previously only direct league favorites lit up
+    // the star, so the UI never reflected sport-level favorites.
+    for sport in favoriteSports where sport.leagues.contains(league) {
+      return true
+    }
+    return false
   }
 
   func toggleTeam(_ name: String) {

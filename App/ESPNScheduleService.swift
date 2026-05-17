@@ -34,10 +34,16 @@ actor ESPNScheduleService {
 
   /// Returns ESPN-canonical games across every supported league. Cached
   /// for 60 s when any game is live (so scores stay fresh) or 5 min
-  /// otherwise. `forceRefresh=true` clears the cache before fetching.
+  /// otherwise. `forceRefresh=true` ignores the cached freshness check
+  /// and triggers a new fetch, but does NOT pre-clear the cache — the
+  /// existing entry stays available as a fallback if the fresh fetch
+  /// returns nothing (so a transient ESPN failure on rescan can't leave
+  /// the user looking at an empty feed).
   func todaysGames(forceRefresh: Bool = false) async -> [Game] {
-    if forceRefresh { cache = nil }
-    if let cached = cache, Date() < cached.expiry { return cached.games }
+    if !forceRefresh, let cached = cache, Date() < cached.expiry {
+      return cached.games
+    }
+    let previousCache = cache
 
     // Fan out per-league scoreboard fetches. Each delegates to
     // `ESPNScoreboardService.events(for:)` which already has its own
@@ -70,6 +76,15 @@ actor ESPNScheduleService {
     var seenIDs = Set<String>()
     let deduped = games.filter { seenIDs.insert($0.id).inserted }
 
+    // v2.27: if the fresh fetch came back empty (transient ESPN issue,
+    // network blip, off-season for every supported league at once), keep
+    // the previous cache rather than overwriting good data with nothing.
+    // The user perceived this as "rescan removed all the games" because
+    // any aggregator gap-fills still landed while ESPN's contribution
+    // vanished.
+    if deduped.isEmpty, let previousCache, Date() < previousCache.expiry {
+      return previousCache.games
+    }
     let anyLive = deduped.contains(where: { $0.isLive })
     let ttl: TimeInterval = anyLive ? 60 : 5 * 60
     cache = CacheEntry(games: deduped, expiry: Date().addingTimeInterval(ttl))
