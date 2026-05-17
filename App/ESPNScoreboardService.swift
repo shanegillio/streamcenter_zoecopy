@@ -267,21 +267,41 @@ actor ESPNScoreboardService {
 
     let hName = normalize(game.homeTeam)
     let aName = normalize(game.awayTeam)
-    // 1. Both teams match (either orientation)
-    if let e = pool.first(where: {
+    // 1. Both teams match (either orientation). v2.23: when multiple events
+    // match the same team pair across the 7-day window (Arizona Diamondbacks
+    // played Colorado Rockies today AND on Friday), pick the most relevant:
+    //   live > closest scheduled time to NOW
+    // Using `pool.first` was non-deterministic because async task ordering
+    // meant ESPN events array sometimes started with Friday, sometimes
+    // today. That manifested as "live game shows up as Friday's fixture".
+    let twoTeamMatches = pool.filter {
       (teamMatches(hName, normalize($0.homeTeam), normalize($0.homeAbbr)) &&
        teamMatches(aName, normalize($0.awayTeam), normalize($0.awayAbbr))) ||
       (teamMatches(hName, normalize($0.awayTeam), normalize($0.awayAbbr)) &&
        teamMatches(aName, normalize($0.homeTeam), normalize($0.homeAbbr)))
-    }) { return e }
+    }
+    if let best = pickClosestToNow(twoTeamMatches) { return best }
     // 2. Single-team match when away is unknown
     if game.awayTeam == "TBD" || game.awayTeam.isEmpty {
-      return pool.first {
+      let oneTeamMatches = pool.filter {
         teamMatches(hName, normalize($0.homeTeam), normalize($0.homeAbbr)) ||
         teamMatches(hName, normalize($0.awayTeam), normalize($0.awayAbbr))
       }
+      return pickClosestToNow(oneTeamMatches)
     }
     return nil
+  }
+
+  /// Of a set of candidate events that all match the team predicate,
+  /// pick the one most likely to be "the right one right now":
+  /// live > closest scheduled time to NOW.
+  private func pickClosestToNow(_ events: [ESPNEvent]) -> ESPNEvent? {
+    guard !events.isEmpty else { return nil }
+    return events.min(by: { a, b in
+      if a.isLive != b.isLive { return a.isLive }
+      return abs(a.scheduledDate.timeIntervalSinceNow) <
+             abs(b.scheduledDate.timeIntervalSinceNow)
+    })
   }
 
   /// Extracts a YYYY-MM-DD date from any path segment in `url`.

@@ -46,6 +46,9 @@ struct HomeView: View {
     }
     .onChange(of: registry.selectedSource) { _, _ in Task { await loadLeagues() } }
     .onChange(of: registry.sources)        { _, _ in Task { await loadLeagues() } }
+    // v2.23: pool toggles change the gap-fill mix without re-fetching ESPN
+    // (ESPNScheduleService cache stays warm).
+    .onChange(of: registry.enabledSourceIDs) { _, _ in Task { await loadLeagues() } }
     // v2.22: favorites only RE-SORT the existing arrays. Previously they
     // re-fetched the entire feed, which under v2.21's ESPN-canonical
     // pipeline meant a fresh scrape + ESPN reconcile every time the user
@@ -185,8 +188,10 @@ struct HomeView: View {
     // v2.22: pull-to-refresh is the manual reload trigger. The feed
     // otherwise loads once per source switch — no background polling,
     // no per-favorite re-fetch.
+    // v2.23: forceRefresh=true so this actually re-scrapes instead of
+    // returning APIDiscovery's cached endpoint result.
     .refreshable {
-      await loadLeagues()
+      await loadLeagues(forceRefresh: true)
     }
   }
 
@@ -256,7 +261,7 @@ struct HomeView: View {
         Button(reason == .cloudflareBlocked ? "Try Again" : "Retry") {
           guard !isRetrying else { return }
           isRetrying = true
-          Task { await loadLeagues(); isRetrying = false }
+          Task { await loadLeagues(forceRefresh: true); isRetrying = false }
         }
         .disabled(isRetrying)
         .buttonStyle(.bordered)
@@ -270,7 +275,7 @@ struct HomeView: View {
         Button("Retry") {
           guard !isRetrying else { return }
           isRetrying = true
-          Task { await loadLeagues(); isRetrying = false }
+          Task { await loadLeagues(forceRefresh: true); isRetrying = false }
         }
         .disabled(isRetrying)
         .buttonStyle(.bordered)
@@ -280,89 +285,119 @@ struct HomeView: View {
 
   // MARK: - Data loading
 
-  private func loadLeagues() async {
-    guard !registry.sources.isEmpty else {
-      isLoadingLeagues = false
-      availableLeagues = []
-      allLiveGames = []
-      return
-    }
-    let source = registry.selectedSource
+  /// v2.23: orchestrator wrapper. Under the new ESPN-first model,
+  /// availableLeagues is derived from the merged games list at the END
+  /// of loading, not fetched separately first. This function just sets
+  /// loading state and delegates to `loadAllLiveGames`.
+  private func loadLeagues(forceRefresh: Bool = false) async {
     loadFailureReason = nil
-    allLiveGames = []
-    // Reset the filter when the source changes — the previous source's
-    // leagues may not be in the new source's chip row.
     selectedFilter = nil
-
-    // v2.21: single-shot loading. Previously the UI eagerly applied cached
-    // chips, then replaced them with fresh chips when the network fetch
-    // returned — visible as a brief "flicker" of one chip set replaced by
-    // another. With the v2.21 ESPN-canonical pipeline reshaping which
-    // games even pass the reconcile filter, that flicker becomes more
-    // disruptive (cached chip → wait → fresh chip → games → some games
-    // disappear after ESPN reconcile). Hold the chips empty + loading
-    // until the fresh fetch lands. Cached chips become a true fallback
-    // for when the network is unreachable.
-    availableLeagues = []
     isLoadingLeagues = true
-
-    do {
-      let fresh = try await source.fetchAvailableLeagues()
-      guard registry.selectedSource.id == source.id else { return }
-      availableLeagues = fresh
-      // Persist only non-empty results so a transient failure doesn't wipe
-      // a previously-good cached league list.
-      if !fresh.isEmpty {
-        registry.persistCachedLeagues(fresh, for: source.id)
-      }
-      Task { await loadAllLiveGames() }
-    } catch let reason as LoadFailureReason {
-      guard registry.selectedSource.id == source.id else { return }
-      // Network/source error — fall back to cached chips so the user
-      // still has UI; loadAllLiveGames will run against the cached set.
-      if let cached = registry.cachedLeaguesForSelected, !cached.isEmpty {
-        availableLeagues = cached
-        Task { await loadAllLiveGames() }
-      } else {
-        availableLeagues = []
-        loadFailureReason = reason
-      }
-    } catch {
-      guard registry.selectedSource.id == source.id else { return }
-      if let cached = registry.cachedLeaguesForSelected, !cached.isEmpty {
-        availableLeagues = cached
-        Task { await loadAllLiveGames() }
-      } else {
-        loadFailureReason = .unreachable
-      }
-    }
+    await loadAllLiveGames(forceRefresh: forceRefresh)
     isLoadingLeagues = false
   }
 
-  private func loadAllLiveGames() async {
-    guard !availableLeagues.isEmpty else { allLiveGames = []; allUpcomingGames = []; return }
+  private func loadAllLiveGames(forceRefresh: Bool = false) async {
     isLoadingLive = true
-    let source = registry.selectedSource
     let favLeagues = favorites.favoriteLeagues
     let favTeams   = favorites.favoriteTeams
     let favSports  = favorites.favoriteSports
+    let enabled = registry.enabledSources
 
-    var all: [Game] = []
-    let registry = self.registry
-    await withTaskGroup(of: (SportLeague, [Game]).self) { group in
-      for league in availableLeagues {
+    // v2.23: ESPN-first listing. Start with the canonical list, no
+    // aggregator dependency. ESPN owns teams, time, score, league.
+    let espnGames = await ESPNScheduleService.shared.todaysGames(forceRefresh: forceRefresh)
+
+    // For each enabled source, scrape its full feed (in parallel).
+    // The aggregator path keeps the v2.21 ESPN-canonical reconcile logic
+    // so ESPN-covered fixtures it returns are already ESPN-shaped — easy
+    // to match by team-pair. Non-ESPN-covered fixtures (cricket, IIHF,
+    // MotoGP, niche soccer) come back unchanged.
+    var aggregatorResults: [(sourceID: String, games: [Game])] = []
+    await withTaskGroup(of: (String, [Game]).self) { group in
+      for source in enabled {
         group.addTask {
-          let fresh = (try? await source.fetchGames(for: league)) ?? []
-          return (league, fresh)
+          guard let leagues = try? await source.fetchAvailableLeagues(forceRefresh: forceRefresh) else {
+            return (source.id, [])
+          }
+          var bucket: [Game] = []
+          await withTaskGroup(of: [Game].self) { sub in
+            for league in leagues {
+              sub.addTask {
+                (try? await source.fetchGames(for: league)) ?? []
+              }
+            }
+            for await g in sub { bucket.append(contentsOf: g) }
+          }
+          return (source.id, bucket)
         }
       }
-      for await (league, games) in group {
-        registry.storeGames(games, for: league, source: source)
-        all.append(contentsOf: games)
+      for await pair in group { aggregatorResults.append(pair) }
+    }
+
+    // Merge: attach streamURLs to ESPN games via team-pair matching;
+    // games the aggregator surfaced that ESPN doesn't have become
+    // gap-fills IFF the league is one ESPN doesn't cover. Stale ESPN-
+    // covered fixtures (Streamed-images-json's "Detroit Pistons vs
+    // Orlando Magic" from two weeks ago) get dropped — they have no
+    // ESPN match in the supported set, but their league is ESPN-covered,
+    // so we know they're stale rather than a coverage gap.
+    var streamsByEspnID: [String: [GameStreamCandidate]] = [:]
+    var gapFills: [Game] = []
+    for (sourceID, games) in aggregatorResults {
+      for agg in games {
+        if let espn = Self.matchESPNGame(for: agg, in: espnGames) {
+          let cand = GameStreamCandidate(sourceID: sourceID, pageURL: agg.pageURL)
+          streamsByEspnID[espn.id, default: []].append(cand)
+        } else if ESPNScoreboardService.apiPath(for: agg.league) == nil {
+          // League ESPN doesn't cover — keep as gap-fill.
+          gapFills.append(agg)
+        }
+        // else: ESPN-covered league + no ESPN match = stale, drop.
       }
     }
 
-    await LogoPrefetcher.shared.warm(games: all)
+    // Build the final list. ESPN-canonical games carry their canonical
+    // fields untouched; aggregator-supplied pageURL becomes the primary
+    // pageURL when available (so PlayerView's existing path keeps working
+    // until v2.24's StreamResolver rolls in).
+    let espnWithStreams: [Game] = espnGames.map { game in
+      let streams = streamsByEspnID[game.id] ?? []
+      let primaryURL = streams.first?.pageURL ?? game.pageURL
+      return Game(
+        id: game.id,
+        homeTeam: game.homeTeam,
+        awayTeam: game.awayTeam,
+        scheduledTime: game.scheduledTime,
+        timeIsKnown: game.timeIsKnown,
+        isLive: game.isLive,
+        liveStatus: game.liveStatus,
+        isEvent: game.isEvent,
+        isPremium: game.isPremium,
+        pageURL: primaryURL,
+        streamURLs: streams,
+        league: game.league
+      )
+    }
+
+    // Dedupe gap-fills across sources (same fixture from multiple
+    // aggregators) using v2.20's team-pair key.
+    let dedupedGapFills = Self.dedupeGapFills(gapFills)
+    let allGames = espnWithStreams + dedupedGapFills
+
+    await LogoPrefetcher.shared.warm(games: allGames)
+
+    // Update availableLeagues to the union of leagues that have games.
+    let leaguesWithGames = Set(allGames.map(\.league))
+    availableLeagues = Array(leaguesWithGames).sorted {
+      if $0.popularityRank != $1.popularityRank {
+        return $0.popularityRank < $1.popularityRank
+      }
+      return $0.displayName < $1.displayName
+    }
+
+    // Re-use the local `all` variable name the sort closures below expect.
+    let all = allGames
 
     let liveSortFn: (Game, Game) -> Bool = { a, b in
       let aFav = isFavorite(a, leagues: favLeagues, teams: favTeams, sports: favSports)
@@ -391,7 +426,72 @@ struct HomeView: View {
 
     allLiveGames     = all.filter {  $0.isLive }.sorted(by: liveSortFn)
     allUpcomingGames = all.filter { !$0.isLive }.sorted(by: upcomingSortFn)
+
+    // v2.23: surface a failure reason only when the entire pipeline came
+    // back empty AND we have no enabled sources to retry. ESPN alone is
+    // enough to keep the feed populated for most users; the empty case
+    // is rare (e.g., off-season + ESPN issue + no aggregators enabled).
+    if all.isEmpty && enabled.isEmpty {
+      loadFailureReason = .noLeagues
+    }
     isLoadingLive = false
+  }
+
+  /// v2.23: order-insensitive team-pair match between an aggregator-side
+  /// Game and one of ESPN's canonical Games. ESPN-covered aggregator
+  /// fixtures already carry ESPN-canonical team names (the v2.21
+  /// reconcileWithESPN overwrites them on the way out of fetchGames), so
+  /// this is an exact-after-normalization match for ESPN-covered leagues.
+  /// Non-ESPN aggregator fixtures won't find a match here — that's the
+  /// signal to keep them as gap-fills.
+  static func matchESPNGame(for aggGame: Game, in espnGames: [Game]) -> Game? {
+    let aggKey = pairKeyForMatching(home: aggGame.homeTeam, away: aggGame.awayTeam)
+    return espnGames.first(where: { espn in
+      pairKeyForMatching(home: espn.homeTeam, away: espn.awayTeam) == aggKey
+    })
+  }
+
+  private static func pairKeyForMatching(home: String, away: String) -> String {
+    let h = normalizeForMatch(home)
+    let a = normalizeForMatch(away)
+    return h <= a ? "\(h)|\(a)" : "\(a)|\(h)"
+  }
+
+  private static func normalizeForMatch(_ s: String) -> String {
+    s.lowercased()
+      .folding(options: .diacriticInsensitive, locale: Locale(identifier: "en_US"))
+      .replacingOccurrences(of: "[^a-z0-9 ]", with: " ", options: .regularExpression)
+      .replacingOccurrences(of: " +", with: " ", options: .regularExpression)
+      .trimmingCharacters(in: .whitespaces)
+  }
+
+  /// Dedupe gap-fills across sources by team-pair. Multiple aggregators
+  /// may list the same cricket / IIHF fixture; we keep the most-info-rich
+  /// one (live > has-score > has-time > first).
+  static func dedupeGapFills(_ games: [Game]) -> [Game] {
+    var byKey: [String: Game] = [:]
+    var orderKeys: [String] = []
+    for game in games {
+      let key = pairKeyForMatching(home: game.homeTeam, away: game.awayTeam)
+      if let existing = byKey[key] {
+        byKey[key] = preferredGapFill(existing, game)
+      } else {
+        byKey[key] = game
+        orderKeys.append(key)
+      }
+    }
+    return orderKeys.compactMap { byKey[$0] }
+  }
+
+  private static func preferredGapFill(_ a: Game, _ b: Game) -> Game {
+    if a.isLive != b.isLive { return a.isLive ? a : b }
+    let aHasStatus = a.liveStatus?.isEmpty == false
+    let bHasStatus = b.liveStatus?.isEmpty == false
+    if aHasStatus != bHasStatus { return aHasStatus ? a : b }
+    let aHasTime = a.scheduledTime != nil && a.timeIsKnown
+    let bHasTime = b.scheduledTime != nil && b.timeIsKnown
+    if aHasTime != bHasTime { return aHasTime ? a : b }
+    return a
   }
 
   /// Re-sorts `allLiveGames` and `allUpcomingGames` against current
@@ -454,7 +554,12 @@ struct HomeView: View {
 struct LoadingPhraseView: View {
   @State private var index: Int = Int.random(in: 0..<LoadingPhraseView.phrases.count)
 
-  static let phrases: [String] = [
+  // v2.23: split into two buckets, then interleave 2-admiring-then-1-jab
+  // so consecutive indices alternate. Previously the array was admiring
+  // first, jabs last — a random START index could land in the jab section
+  // and cycle through 15 jabs in a row before transitioning. Smooth 2:1
+  // ratio keeps the lighter mix the user wanted.
+  private static let admiringPhrases: [String] = [
     "Lobbing it up for LeBron",
     "Catching passes from Mahomes",
     "Serving to Alcaraz",
@@ -485,7 +590,9 @@ struct LoadingPhraseView: View {
     "Rolling out the mat for Khabib",
     "Charting laps with Verstappen",
     "Splitting tens with Tiger",
-    // Mild jabs — playful, narrative-based, no personal attacks.
+  ]
+
+  private static let jabPhrases: [String] = [
     "Choking the playoffs with Harden",
     "Blowing a 3-1 lead with Steph",
     "Missing free throws with Shaq",
@@ -502,6 +609,17 @@ struct LoadingPhraseView: View {
     "Running the option wrong with Zach Wilson",
     "Trying to medal in skiing with Lindsey",
   ]
+
+  static let phrases: [String] = {
+    var out: [String] = []
+    var ai = 0, ji = 0
+    while ai < admiringPhrases.count || ji < jabPhrases.count {
+      if ai < admiringPhrases.count { out.append(admiringPhrases[ai]); ai += 1 }
+      if ai < admiringPhrases.count { out.append(admiringPhrases[ai]); ai += 1 }
+      if ji < jabPhrases.count     { out.append(jabPhrases[ji]);     ji += 1 }
+    }
+    return out
+  }()
 
   var body: some View {
     VStack(spacing: 14) {

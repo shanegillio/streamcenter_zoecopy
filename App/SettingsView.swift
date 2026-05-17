@@ -110,11 +110,8 @@ struct SourceListView: View {
   var body: some View {
     ZStack {
       List {
-        ForEach(registry.sources) { source in
-          Button {
-            registry.selectedSource = source
-            dismiss()
-          } label: {
+        Section {
+          ForEach(registry.sources) { source in
             HStack(spacing: 12) {
               VStack(alignment: .leading, spacing: 3) {
                 Text(source.name)
@@ -125,22 +122,36 @@ struct SourceListView: View {
                   .foregroundStyle(.blue)
               }
               Spacer()
-              if source.id == registry.selectedSource.id {
-                Image(systemName: "checkmark")
-                  .font(.body.weight(.semibold))
-                  .foregroundStyle(.tint)
+              // v2.23: multi-toggle pool. Each source has an independent
+              // Enabled state. The bound toggle writes back to
+              // SourceRegistry.enabledSourceIDs which triggers HomeView's
+              // onChange to recompute the merged feed.
+              Toggle("", isOn: Binding(
+                get: { registry.enabledSourceIDs.contains(source.id) },
+                set: { isOn in
+                  if isOn {
+                    registry.enabledSourceIDs.insert(source.id)
+                  } else {
+                    registry.enabledSourceIDs.remove(source.id)
+                  }
+                }
+              ))
+              .labelsHidden()
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+              if !source.isBuiltIn {
+                Button(role: .destructive) {
+                  registry.removeSource(source)
+                } label: {
+                  Label("Delete", systemImage: "trash")
+                }
               }
             }
           }
-          .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-            if !source.isBuiltIn {
-              Button(role: .destructive) {
-                registry.removeSource(source)
-              } label: {
-                Label("Delete", systemImage: "trash")
-              }
-            }
-          }
+        } footer: {
+          Text("Any enabled source may be used to find a stream when you tap a game. Add multiple to improve coverage — ESPN provides the game listings; sources serve the streams.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
         }
       }
       .listStyle(.insetGrouped)

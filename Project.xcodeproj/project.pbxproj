@@ -38,6 +38,7 @@
 		EC4A1F2B8D3C5E7A9B0D2F4E /* ESPNScoreboardService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC4A1F2B8D3C5E7A9B0D2F4F /* ESPNScoreboardService.swift */; };
 		AB1F2C3D4E5F6789ABCDEF01 /* TeamDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1F2C3D4E5F6789ABCDEF02 /* TeamDatabase.swift */; };
 		CD3E4F5A6B7C8D9EABCDEF03 /* teams.json in Resources */ = {isa = PBXBuildFile; fileRef = CD3E4F5A6B7C8D9EABCDEF04 /* teams.json */; };
+		EF2C3D4E5F6789ABCDEF0123 /* ESPNScheduleService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF2C3D4E5F6789ABCDEF0124 /* ESPNScheduleService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -71,6 +72,7 @@
 		EC4A1F2B8D3C5E7A9B0D2F4F /* ESPNScoreboardService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ESPNScoreboardService.swift; sourceTree = "<group>"; };
 		AB1F2C3D4E5F6789ABCDEF02 /* TeamDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeamDatabase.swift; sourceTree = "<group>"; };
 		CD3E4F5A6B7C8D9EABCDEF04 /* teams.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = teams.json; sourceTree = "<group>"; };
+		EF2C3D4E5F6789ABCDEF0124 /* ESPNScheduleService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ESPNScheduleService.swift; sourceTree = "<group>"; };
 		F61FD923A4E0905961E4DCB5 /* CredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialStore.swift; sourceTree = "<group>"; };
 		FCFA4080C079EB355C8D66AA /* TeamLogoCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeamLogoCache.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -102,6 +104,7 @@
 				EC4A1F2B8D3C5E7A9B0D2F4F /* ESPNScoreboardService.swift */,
 				AB1F2C3D4E5F6789ABCDEF02 /* TeamDatabase.swift */,
 				CD3E4F5A6B7C8D9EABCDEF04 /* teams.json */,
+				EF2C3D4E5F6789ABCDEF0124 /* ESPNScheduleService.swift */,
 				0E3B8161D65E9ED45FB471A1 /* PlayerView.swift */,
 				7C2AF65F701FFFD95FD505B2 /* SettingsView.swift */,
 				3107DED6A1CE19FF2BC38753 /* SportLeague.swift */,
@@ -212,6 +215,7 @@
 				EE6F7A8B9C0D1E2F30415263 /* HostFallback.swift in Sources */,
 				EC4A1F2B8D3C5E7A9B0D2F4E /* ESPNScoreboardService.swift in Sources */,
 				AB1F2C3D4E5F6789ABCDEF01 /* TeamDatabase.swift in Sources */,
+				EF2C3D4E5F6789ABCDEF0123 /* ESPNScheduleService.swift in Sources */,
 				0CAFBE3F22ED0EF5B22E52B7 /* FavoritesStore.swift in Sources */,
 				9828E9304E94EAFF0F6DB1A8 /* FavoritesView.swift in Sources */,
 				58112B4E4C2C0F71662140DF /* Game.swift in Sources */,

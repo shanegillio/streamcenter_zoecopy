@@ -7,7 +7,18 @@ protocol StreamSource {
   var baseURL: URL { get }
 
   func fetchAvailableLeagues() async throws -> [SportLeague]
+  func fetchAvailableLeagues(forceRefresh: Bool) async throws -> [SportLeague]
   func fetchGames(for league: SportLeague) async throws -> [Game]
+}
+
+extension StreamSource {
+  /// Default convenience: existing callers that don't care about cache state
+  /// keep getting cached results. Force-refresh paths (pull-to-refresh,
+  /// Retry, Re-run Scrape) pass `true` to invalidate `APIDiscovery`'s
+  /// per-host cache before fetching.
+  func fetchAvailableLeagues(forceRefresh: Bool) async throws -> [SportLeague] {
+    try await fetchAvailableLeagues()
+  }
 }
 
 /// Distinguishes *why* `fetchAvailableLeagues` couldn't find any leagues so
@@ -74,6 +85,7 @@ struct AnyStreamSource: Identifiable, Equatable {
   let baseURL: URL
   let isBuiltIn: Bool
   private let _fetchLeagues: () async throws -> [SportLeague]
+  private let _fetchLeaguesForced: (Bool) async throws -> [SportLeague]
   private let _fetchGames: (SportLeague) async throws -> [Game]
 
   init<S: StreamSource>(_ source: S, builtIn: Bool = false) {
@@ -82,11 +94,16 @@ struct AnyStreamSource: Identifiable, Equatable {
     baseURL = source.baseURL
     isBuiltIn = builtIn
     _fetchLeagues = source.fetchAvailableLeagues
+    _fetchLeaguesForced = source.fetchAvailableLeagues(forceRefresh:)
     _fetchGames = source.fetchGames
   }
 
   func fetchAvailableLeagues() async throws -> [SportLeague] {
     try await _fetchLeagues()
+  }
+
+  func fetchAvailableLeagues(forceRefresh: Bool) async throws -> [SportLeague] {
+    try await _fetchLeaguesForced(forceRefresh)
   }
 
   func fetchGames(for league: SportLeague) async throws -> [Game] {
@@ -104,6 +121,24 @@ final class SourceRegistry {
 
   private(set) var sources: [AnyStreamSource]
   var selectedSource: AnyStreamSource
+  /// v2.23: the set of source IDs the user has enabled for stream
+  /// resolution. Multiple sources can be active simultaneously; the
+  /// HomeView orchestrator pools their scrapes for gap-filling against
+  /// ESPN's canonical listing, and on-tap stream resolution tries each
+  /// in turn. `selectedSource` is retained for backwards compatibility
+  /// with code paths not yet migrated; it's the "primary" of the pool.
+  var enabledSourceIDs: Set<String> {
+    didSet {
+      UserDefaults.standard.set(Array(enabledSourceIDs), forKey: Self.enabledSourceIDsKey)
+    }
+  }
+
+  /// Computed pool: every added source whose id is in `enabledSourceIDs`.
+  /// Order follows `sources` (insertion order). Empty when no sources are
+  /// enabled — HomeView treats that as "ESPN-only listing".
+  var enabledSources: [AnyStreamSource] {
+    sources.filter { enabledSourceIDs.contains($0.id) }
+  }
   // Last-known leagues keyed by source ID, restored from UserDefaults on launch
   // so the grid can render immediately before the network fetch completes.
   private var leagueCache: [String: [SportLeague]] = [:]
@@ -126,6 +161,7 @@ final class SourceRegistry {
 
   private static let customSourcesKey  = "customSources"
   private static let cachedLeaguesKey  = "cachedLeagues_v2"
+  private static let enabledSourceIDsKey = "enabledSourceIDs_v2.23"
 
   private init() {
     var all: [AnyStreamSource] = []
@@ -143,6 +179,16 @@ final class SourceRegistry {
       CustomStreamSource(name: "None", baseURL: URL(string: "about:blank")!),
       builtIn: false
     )
+    // v2.23: restore enabled source pool. Migration: if no persisted set
+    // exists (upgrade from v2.22 or earlier), seed with every available
+    // source — the user previously had a single "selected" source, and
+    // multi-source pooling is intended to be additive (the listing they
+    // saw before still works; new sources are easy to add).
+    if let persisted = UserDefaults.standard.array(forKey: Self.enabledSourceIDsKey) as? [String] {
+      enabledSourceIDs = Set(persisted)
+    } else {
+      enabledSourceIDs = Set(all.map(\.id))
+    }
     // Restore per-source league cache from UserDefaults
     if let raw = UserDefaults.standard.dictionary(forKey: Self.cachedLeaguesKey) as? [String: [String]] {
       leagueCache = raw.mapValues { $0.compactMap { SportLeague(rawValue: $0) } }
@@ -225,6 +271,10 @@ final class SourceRegistry {
     guard !sources.contains(where: { $0.baseURL.host == url.host }) else { return false }
     let source = AnyStreamSource(CustomStreamSource(name: name, baseURL: url), builtIn: false)
     sources.append(source)
+    // v2.23: newly-added sources are enabled by default — the v2.23 pool
+    // model means "added" and "enabled" should be the same thing until
+    // the user explicitly toggles one off in Settings.
+    enabledSourceIDs.insert(source.id)
     persistCustomSources()
     return true
   }
@@ -232,6 +282,7 @@ final class SourceRegistry {
   func removeSource(_ source: AnyStreamSource) {
     guard !source.isBuiltIn else { return }
     sources.removeAll { $0.id == source.id }
+    enabledSourceIDs.remove(source.id)
     if selectedSource == source {
       selectedSource = sources.first ?? AnyStreamSource(
         CustomStreamSource(name: "None", baseURL: URL(string: "about:blank")!),

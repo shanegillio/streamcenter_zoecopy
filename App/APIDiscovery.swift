@@ -163,6 +163,20 @@ actor APIDiscovery {
     return workingEndpoint[host] ?? nil
   }
 
+  /// Drops every per-host cache entry: working endpoint, expiry, referer,
+  /// origin, and observed-URL set. Used by force-refresh paths (pull-to-
+  /// refresh, the Retry / Re-run Scrape buttons) to guarantee the next
+  /// `fetchGames(for:)` call goes back to the network instead of returning
+  /// cached data.
+  func invalidate(host: String) {
+    let h = host.lowercased()
+    workingEndpoint.removeValue(forKey: h)
+    endpointExpiry.removeValue(forKey: h)
+    workingReferer.removeValue(forKey: h)
+    workingOrigin.removeValue(forKey: h)
+    workingObservedSources.removeValue(forKey: h)
+  }
+
   /// Decode an explicit list of URLs (observed by the WebView's fetch/XHR
   /// shim during a scrape) and return the first non-empty `Result`. Bypasses
   /// the candidate-path probing — caller hands us URLs they know the page

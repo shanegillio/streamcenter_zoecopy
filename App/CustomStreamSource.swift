@@ -396,6 +396,18 @@ struct CustomStreamSource: StreamSource {
 
   // MARK: - Public API
 
+  /// Force-refresh variant: drops `APIDiscovery`'s per-host cache before
+  /// running the normal fetch. Used by pull-to-refresh, the Retry button
+  /// on error states, and DiagnosticsView's "Re-run Scrape". Without this,
+  /// those user-initiated actions would silently return cached data and
+  /// the user would correctly perceive that "rescan didn't do anything."
+  func fetchAvailableLeagues(forceRefresh: Bool) async throws -> [SportLeague] {
+    if forceRefresh {
+      await APIDiscovery.shared.invalidate(host: baseURL.host ?? "")
+    }
+    return try await fetchAvailableLeagues()
+  }
+
   func fetchAvailableLeagues() async throws -> [SportLeague] {
     // Kick off ESPN prewarm at the top so every downstream path — including
     // the API-discovery and observed-URL early returns below — has a warm

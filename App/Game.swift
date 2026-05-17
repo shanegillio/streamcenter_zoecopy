@@ -1,5 +1,16 @@
 import Foundation
 
+/// One aggregator's stream listing for a particular game. Multiple
+/// aggregators can serve the same game; v2.23's HomeView orchestrator
+/// collects every match into `Game.streamURLs` so on-tap resolution
+/// can try each in turn (parallel try-all is planned for v2.24).
+struct GameStreamCandidate: Equatable, Hashable, Codable {
+  /// `AnyStreamSource.id` — the aggregator providing this URL.
+  let sourceID: String
+  /// Per-game landing page on the aggregator (`game.pageURL` equivalent).
+  let pageURL: URL
+}
+
 struct Game: Identifiable, Equatable, Hashable {
   let id: String
   let homeTeam: String
@@ -15,13 +26,24 @@ struct Game: Identifiable, Equatable, Hashable {
   let isEvent: Bool
   /// True when the source site indicates this stream requires a paid subscription.
   let isPremium: Bool
+  /// Primary stream URL (legacy field). For ESPN-canonical games that
+  /// matched at least one aggregator, this is `streamURLs.first?.pageURL`.
+  /// For aggregator-only gap-fill games, this is the aggregator's URL.
+  /// Kept for compatibility with `PlayerView`'s existing constructor.
   let pageURL: URL
+  /// v2.23: every aggregator that produced a matching listing for this
+  /// game gets an entry here. Empty for ESPN-canonical games where no
+  /// enabled aggregator surfaced a listing — on-tap resolution would
+  /// have to fall back to LLM-driven search (planned for v2.24).
+  let streamURLs: [GameStreamCandidate]
   let league: SportLeague
 
   init(id: String, homeTeam: String, awayTeam: String, scheduledTime: Date?,
        timeIsKnown: Bool = true,
        isLive: Bool, liveStatus: String?, isEvent: Bool = false, isPremium: Bool = false,
-       pageURL: URL, league: SportLeague) {
+       pageURL: URL,
+       streamURLs: [GameStreamCandidate] = [],
+       league: SportLeague) {
     self.id = id
     self.homeTeam = homeTeam
     self.awayTeam = awayTeam
@@ -32,6 +54,7 @@ struct Game: Identifiable, Equatable, Hashable {
     self.isEvent = isEvent
     self.isPremium = isPremium
     self.pageURL = pageURL
+    self.streamURLs = streamURLs
     self.league = league
   }
 

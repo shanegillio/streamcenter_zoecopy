@@ -356,7 +356,10 @@ struct DiagnosticsView: View {
       isRunning = false
       refreshKey += 1
     }
-    _ = try? await source.fetchAvailableLeagues()
+    // v2.23: forceRefresh=true so the button actually re-scrapes the
+    // network. Previously this would hit APIDiscovery's per-host cache
+    // and return instantly without doing anything visible.
+    _ = try? await source.fetchAvailableLeagues(forceRefresh: true)
   }
 
   private static let timeFmt: DateFormatter = {
