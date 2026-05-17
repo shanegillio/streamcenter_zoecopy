@@ -109,7 +109,11 @@ enum TeamLogoService {
 }
 
 extension TeamLogoService {
-  // Try each keyword in the table against the team name
+  // Try each keyword in the table against the team name.
+  // Uses word-boundary matching — required because plain substring matching
+  // produces false positives like "Birmingham Stallions" matching "lions"
+  // (returns Detroit Lions logo). A keyword counts as a match only when
+  // surrounded by a non-letter (or string edge) on each side.
   static func resolve(teamName: String, league: SportLeague) -> URL? {
     let lower = teamName.lowercased()
     guard let sport = espnSport(for: league) else { return nil }
@@ -122,9 +126,27 @@ extension TeamLogoService {
     case .nhl: table = nhl
     default: return nil
     }
-    for (keyword, abbr) in table where lower.contains(keyword) {
+    for (keyword, abbr) in table where matchesAsWord(haystack: lower, keyword: keyword) {
       return URL(string: "https://a.espncdn.com/i/teamlogos/\(sport)/500/\(abbr).png")
     }
     return nil
+  }
+
+  /// Returns true when `keyword` appears in `haystack` flanked by non-letter
+  /// characters (or string edges) on both sides. Handles multi-word keywords
+  /// like "red sox" and "blue jays".
+  private static func matchesAsWord(haystack: String, keyword: String) -> Bool {
+    guard let r = haystack.range(of: keyword) else { return false }
+    let isBoundaryBefore: Bool = {
+      if r.lowerBound == haystack.startIndex { return true }
+      let prev = haystack[haystack.index(before: r.lowerBound)]
+      return !prev.isLetter
+    }()
+    let isBoundaryAfter: Bool = {
+      if r.upperBound == haystack.endIndex { return true }
+      let next = haystack[r.upperBound]
+      return !next.isLetter
+    }()
+    return isBoundaryBefore && isBoundaryAfter
   }
 }

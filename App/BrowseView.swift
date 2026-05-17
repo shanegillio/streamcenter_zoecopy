@@ -18,7 +18,7 @@ struct BrowseView: View {
         StreamWebView(
           url: source.baseURL,
           ruleList: ruleList,
-          onStreamURLFound: { streamURL in
+          onStreamURLFound: { streamURL, _ in
             let p = AVPlayer(url: streamURL)
             avPlayer = p
             p.play()

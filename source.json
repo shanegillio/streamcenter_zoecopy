@@ -1,0 +1,58 @@
+{
+  "name": "Out of Credits Apps",
+  "subtitle": "Sports streams. No ads. Your way.",
+  "description": "Home of StreamCenter \u2014 a free, open sports streaming app that lets you watch live games from any source you choose. Add your own stream sites, favorite your teams and leagues, and enjoy completely ad-free playback. No subscriptions, no popups, no nonsense.",
+  "iconURL": "https://shanegillio.github.io/altstore-source/images/icon.png",
+  "headerURL": "https://shanegillio.github.io/altstore-source/images/header.png",
+  "website": "https://shanegillio.github.io/altstore-source",
+  "tintColor": "#E03030",
+  "featuredApps": [
+    "app.bitrig.new.b3037d94-1a52-4185-b143-1daa8fdcafe1"
+  ],
+  "apps": [
+    {
+      "name": "StreamCenter",
+      "bundleIdentifier": "app.bitrig.new.b3037d94-1a52-4185-b143-1daa8fdcafe1",
+      "developerName": "Out of Credits",
+      "subtitle": "Live sports streams, zero ads.",
+      "localizedDescription": "StreamCenter is your all-in-one hub for live sports streaming.\n\nWatch NFL, NBA, MLB, NHL, soccer, MMA, boxing, and more \u2014 pulled straight from the web, with no ads interrupting the action.\n\n\u2022 Add any sports streaming site as a custom source\n\u2022 Browse live and upcoming games across every league\n\u2022 Favorite your teams and leagues for instant access\n\u2022 Ad-free playback powered by a built-in content blocker\n\u2022 Supports m3u8 and DASH streams with native AVPlayer quality\n\u2022 No account required. No subscription. Completely free.",
+      "iconURL": "https://shanegillio.github.io/altstore-source/images/icon.png",
+      "tintColor": "#E03030",
+      "screenshots": [
+        "https://shanegillio.github.io/altstore-source/images/screenshot_streams.png",
+        "https://shanegillio.github.io/altstore-source/images/screenshot_leagues.png",
+        "https://shanegillio.github.io/altstore-source/images/screenshot_settings.png"
+      ],
+      "versions": [
+        {
+          "version": "1.0",
+          "date": "2026-05-15",
+          "size": 747962,
+          "downloadURL": "https://github.com/shanegillio/altstore-source/releases/download/v1.0/StreamCenter-1.0.ipa",
+          "localizedDescription": "HostFallback silently retries TLD variants when a source hostname fails DNS (content-block / carrier filter / Screen Time). Looser league matching catches /league/nflstreams, /nbaregular66, /mlbwildcard style slugs. Plus prior fixes: CachedAsyncImage, persistent TeamLogoStore, word-boundary team match, UFL\u2192Other, ESPN-aware classification, generic API discovery. No default sources \u2014 add your own.",
+          "buildVersion": "1",
+          "minOSVersion": "17.0"
+        }
+      ],
+      "appPermissions": {
+        "entitlements": [
+          "application-identifier",
+          "com.apple.developer.team-identifier",
+          "get-task-allow"
+        ],
+        "privacy": {}
+      }
+    }
+  ],
+  "news": [
+    {
+      "title": "StreamCenter is here!",
+      "identifier": "streamcenter_launch",
+      "caption": "Watch live sports from any source \u2014 completely ad-free.",
+      "date": "2026-05-14",
+      "tintColor": "#E03030",
+      "notify": true,
+      "appID": "app.bitrig.new.b3037d94-1a52-4185-b143-1daa8fdcafe1"
+    }
+  ]
+}

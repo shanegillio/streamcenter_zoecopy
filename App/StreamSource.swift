@@ -10,6 +10,64 @@ protocol StreamSource {
   func fetchGames(for league: SportLeague) async throws -> [Game]
 }
 
+/// Distinguishes *why* `fetchAvailableLeagues` couldn't find any leagues so
+/// HomeView can render a clearer empty state than the catch-all "No leagues
+/// detected". Thrown by `CustomStreamSource.fetchAvailableLeagues` when the
+/// scrape lands on a recognisable block / sinkhole / parking page; legitimate
+/// "site loaded fine but has no games today" still returns an empty array
+/// rather than throwing.
+enum LoadFailureReason: Error, Equatable {
+  /// DNS / TCP / TLS failure — the host can't be reached at all.
+  case unreachable
+  /// Cloudflare rate-limit (1015) or unresolved challenge (1020 / "Just a moment…").
+  case cloudflareBlocked
+  /// MPAA / Imperva takedown landing (alliance4creativity.com etc.).
+  case sinkholed
+  /// Domain-parking service (Rebrandly broken-link, ParkLogic, HugeDomains, GoDaddy, Sedo).
+  case parked
+  /// Catch-all when the LLM classifier returns an unknown blocking page type
+  /// or when the homepage loads but no games + no classifiable hint is found.
+  case noLeagues
+
+  /// Headline shown in HomeView's empty state.
+  var emptyStateHeadline: String {
+    switch self {
+    case .unreachable:        return "Can't reach this site"
+    case .cloudflareBlocked:  return "Blocked by Cloudflare"
+    case .sinkholed:          return "Domain has been redirected"
+    case .parked:             return "This domain has no streams"
+    case .noLeagues:          return "No leagues detected"
+    }
+  }
+
+  /// Detail copy below the headline.
+  var emptyStateBody: String {
+    switch self {
+    case .unreachable:
+      return "Check your connection, then try again. You can also browse the site manually."
+    case .cloudflareBlocked:
+      return "The site's CDN is rate-limiting or challenging this device. Try again in a few minutes — if it keeps happening, your network IP may be flagged."
+    case .sinkholed:
+      return "The address you entered now redirects to a piracy-awareness landing page. Try a different mirror in Settings."
+    case .parked:
+      return "Double-check the URL — a one-letter typo can land on the wrong site."
+    case .noLeagues:
+      return "The site loaded but no game listings were found. Browse the site manually — streams will be intercepted automatically when you tap one."
+    }
+  }
+
+  /// SF Symbol for the empty state icon.
+  var emptyStateSymbol: String {
+    switch self {
+    case .unreachable:        return "wifi.exclamationmark"
+    case .cloudflareBlocked:  return "shield.lefthalf.filled.slash"
+    case .sinkholed:          return "arrow.uturn.right.circle"
+    case .parked:             return "square.dashed"
+    case .noLeagues:          return "questionmark.circle"
+    }
+  }
+}
+
 struct AnyStreamSource: Identifiable, Equatable {
   let id: String
   let name: String
@@ -46,14 +104,31 @@ final class SourceRegistry {
 
   private(set) var sources: [AnyStreamSource]
   var selectedSource: AnyStreamSource
+  // Last-known leagues keyed by source ID, restored from UserDefaults on launch
+  // so the grid can render immediately before the network fetch completes.
+  private var leagueCache: [String: [SportLeague]] = [:]
 
-  private static let customSourcesKey = "customSources"
+  // In-memory game cache so the Streams tab's per-league fetch can be reused
+  // when the user taps a league tile (GamesView). 60 s TTL — same as
+  // ScrapeCache so layers expire together.
+  private var gameCache: [String: (games: [Game], expiry: Date)] = [:]
+
+  // Per-source recent scrape diagnostics, surfaced by the in-app
+  // Settings → Source Diagnostics view. Keeps the last 30 entries per source.
+  private var scrapeDiagnostics: [String: [ScrapeDiagnostic]] = [:]
+  // The most recent scraped link list per source, used by DiagnosticsView to
+  // show the raw extracted anchors/cards (with GAME/LEAGUE badges computed
+  // by the view itself).
+  private var lastScrapeLinks: [String: [ScrapedLink]] = [:]
+
+  // Leagues for the currently selected source (nil = not yet cached for this source).
+  var cachedLeaguesForSelected: [SportLeague]? { leagueCache[selectedSource.id] }
+
+  private static let customSourcesKey  = "customSources"
+  private static let cachedLeaguesKey  = "cachedLeagues_v2"
 
   private init() {
-    var all: [AnyStreamSource] = [
-      AnyStreamSource(BuffStreamsSource(), builtIn: true),
-      AnyStreamSource(PPVToSource(), builtIn: true),
-    ]
+    var all: [AnyStreamSource] = []
     if let saved = UserDefaults.standard.array(forKey: Self.customSourcesKey) as? [[String: String]] {
       for entry in saved {
         if let name = entry["name"], let urlStr = entry["url"], let url = URL(string: urlStr) {
@@ -62,7 +137,83 @@ final class SourceRegistry {
       }
     }
     sources = all
-    selectedSource = all[0]
+    // selectedSource is the first saved source, or a sentinel placeholder that shows the empty state.
+    // HomeView guards against using the placeholder when sources is empty.
+    selectedSource = all.first ?? AnyStreamSource(
+      CustomStreamSource(name: "None", baseURL: URL(string: "about:blank")!),
+      builtIn: false
+    )
+    // Restore per-source league cache from UserDefaults
+    if let raw = UserDefaults.standard.dictionary(forKey: Self.cachedLeaguesKey) as? [String: [String]] {
+      leagueCache = raw.mapValues { $0.compactMap { SportLeague(rawValue: $0) } }
+    }
+  }
+
+  func persistCachedLeagues(_ leagues: [SportLeague], for sourceID: String) {
+    leagueCache[sourceID] = leagues
+    let raw = leagueCache.mapValues { $0.map { $0.rawValue } }
+    UserDefaults.standard.set(raw, forKey: Self.cachedLeaguesKey)
+  }
+
+  // MARK: - Mirror replacement (called when HostFallback finds a working TLD variant)
+
+  /// Replaces the URL of an existing source. Used when `HostFallback` finds a
+  /// working TLD variant after the user-typed host failed DNS. The change is
+  /// persisted to UserDefaults so the source-list UI shows the actual
+  /// reachable URL and subsequent launches go straight to it. Source ID
+  /// stays the same (it's the original host) so caches keyed by source ID
+  /// keep working — only the URL inside `AnyStreamSource` changes.
+  func replaceSourceURL(originalID: String, newURL: URL) {
+    guard let idx = sources.firstIndex(where: { $0.id == originalID }) else { return }
+    let old = sources[idx]
+    let replacement = AnyStreamSource(
+      CustomStreamSource(name: old.name, baseURL: newURL),
+      builtIn: old.isBuiltIn
+    )
+    sources[idx] = replacement
+    if selectedSource.id == originalID {
+      selectedSource = replacement
+    }
+    persistCustomSources()
+  }
+
+  // MARK: - Game cache
+
+  private static func gameCacheKey(sourceID: String, leagueID: String) -> String {
+    "\(sourceID)|\(leagueID)"
+  }
+
+  /// Returns games for (source, league) when a fresh (< 60 s) entry exists.
+  func cachedGames(for league: SportLeague, source: AnyStreamSource) -> [Game]? {
+    let key = Self.gameCacheKey(sourceID: source.id, leagueID: league.id)
+    guard let entry = gameCache[key], Date() < entry.expiry else { return nil }
+    return entry.games
+  }
+
+  /// Writes games to the cache with a 60 s TTL.
+  func storeGames(_ games: [Game], for league: SportLeague, source: AnyStreamSource) {
+    let key = Self.gameCacheKey(sourceID: source.id, leagueID: league.id)
+    gameCache[key] = (games, Date().addingTimeInterval(60))
+  }
+
+  // MARK: - Scrape diagnostics (Settings → Source Diagnostics)
+
+  func recordScrape(_ diagnostic: ScrapeDiagnostic, links: [ScrapedLink], for sourceID: String) {
+    var entries = scrapeDiagnostics[sourceID] ?? []
+    entries.insert(diagnostic, at: 0)
+    if entries.count > 30 { entries = Array(entries.prefix(30)) }
+    scrapeDiagnostics[sourceID] = entries
+    if !links.isEmpty {
+      lastScrapeLinks[sourceID] = links
+    }
+  }
+
+  func recentScrapes(for sourceID: String) -> [ScrapeDiagnostic] {
+    scrapeDiagnostics[sourceID] ?? []
+  }
+
+  func lastLinks(for sourceID: String) -> [ScrapedLink] {
+    lastScrapeLinks[sourceID] ?? []
   }
 
   func addSource(name: String, urlString: String) -> Bool {
@@ -81,7 +232,12 @@ final class SourceRegistry {
   func removeSource(_ source: AnyStreamSource) {
     guard !source.isBuiltIn else { return }
     sources.removeAll { $0.id == source.id }
-    if selectedSource == source { selectedSource = sources[0] }
+    if selectedSource == source {
+      selectedSource = sources.first ?? AnyStreamSource(
+        CustomStreamSource(name: "None", baseURL: URL(string: "about:blank")!),
+        builtIn: false
+      )
+    }
     persistCustomSources()
   }
 

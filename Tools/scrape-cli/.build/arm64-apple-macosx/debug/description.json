@@ -1,0 +1,339 @@
+{
+  "builtTestProducts" : [
+
+  ],
+  "copyCommands" : {
+
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.scrape-cli-arm64-apple-macosx26.0-debug.module" : {
+      "executable" : "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/sources",
+      "importPath" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/APIDiscoveryCLI.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/FullFlowCLI.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/LogoTestCLI.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/MacScraper.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/main.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/swift-version--33F43AE5D1E816B0.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/sources"
+        }
+      ],
+      "isLibrary" : false,
+      "moduleName" : "scrape_cli",
+      "moduleOutputPath" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/Modules/scrape_cli.swiftmodule",
+      "objects" : [
+        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/APIDiscoveryCLI.swift.o",
+        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/FullFlowCLI.swift.o",
+        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/LogoTestCLI.swift.o",
+        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/MacScraper.swift.o",
+        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/main.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j16",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-Xfrontend",
+        "-entry-point-function-name",
+        "-Xfrontend",
+        "scrape_cli_main",
+        "-swift-version",
+        "5",
+        "-plugin-path",
+        "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-F",
+        "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "scrape_cli"
+      ],
+      "outputFileMapPath" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/APIDiscoveryCLI.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/FullFlowCLI.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/LogoTestCLI.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/MacScraper.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/main.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/Modules/scrape_cli.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/APIDiscoveryCLI.swift",
+        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/FullFlowCLI.swift",
+        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/LogoTestCLI.swift",
+        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/MacScraper.swift",
+        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/main.swift"
+      ],
+      "tempsPath" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build",
+      "wholeModuleOptimization" : false
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "scrape_cli" : [
+      "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "scrape_cli",
+      "-package-name",
+      "scrape_cli",
+      "-c",
+      "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/APIDiscoveryCLI.swift",
+      "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/FullFlowCLI.swift",
+      "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/LogoTestCLI.swift",
+      "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/MacScraper.swift",
+      "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/main.swift",
+      "-I",
+      "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j16",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-Xfrontend",
+      "-entry-point-function-name",
+      "-Xfrontend",
+      "scrape_cli_main",
+      "-swift-version",
+      "5",
+      "-plugin-path",
+      "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-F",
+      "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "scrape_cli",
+      "-driver-use-frontend-path",
+      "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "scrape_cli" : [
+
+    ]
+  },
+  "testDiscoveryCommands" : {
+
+  },
+  "testEntryPointCommands" : {
+
+  },
+  "traitConfiguration" : {
+    "default" : {
+
+    }
+  },
+  "writeCommands" : {
+    "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape-cli-entitlement.plist" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<entitlement-plist>"
+        },
+        {
+          "kind" : "virtual",
+          "name" : "<com.apple.security.get-task-allow>"
+        }
+      ],
+      "outputFilePath" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape-cli-entitlement.plist"
+    },
+    "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape-cli.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/APIDiscoveryCLI.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/FullFlowCLI.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/LogoTestCLI.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/MacScraper.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/main.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape-cli.product/Objects.LinkFileList"
+    },
+    "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/APIDiscoveryCLI.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/FullFlowCLI.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/LogoTestCLI.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/MacScraper.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/main.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/sources"
+    },
+    "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/swift-version--33F43AE5D1E816B0.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/swift-version--33F43AE5D1E816B0.txt"
+    }
+  }
+}

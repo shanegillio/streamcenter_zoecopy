@@ -5,6 +5,7 @@ struct GamesView: View {
   let source: AnyStreamSource
 
   @Environment(FavoritesStore.self) private var favorites
+  @Environment(SourceRegistry.self) private var registry
 
   @State private var games: [Game] = []
   @State private var isLoading = true
@@ -41,39 +42,20 @@ struct GamesView: View {
         }
       } else {
         ScrollView {
-          LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
-            if !liveGames.isEmpty {
-              Section {
-                VStack(spacing: 10) {
-                  ForEach(liveGames) { game in
-                    Button { handleTap(game) } label: { GameCard(game: game) }
-                      .buttonStyle(.plain)
-                  }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 6)
-              } header: {
-                SectionHeader(title: "Live Now", color: .red)
-              }
+          // Flat list — live games first (already sorted in `liveGames`),
+          // then upcoming games. No "LIVE NOW" or "Upcoming" section bar.
+          VStack(spacing: 10) {
+            ForEach(liveGames) { game in
+              Button { handleTap(game) } label: { GameCard(game: game) }
+                .buttonStyle(.plain)
             }
-
-            if !upcomingGames.isEmpty {
-              Section {
-                VStack(spacing: 10) {
-                  ForEach(upcomingGames) { game in
-                    Button { handleTap(game) } label: { GameCard(game: game) }
-                      .buttonStyle(.plain)
-                  }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 6)
-              } header: {
-                SectionHeader(title: "Upcoming", color: .secondary)
-              }
+            ForEach(upcomingGames) { game in
+              Button { handleTap(game) } label: { GameCard(game: game) }
+                .buttonStyle(.plain)
             }
           }
+          .padding(.horizontal, 16)
+          .padding(.vertical, 10)
           .padding(.bottom, 24)
         }
       }
@@ -90,7 +72,7 @@ struct GamesView: View {
       }
     }
     .task { await loadGames() }
-    .refreshable { await loadGames() }
+    .refreshable { await loadGames(forceRefresh: true) }
   }
 
   private func handleTap(_ game: Game) {
@@ -101,11 +83,20 @@ struct GamesView: View {
     }
   }
 
-  private func loadGames() async {
+  private func loadGames(forceRefresh: Bool = false) async {
+    // Cache hit: paint instantly. The Streams tab pre-populates this cache,
+    // so navigating Streams → Leagues → NBA skips the scrape cost entirely.
+    if !forceRefresh, let cached = registry.cachedGames(for: league, source: source) {
+      games = cached
+      isLoading = false
+      return
+    }
     isLoading = true
     errorMessage = nil
     do {
-      games = try await source.fetchGames(for: league)
+      let fresh = try await source.fetchGames(for: league)
+      games = fresh
+      registry.storeGames(fresh, for: league, source: source)
     } catch {
       errorMessage = "Couldn't load games. Check your connection."
     }
@@ -222,6 +213,35 @@ struct GameCard: View {
   let game: Game
   @Environment(FavoritesStore.self) private var favorites
 
+  /// True when the league has no ESPN scoreboard support (WWE, Boxing, Tennis,
+  /// Golf, NASCAR). Team logo resolution won't return anything useful for these,
+  /// so we show the league logo circle as a fallback instead.
+  private var usesLeagueFallback: Bool {
+    ESPNScoreboardService.apiPath(for: game.league) == nil
+  }
+
+  /// League logo (ESPN CDN when available, SF symbol otherwise) inside an
+  /// accent-coloured circle — mirrors the fallback used in LiveGameRow.
+  private var leagueIconCircle: some View {
+    ZStack {
+      Circle().fill(game.league.accentColor.opacity(0.15))
+      if let logoURL = game.league.leagueLogoURL {
+        CachedAsyncImage(url: logoURL) { image in
+          image.resizable().scaledToFit().padding(9)
+        } placeholder: {
+          Image(systemName: game.league.sfSymbol)
+            .font(.system(size: 22, weight: .bold))
+            .foregroundStyle(game.league.accentColor)
+        }
+      } else {
+        Image(systemName: game.league.sfSymbol)
+          .font(.system(size: 22, weight: .bold))
+          .foregroundStyle(game.league.accentColor)
+      }
+    }
+    .frame(width: 56, height: 56)
+  }
+
   private func teamRow(_ name: String) -> some View {
     HStack(spacing: 5) {
       Text(name)
@@ -237,14 +257,8 @@ struct GameCard: View {
 
   var body: some View {
     HStack(spacing: 14) {
-      if game.isEvent {
-        ZStack {
-          Circle().fill(game.league.accentColor.opacity(0.15))
-          Image(systemName: game.league.sfSymbol)
-            .font(.system(size: 22, weight: .bold))
-            .foregroundStyle(game.league.accentColor)
-        }
-        .frame(width: 56, height: 56)
+      if game.isEvent || usesLeagueFallback {
+        leagueIconCircle
       } else {
         VStack(spacing: 6) {
           TeamLogo(teamName: game.homeTeam, league: game.league)
@@ -253,7 +267,7 @@ struct GameCard: View {
         .frame(width: 56)
       }
 
-      if game.isEvent {
+      if game.isEvent || usesLeagueFallback {
         Text(game.homeTeam)
           .font(.system(size: 15, weight: .bold))
           .foregroundStyle(.primary)
@@ -267,14 +281,18 @@ struct GameCard: View {
 
       Spacer()
 
-      VStack(alignment: .trailing, spacing: 4) {
+      VStack(alignment: .trailing, spacing: 2) {
         if game.isLive {
           LiveStatusBadge(status: game.liveStatus)
         } else {
+          if let day = game.displayDay {
+            Text(day)
+              .font(.caption2)
+              .foregroundStyle(.tertiary)
+          }
           Text(game.displayTime)
             .font(.caption).fontWeight(.semibold)
             .foregroundStyle(.secondary)
-            .multilineTextAlignment(.trailing)
         }
 
         if game.isPremium {
@@ -340,7 +358,22 @@ struct LiveStatusBadge: View {
 struct TeamLogo: View {
   let teamName: String
   let league: SportLeague
-  @State private var resolvedURL: URL? = nil
+  var size: CGFloat = 36
+
+  // Synchronous read from the store on first render — eliminates the one-frame
+  // initials flash when a list rebuilds after a navigation pop or periodic refresh.
+  @State private var resolvedURL: URL?
+
+  private var cacheKey: String { "\(league.id)|\(teamName.lowercased())" }
+
+  init(teamName: String, league: SportLeague, size: CGFloat = 36) {
+    self.teamName = teamName
+    self.league = league
+    self.size = size
+    // Pre-populate from the synchronous store so the first render is already correct.
+    let key = "\(league.id)|\(teamName.lowercased())"
+    _resolvedURL = State(initialValue: TeamLogoStore.shared.url(for: key))
+  }
 
   private var initials: String {
     teamName.split(separator: " ").suffix(2).compactMap { $0.first }.map(String.init).joined()
@@ -349,21 +382,24 @@ struct TeamLogo: View {
   var body: some View {
     Group {
       if let url = resolvedURL {
-        AsyncImage(url: url) { phase in
-          switch phase {
-          case .success(let image):
-            image.resizable().scaledToFit()
-          default:
-            initialsView
-          }
+        // CachedAsyncImage explicitly hits URLCache.shared before going to
+        // network — necessary because SwiftUI's stock AsyncImage doesn't
+        // reliably benefit from our LogoPrefetcher's URLCache warming when
+        // ~30 instances render simultaneously on the Streams tab.
+        CachedAsyncImage(url: url) { image in
+          image.resizable().scaledToFit()
+        } placeholder: {
+          initialsView
         }
       } else {
         initialsView
       }
     }
-    .frame(width: 36, height: 36)
+    .frame(width: size, height: size)
     .task(id: teamName) {
-      resolvedURL = await TeamLogoCache.shared.logoURL(for: teamName, league: league)
+      if let url = await TeamLogoCache.shared.logoURL(for: teamName, league: league) {
+        resolvedURL = url
+      }
     }
   }
 
@@ -371,7 +407,7 @@ struct TeamLogo: View {
     ZStack {
       Circle().fill(league.accentColor.opacity(0.15))
       Text(initials)
-        .font(.system(size: 11, weight: .bold))
+        .font(.system(size: max(8, size * 0.3), weight: .bold))
         .foregroundStyle(league.accentColor)
     }
   }
