@@ -28,6 +28,7 @@ enum SportLeague: String, CaseIterable, Identifiable, Codable, Hashable {
   case golf
   case nascar
   case cricket
+  case iihf
   /// Catch-all bucket for game listings that don't match any known league.
   /// International events, niche sports, etc. surface here instead of being dropped.
   case other
@@ -63,6 +64,7 @@ enum SportLeague: String, CaseIterable, Identifiable, Codable, Hashable {
     case .golf: return "Golf"
     case .nascar: return "NASCAR"
     case .cricket: return "Cricket"
+    case .iihf: return "IIHF"
     case .other: return "Other"
     }
   }
@@ -97,6 +99,7 @@ enum SportLeague: String, CaseIterable, Identifiable, Codable, Hashable {
     case .wnba:         return 25
     case .f1:           return 26
     case .cricket:      return 27
+    case .iihf:         return 28
     case .other:        return 99
     }
   }
@@ -116,6 +119,7 @@ enum SportLeague: String, CaseIterable, Identifiable, Codable, Hashable {
     case .tennis: return "tennisball.fill"
     case .golf: return "figure.golf"
     case .cricket: return "figure.cricket"
+    case .iihf: return "hockey.puck.fill"
     case .other: return "sportscourt"
     }
   }
@@ -161,6 +165,7 @@ enum SportLeague: String, CaseIterable, Identifiable, Codable, Hashable {
     case .golf: return Color(red: 0.20, green: 0.60, blue: 0.20)
     case .nascar: return Color(red: 0.90, green: 0.65, blue: 0.10)
     case .cricket: return Color(red: 0.10, green: 0.45, blue: 0.20)
+    case .iihf: return Color(red: 0.20, green: 0.30, blue: 0.65)
     case .other:  return Color(red: 0.50, green: 0.50, blue: 0.55)
     }
   }

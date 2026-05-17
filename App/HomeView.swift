@@ -282,14 +282,17 @@ struct HomeView: View {
     // leagues may not be in the new source's chip row.
     selectedFilter = nil
 
-    if let cached = registry.cachedLeaguesForSelected, !cached.isEmpty {
-      availableLeagues = cached
-      isLoadingLeagues = false
-      Task { await loadAllLiveGames() }
-    } else {
-      availableLeagues = []
-      isLoadingLeagues = true
-    }
+    // v2.21: single-shot loading. Previously the UI eagerly applied cached
+    // chips, then replaced them with fresh chips when the network fetch
+    // returned — visible as a brief "flicker" of one chip set replaced by
+    // another. With the v2.21 ESPN-canonical pipeline reshaping which
+    // games even pass the reconcile filter, that flicker becomes more
+    // disruptive (cached chip → wait → fresh chip → games → some games
+    // disappear after ESPN reconcile). Hold the chips empty + loading
+    // until the fresh fetch lands. Cached chips become a true fallback
+    // for when the network is unreachable.
+    availableLeagues = []
+    isLoadingLeagues = true
 
     do {
       let fresh = try await source.fetchAvailableLeagues()
@@ -303,11 +306,23 @@ struct HomeView: View {
       Task { await loadAllLiveGames() }
     } catch let reason as LoadFailureReason {
       guard registry.selectedSource.id == source.id else { return }
-      availableLeagues = []
-      loadFailureReason = reason
+      // Network/source error — fall back to cached chips so the user
+      // still has UI; loadAllLiveGames will run against the cached set.
+      if let cached = registry.cachedLeaguesForSelected, !cached.isEmpty {
+        availableLeagues = cached
+        Task { await loadAllLiveGames() }
+      } else {
+        availableLeagues = []
+        loadFailureReason = reason
+      }
     } catch {
       guard registry.selectedSource.id == source.id else { return }
-      if availableLeagues.isEmpty { loadFailureReason = .unreachable }
+      if let cached = registry.cachedLeaguesForSelected, !cached.isEmpty {
+        availableLeagues = cached
+        Task { await loadAllLiveGames() }
+      } else {
+        loadFailureReason = .unreachable
+      }
     }
     isLoadingLeagues = false
   }

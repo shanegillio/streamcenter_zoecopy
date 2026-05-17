@@ -45,9 +45,33 @@ actor ESPNScoreboardService {
     // audience.
     case .soccer:        return ("soccer", "usa.1")
     case .f1:            return ("racing", "f1")
+    case .nascar:        return ("racing", "nascar-premier")
     case .mma, .ufc:     return ("mma", "ufc")
     default:             return nil
     }
+  }
+
+  /// Returns true iff the cache for this league has at least one event AND
+  /// is not stale. Used by `CustomStreamSource.reconcileWithESPN` to decide
+  /// whether to enforce the ESPN-canonical rule (drop aggregator games not
+  /// confirmed by ESPN) vs gracefully degrade to aggregator data on prewarm
+  /// failure / network issues.
+  func hasCachedEvents(for league: SportLeague) -> Bool {
+    guard let cached = cache[league] else { return false }
+    return Date() < cached.expiry && !cached.events.isEmpty
+  }
+
+  /// True if at least one league's cache is warm with events. Used as a
+  /// "is ESPN actually reachable right now?" probe — when a generic-league
+  /// aggregator game can't be matched cross-league, we need to know if
+  /// that's "ESPN has no data at all" (graceful degrade, keep) vs "ESPN
+  /// has plenty of data but doesn't recognize this fixture" (drop).
+  func anyLeagueCached() -> Bool {
+    let now = Date()
+    for (_, entry) in cache where now < entry.expiry && !entry.events.isEmpty {
+      return true
+    }
+    return false
   }
 
   // Returns cached (or freshly fetched) ESPN events for the league.

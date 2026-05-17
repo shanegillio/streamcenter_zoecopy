@@ -870,9 +870,18 @@ struct CustomStreamSource: StreamSource {
       // more reliable signal (ppv.to literally labels these "Ice Hockey").
       // Club-level matches (Manchester United, AS Roma) are unaffected
       // because their team match isn't .soccer — it's already specific.
+      //
+      // v2.21 refinement: when the disambiguated category is .nhl AND both
+      // teams are bare country names (Germany vs Latvia, not Detroit
+      // Pistons), it's not NHL — it's IIHF / international hockey. Send
+      // these to the dedicated .iihf bucket so the chip and country-flag
+      // logos make sense.
       let league: SportLeague = {
         if teamLeague == .soccer,
            let cat = categoryLeague, cat != .soccer, cat != .other {
+          if cat == .nhl && Self.bothNamesAreCountries(dg.homeName, dg.awayName) {
+            return .iihf
+          }
           return cat
         }
         return teamLeague
@@ -954,6 +963,23 @@ struct CustomStreamSource: StreamSource {
       }
     }
     return orderKeys.compactMap { byKey[$0] }
+  }
+
+  /// True when both team names look like bare country names — used to
+  /// distinguish IIHF (international hockey) from NHL when an aggregator's
+  /// category says "Ice Hockey". Country detection: lowercase name is in
+  /// `knownCountries` exactly, or matches a hyphenated form (USA / United
+  /// States both map). Multi-word club names ("Detroit Red Wings") never
+  /// trigger this check.
+  private static func bothNamesAreCountries(_ a: String, _ b: String) -> Bool {
+    return looksLikeCountry(a) && looksLikeCountry(b)
+  }
+  private static func looksLikeCountry(_ name: String) -> Bool {
+    let lower = name.lowercased().trimmingCharacters(in: .whitespaces)
+    if knownCountries.contains(lower) { return true }
+    let hyphen = lower.replacingOccurrences(of: " ", with: "-")
+    if knownCountries.contains(hyphen) { return true }
+    return false
   }
 
   /// Order-insensitive canonical pair key — "Real Madrid vs Sevilla"
@@ -1091,55 +1117,88 @@ struct CustomStreamSource: StreamSource {
   private static let genericLeagues: Set<SportLeague> = [.other, .soccer]
 
   private func reconcileWithESPN(_ games: [Game]) async -> [Game] {
+    // v2.21: ESPN-canonical pipeline. For ESPN-covered leagues, ESPN is the
+    // source of truth for everything except the stream URL — team names,
+    // scheduled time, live state, score line. If ESPN's cache for the league
+    // has games but no match for this fixture, the fixture is stale (e.g.,
+    // an aggregator carrying a 2-week-old entry it never cleaned up) and we
+    // drop it. Graceful degradation: if ESPN's cache is completely empty for
+    // the league (prewarm failed / offline), fall back to aggregator data
+    // rather than hide everything.
     var out: [Game] = []
     out.reserveCapacity(games.count)
     for game in games {
       let leagueIsGeneric = Self.genericLeagues.contains(game.league)
-      let needsTime       = game.scheduledTime == nil || !game.timeIsKnown
-      let needsLiveStatus = game.liveStatus == nil
-      // v2.19: also reconcile when a game already has a known league + time
-      // but no live status. MLB games from ppv.to come back with isLive=true
-      // and scheduledTime set but liveStatus=nil; previously the canBenefit
-      // gate skipped them entirely so ESPN never filled in "3-1 • 2nd Inning".
-      let canBenefit      = leagueIsGeneric || needsTime || !game.isLive || needsLiveStatus
-      if !canBenefit {
+      let espnPath = ESPNScoreboardService.apiPath(for: game.league)
+
+      // Non-ESPN-covered leagues (cricket, IIHF, MotoGP, etc.) — trust the
+      // aggregator entirely. ESPN can't help here.
+      guard espnPath != nil else {
         out.append(game)
         continue
       }
-      // Skip single-team events (drafts, combines) — bestMatch's single-team
-      // fallback can pull arbitrary games from the same league.
+
+      // Single-team events (drafts, race solo events) bypass the strict
+      // canonical rule — the team-pair matcher would pull arbitrary games.
       if game.awayTeam.isEmpty {
         out.append(game)
         continue
       }
-      guard let result = await ESPNScoreboardService.shared.findEvent(
-        homeTeam: game.homeTeam, awayTeam: game.awayTeam, pageURL: game.pageURL
-      ) else {
+
+      // Skip cross-league lookup for already-specifically-classified games:
+      // when team-name match resolved to .nba or similar, the league is
+      // settled and we only want this league's ESPN data. For .other and
+      // .soccer (genericLeagues), the cross-league findEvent path may
+      // promote the league to a specific one (Atletico vs Barcelona →
+      // .laLiga).
+      let leagueHasData = await ESPNScoreboardService.shared.hasCachedEvents(for: game.league)
+
+      // Graceful degradation: if ESPN's cache for this league is empty
+      // (prewarm failure, network issue, sport not in season), keep the
+      // aggregator data instead of dropping the game.
+      if !leagueIsGeneric && !leagueHasData {
         out.append(game)
         continue
       }
+
+      guard let result = await ESPNScoreboardService.shared.findEvent(
+        homeTeam: game.homeTeam, awayTeam: game.awayTeam, pageURL: game.pageURL
+      ) else {
+        // For generic leagues, no match doesn't mean stale — the team-name
+        // search ran across every prewarmed league; lack of match means
+        // ESPN doesn't have this game. Drop only if at least one ESPN
+        // cache is warm (lack of match is meaningful) — otherwise keep.
+        if leagueIsGeneric {
+          let anyCacheWarm = await ESPNScoreboardService.shared.anyLeagueCached()
+          if anyCacheWarm {
+            continue   // ESPN has data; this game isn't in it; drop
+          } else {
+            out.append(game)
+            continue
+          }
+        }
+        // Specific league + ESPN cache warm for it + no match = stale.
+        continue
+      }
+
       let event = result.event
-      // v2.20: when ESPN says the event is completed, drop the entry
-      // entirely. ppv.to often keeps a stream URL for past games for
-      // replay/highlight purposes; user intent is "only list active or
-      // upcoming streams." The v2.19 "show FT score" path is gone — no
-      // listing means no listing.
-      if event.isCompleted { continue }
-      // For non-completed events, fill in time from ESPN when missing.
-      let scheduledTime: Date? = needsTime ? event.scheduledDate : game.scheduledTime
-      let timeIsKnown: Bool = needsTime ? true : game.timeIsKnown
+      if event.isCompleted { continue }   // past game — drop
+
+      // ESPN data wins for everything except the aggregator-supplied
+      // pageURL (which is the only thing ESPN can't tell us). Team names
+      // become canonical ESPN forms, time/score/live state all from ESPN.
       out.append(Game(
         id: game.id,
-        homeTeam: game.homeTeam,
-        awayTeam: game.awayTeam,
-        scheduledTime: scheduledTime,
-        timeIsKnown: timeIsKnown,
-        isLive: event.isLive || game.isLive,
-        liveStatus: event.liveStatus ?? game.liveStatus,
+        homeTeam: event.homeTeam,
+        awayTeam: event.awayTeam,
+        scheduledTime: event.scheduledDate,
+        timeIsKnown: true,
+        isLive: event.isLive,
+        liveStatus: event.liveStatus,
         isEvent: game.isEvent,
         isPremium: game.isPremium,
         pageURL: game.pageURL,
-        league: leagueIsGeneric ? result.league : game.league
+        league: result.league
       ))
     }
     return out
@@ -1478,6 +1537,7 @@ struct CustomStreamSource: StreamSource {
     case .golf:          return "golf"
     case .nascar:        return "nascar"
     case .cricket:       return "cricket"
+    case .iihf:          return "iihf"
     case .other:         return nil
     }
   }

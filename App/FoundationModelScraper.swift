@@ -358,6 +358,21 @@ actor FoundationModelScraper {
   and set correctedLeague to the corresponding SportLeague raw value.
   Strip the country/league prefix when canonicalising home/away.
 
+  RACE / MOTORSPORT EVENT TITLES (buffstreams, F1, NASCAR, MotoGP):
+  Source titles for solo race events often carry marketing or section
+  suffixes. Canonicalize the home team to the bare race name and leave
+  the away team empty (race events are solo, not team-vs-team).
+    "Formula 1 2026 Canadian GP Live Streams Links"
+      → correctedHome="Canadian Grand Prix", correctedAway=""
+    "2026 NASCAR Cup Series All Star Race"
+      → correctedHome="NASCAR Cup Series All Star Race", correctedAway=""
+    "Lenovo Canadian Grand Prix"
+      → correctedHome="Canadian Grand Prix", correctedAway=""
+    "MotoGP 2026 Italian GP Sprint"
+      → correctedHome="Italian Grand Prix Sprint", correctedAway=""
+  When the title is split into "Practice / Qualifying / Sprint / Race"
+  segments, preserve the session label as part of the home name.
+
   SPORT-SUFFIX PRESERVATION (international competitions):
   Some sources include the sport as a suffix to disambiguate national
   teams: "Norway Ice hockey", "Slovenia Ice hockey", "England Cricket",
