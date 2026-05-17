@@ -688,8 +688,16 @@ struct CustomStreamSource: StreamSource {
       // (EPL / La Liga / etc.). The ESPN cache was warmed by the prior
       // `fetchAvailableLeagues` call — if it expired since then, this
       // is a no-op and games are returned unchanged.
-      let allGames = await self.reconcileWithESPN(mapped)
-      let filtered = allGames.filter { $0.league == league }
+      let reconciled = await self.reconcileWithESPN(mapped)
+      var filtered = reconciled.filter { $0.league == league }
+      // v2.19: per-league ESPN enrich for the API-discovery path too. The
+      // rule-based fallback already does this at line ~777; the API path
+      // was skipping it, which is why MLB live games from ppv.to showed
+      // "● LIVE" with no score line ("3-1 • 2nd Inning"). Run the same
+      // per-league enrich here so live-state details land on every path.
+      if !filtered.isEmpty, ESPNScoreboardService.apiPath(for: league) != nil {
+        filtered = await ESPNScoreboardService.shared.enrich(filtered, for: league)
+      }
       if !filtered.isEmpty {
         return filtered.sorted { a, b in
           if a.isLive != b.isLive { return a.isLive }
@@ -814,6 +822,13 @@ struct CustomStreamSource: StreamSource {
       // Reject entries whose home team is just a sport-category label —
       // these are usually nav anchors the API also surfaces by mistake.
       if Self.isJustASportName(dg.homeName) { return nil }
+      // Reject "24/7 X" IPTV channel entries. The category-level filter
+      // in APIDiscovery.nestedCategories catches the canonical ppv.to
+      // case; this is the belt-and-suspenders layer for sources that
+      // don't use a clean category label (e.g. when the channel gets
+      // surfaced through a "Football" / generic bucket by mistake).
+      let homeLower = dg.homeName.lowercased()
+      if homeLower.hasPrefix("24/7 ") || homeLower.hasPrefix("24-7 ") { return nil }
       // Non-event games need a "vs" pair AND ideally a scheduled time;
       // bare entries without those signals are almost always navigation
       // noise. Single-team events (`awayName.isEmpty`) keep the relaxed
@@ -989,7 +1004,12 @@ struct CustomStreamSource: StreamSource {
     for game in games {
       let leagueIsGeneric = Self.genericLeagues.contains(game.league)
       let needsTime       = game.scheduledTime == nil || !game.timeIsKnown
-      let canBenefit      = leagueIsGeneric || needsTime || !game.isLive
+      let needsLiveStatus = game.liveStatus == nil
+      // v2.19: also reconcile when a game already has a known league + time
+      // but no live status. MLB games from ppv.to come back with isLive=true
+      // and scheduledTime set but liveStatus=nil; previously the canBenefit
+      // gate skipped them entirely so ESPN never filled in "3-1 • 2nd Inning".
+      let canBenefit      = leagueIsGeneric || needsTime || !game.isLive || needsLiveStatus
       if !canBenefit {
         out.append(game)
         continue
@@ -1007,12 +1027,23 @@ struct CustomStreamSource: StreamSource {
         continue
       }
       let event = result.event
+      // v2.19: when ESPN reports the event as completed, unconditionally
+      // null out scheduledTime + timeIsKnown so the UI falls back to
+      // showing liveStatus ("FT 3-2") rather than the misleading past
+      // clock time the source may have given us. Without this, ppv.to's
+      // past `starts_at` slips through to display because needsTime=false.
+      let scheduledTime: Date? = event.isCompleted
+        ? nil
+        : (needsTime ? event.scheduledDate : game.scheduledTime)
+      let timeIsKnown: Bool = event.isCompleted
+        ? false
+        : (needsTime ? !event.isCompleted : game.timeIsKnown)
       out.append(Game(
         id: game.id,
         homeTeam: game.homeTeam,
         awayTeam: game.awayTeam,
-        scheduledTime: needsTime ? (event.isCompleted ? nil : event.scheduledDate) : game.scheduledTime,
-        timeIsKnown: needsTime ? !event.isCompleted : game.timeIsKnown,
+        scheduledTime: scheduledTime,
+        timeIsKnown: timeIsKnown,
         isLive: event.isLive || game.isLive,
         liveStatus: event.liveStatus ?? game.liveStatus,
         isEvent: game.isEvent,

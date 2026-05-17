@@ -365,6 +365,12 @@ extension APIShape {
 
     for cat in categories {
       guard let label = cat["category"] as? String ?? cat["name"] as? String else { continue }
+      // Reject the "24/7 Streams" category outright — ppv.to (and bintv,
+      // which merges ppv.to) bundle non-sports IPTV cartoon channels here
+      // (24/7 South Park, COWS, Family Guy, SpongeBob, The Simpsons, Rick
+      // and Morty). Catching this at the category layer kills the whole
+      // bucket in one check instead of relying on per-title heuristics.
+      if Self.isIPTVChannelCategory(label) { continue }
       guard let streams = cat["streams"] as? [[String: Any]] ?? cat["items"] as? [[String: Any]] else { continue }
       for s in streams {
         guard let g = makeGame(from: s, category: label, host: host) else { continue }
@@ -372,6 +378,19 @@ extension APIShape {
       }
     }
     return games
+  }
+
+  /// Category labels that indicate IPTV/24-7 channels rather than per-game
+  /// streams. Used by `nestedCategories` (and reusable by other parsers) to
+  /// filter out cartoon networks, generic TV channels, and replay loops
+  /// that aggregator APIs sometimes bundle alongside real sports.
+  private static func isIPTVChannelCategory(_ label: String) -> Bool {
+    let lower = label.lowercased().trimmingCharacters(in: .whitespaces)
+    let blocked = [
+      "24/7 streams", "24/7", "streaming networks", "tv channels",
+      "live tv", "iptv", "channels"
+    ]
+    return blocked.contains(lower)
   }
 
   // MARK: 2) Flat games shape

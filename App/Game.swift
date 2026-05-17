@@ -64,6 +64,16 @@ struct Game: Identifiable, Equatable, Hashable {
        let status = liveStatus, !status.isEmpty {
       return status
     }
+    // v2.19: defensive past-time guard. When a source (ppv.to) lists a game
+    // with a `starts_at` already in the past and ESPN didn't catch it, the
+    // clock time below would render misleadingly as "8:00 PM ET" for a game
+    // that finished hours ago. If we've crossed the typical game-duration
+    // window (4 h), prefer liveStatus when present, otherwise return "Final".
+    if let time = scheduledTime, timeIsKnown,
+       time.timeIntervalSinceNow < -4 * 60 * 60 {
+      if let status = liveStatus, !status.isEmpty { return status }
+      return "Final"
+    }
     guard let time = scheduledTime, timeIsKnown else { return "Upcoming" }
     let fmt = DateFormatter()
     fmt.locale = Locale(identifier: "en_US_POSIX")

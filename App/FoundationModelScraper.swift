@@ -325,22 +325,64 @@ actor FoundationModelScraper {
 
   private static let enrichInstructions = """
   You interpret candidate sports game listings scraped from streaming
-  aggregator sites. The site context (URL, page title, meta description)
-  comes first, then a numbered list of candidates. For each, you decide
-  whether to keep, drop, or correct fields.
+  aggregator sites (Streamed.pk, SportyHunter, StreamSports99, WatchFooty,
+  BINTV, NTV, DaddyLive, ppv.to, Buffstreams, and similar). The site
+  context (URL, page title, meta description) comes first, then a
+  numbered list of candidates. For each, decide whether to keep, drop,
+  or correct fields.
 
-  Use the page context to canonicalize ambiguous entries:
-  - On a Premier League page, an entry "Everton vs United" likely means
-    "Everton vs Manchester United" (correctedAway = "Manchester United").
+  USE PAGE CONTEXT TO CANONICALIZE AMBIGUOUS ENTRIES:
+  - On a Premier League page, "Everton vs United" likely means "Everton
+    vs Manchester United" (correctedAway = "Manchester United").
   - On an international friendly card, "Norway vs Brazil" stays as-is.
-  - When the title says "Watch IPL", treat T20 cricket franchise entries
+  - When the title mentions "IPL", treat T20 cricket franchise entries
     as league=cricket.
 
-  Do NOT invent games that aren't in the candidate list. Do NOT remove
-  the "Cricket" suffix from national cricket sides ("England Cricket").
+  DROP ENTRIES THAT ARE NOT REAL GAMES/EVENTS:
+  - IPTV channels with "24/7 " prefix: "24/7 South Park", "24/7 COWS",
+    "24/7 Family Guy", "24/7 SpongeBob Squarepants", "24/7 The Simpsons",
+    "24/7 Rick and Morty" — these are cartoon loops, not sports.
+  - Generic IPTV labels: "Rally TV", "Live TV", "More Sports", "All
+    Sports", "TV", "Channels".
+  - Navigation: "Home", "Schedule", "Standings", "Watch Streams".
+  - Mirror selectors: "Stream 2", "BINTV - Stream 1", "PREMIER LEAGUE -
+    STREAM 1", "Mirror A", "Source B".
+  - Trailing-separator malformed: "Norway vs", "England vs", "Kosovo vs."
 
-  When uncertain, return keep=true with no corrections — never make up
-  team names from thin air. Empty-string fields mean "leave unchanged".
+  COUNTRY-LEAGUE-MATCH PREFIX FORMAT (DaddyLive):
+  Some sources prefix entries with country and league, e.g.:
+    "Italy - Serie A : Roma vs Lazio"
+    "Scotland - Scottish Premiership : St. Mirren vs Dundee United"
+    "Japan J1 League East : Kawasaki Frontale vs Machida Zelvia"
+  When you see this pattern, extract the league from the middle segment
+  and set correctedLeague to the corresponding SportLeague raw value.
+  Strip the country/league prefix when canonicalising home/away.
+
+  SPORT-SUFFIX PRESERVATION (international competitions):
+  Some sources include the sport as a suffix to disambiguate national
+  teams: "Norway Ice hockey", "Slovenia Ice hockey", "England Cricket",
+  "India Cricket". **Preserve these exactly — do not strip the suffix.**
+  The suffix distinguishes a national team from a club of the same name
+  (e.g. England the soccer national team vs "England Cricket" the side).
+
+  ALSO PRESERVE (do not "shorten" or "correct"):
+  - "Royal Challengers Bengaluru" → keep, don't shorten to RCB.
+  - "St. Louis Cardinals", "Tampa Bay Rays", "Toronto Blue Jays" — full
+    canonical MLB names.
+  - Lowercase categories ("hockey", "football") — treat case-insensitively
+    when matching to SportLeague raw values.
+
+  AGGREGATOR-SPECIFIC AWARENESS:
+  - Pages whose title says "24/7 Channels" (NTV) or "TV channels and
+    schedules" (TVPass) deliberately mix sports and non-sports IPTV.
+    Use per-entry text as the deciding signal — do NOT keep a non-sports
+    channel just because page context expects channels.
+  - Pages that pull from multiple sources (BINTV merges ppv.to) inherit
+    the noise of their feeders. Filter per entry, not per source.
+
+  Do NOT invent games that aren't in the candidate list. When uncertain,
+  return keep=true with no corrections — never fabricate team names.
+  Empty-string fields mean "leave unchanged".
 
   Return exactly one verdict per input index.
   """
