@@ -317,19 +317,13 @@ struct HomeView: View {
     await withTaskGroup(of: (String, [Game]).self) { group in
       for source in enabled {
         group.addTask {
-          guard let leagues = try? await source.fetchAvailableLeagues(forceRefresh: forceRefresh) else {
-            return (source.id, [])
-          }
-          var bucket: [Game] = []
-          await withTaskGroup(of: [Game].self) { sub in
-            for league in leagues {
-              sub.addTask {
-                (try? await source.fetchGames(for: league)) ?? []
-              }
-            }
-            for await g in sub { bucket.append(contentsOf: g) }
-          }
-          return (source.id, bucket)
+          // v2.28: 15 s per-source budget. A single hanging source
+          // (CF challenge, DNS stall, slow JS-render) used to stall
+          // pull-to-refresh indefinitely because no leaf had a timeout.
+          // Race the scrape against a sleep and cancel whichever loses.
+          await Self.boundedSourceFetch(source: source,
+                                        forceRefresh: forceRefresh,
+                                        budgetSeconds: 15)
         }
       }
       for await pair in group { aggregatorResults.append(pair) }
@@ -455,6 +449,57 @@ struct HomeView: View {
       loadFailureReason = .noLeagues
     }
     isLoadingLive = false
+  }
+
+  /// v2.28: bounded per-source scrape. Races the source's full feed
+  /// fetch against a `budgetSeconds` sleep; whichever finishes first
+  /// wins. Used by the orchestrator's per-source task group so a
+  /// hanging source (CF / DNS / slow JS-render) can't stall the whole
+  /// refresh. Returns `(source.id, [])` on timeout.
+  static func boundedSourceFetch(
+    source: AnyStreamSource,
+    forceRefresh: Bool,
+    budgetSeconds: Int
+  ) async -> (String, [Game]) {
+    let result = await withTaskGroup(of: (String, [Game])?.self) { group in
+      group.addTask {
+        guard let leagues = try? await source.fetchAvailableLeagues(forceRefresh: forceRefresh) else {
+          return (source.id, [])
+        }
+        var bucket: [Game] = []
+        await withTaskGroup(of: [Game].self) { sub in
+          for league in leagues {
+            sub.addTask {
+              // Per-league sub-budget: ~10 s so a single hanging league
+              // inside an otherwise-ok source can't burn the whole
+              // source budget. Race against a sleep, take whichever.
+              await withTaskGroup(of: [Game]?.self) { leagueGroup in
+                leagueGroup.addTask {
+                  (try? await source.fetchGames(for: league)) ?? []
+                }
+                leagueGroup.addTask {
+                  try? await Task.sleep(nanoseconds: 10_000_000_000)
+                  return nil
+                }
+                let winner = await leagueGroup.next() ?? nil
+                leagueGroup.cancelAll()
+                return winner ?? []
+              }
+            }
+          }
+          for await g in sub { bucket.append(contentsOf: g) }
+        }
+        return (source.id, bucket)
+      }
+      group.addTask {
+        try? await Task.sleep(nanoseconds: UInt64(budgetSeconds) * 1_000_000_000)
+        return nil
+      }
+      let winner = await group.next() ?? nil
+      group.cancelAll()
+      return winner
+    }
+    return result ?? (source.id, [])
   }
 
   /// v2.23: order-insensitive team-pair match between an aggregator-side

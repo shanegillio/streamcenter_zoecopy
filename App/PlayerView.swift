@@ -116,18 +116,37 @@ struct PlayerView: View {
     }
   }
 
-  /// Map `game.streamURLs` into the sequential-attempt list. When empty
-  /// (ESPN-only game with no aggregator match), fall back to a single
-  /// attempt against `game.pageURL` — usually the ESPN page itself,
-  /// which won't play but at least gives the retry UI something to show.
+  /// Map `game.streamURLs` (orchestrator-resolved aggregator URLs) into
+  /// the sequential attempt list. v2.28 then APPENDS every enabled
+  /// source not already represented as a fallback "check this source's
+  /// homepage for the game" attempt — so a Boxing fixture (no
+  /// orchestrator match) still walks through the user's pool instead
+  /// of falling back to a misleading "Trying ESPN page" message.
   private func buildAttempts() {
-    if !game.streamURLs.isEmpty {
-      attempts = game.streamURLs.map { c in
-        SourceAttempt(sourceID: c.sourceID, pageURL: c.pageURL)
-      }
-    } else {
-      attempts = [SourceAttempt(sourceID: "espn", pageURL: game.pageURL)]
+    var built: [SourceAttempt] = []
+    // 1. Aggregator URLs the orchestrator pre-matched at listing time.
+    //    Highest-confidence candidates — the aggregator's own per-game
+    //    page, JS-intercept layer is most likely to find a stream here.
+    for c in game.streamURLs {
+      built.append(SourceAttempt(sourceID: c.sourceID, pageURL: c.pageURL))
     }
+    // 2. v2.28: every other enabled source as a "check this source"
+    //    fallback. We load the source's homepage in the StreamWebView
+    //    and let the JS-intercept layer catch any stream the user's
+    //    view of the site happens to surface. Even without auto-resolve
+    //    the per-source retry UI gives the user a clear "Browse Manually"
+    //    on the last attempt.
+    let preResolvedIDs = Set(game.streamURLs.map(\.sourceID))
+    for source in registry.enabledSources where !preResolvedIDs.contains(source.id) {
+      built.append(SourceAttempt(sourceID: source.id, pageURL: source.baseURL))
+    }
+    // 3. Absolute last resort: no enabled sources at all → one ESPN-
+    //    page attempt so the retry UI still has something to show
+    //    (clearly labelled "ESPN page" — not a misleading default).
+    if built.isEmpty {
+      built.append(SourceAttempt(sourceID: "espn", pageURL: game.pageURL))
+    }
+    attempts = built
     currentAttemptIdx = 0
     allFailed = false
   }
@@ -246,12 +265,12 @@ private struct StreamSearchingOverlay: View {
           .font(.system(size: 28, weight: .semibold))
           .foregroundStyle(.white.opacity(0.85))
       }
-      Text("Finding stream…")
+      Text("Checking sources…")
         .font(.headline)
         .foregroundStyle(.white)
       Text(totalAttempts > 1
-           ? "Trying \(sourceName) (\(attemptIndex + 1) of \(totalAttempts))"
-           : "Trying \(sourceName)")
+           ? "\(sourceName) (\(attemptIndex + 1) of \(totalAttempts))"
+           : sourceName)
         .font(.subheadline)
         .foregroundStyle(.white.opacity(0.6))
         .multilineTextAlignment(.center)
