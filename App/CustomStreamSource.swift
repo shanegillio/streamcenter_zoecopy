@@ -421,15 +421,42 @@ struct CustomStreamSource: StreamSource {
   /// to a static substring-on-link-text fallback so the feature
   /// degrades cleanly rather than disappearing.
   func findStreamPage(for game: Game) async -> URL? {
+    // v2.30 fast-path: when prior successful matches on this source have
+    // taught us a URL template + the team slugs for both teams in this
+    // game, construct the per-game URL directly and skip scraping. The
+    // PlayerView attempt loop validates by actually loading the URL —
+    // if our guess is wrong, that attempt times out and the next source
+    // takes over. Cost is no worse than an LLM miss; payoff is sub-second
+    // resolution on the hot path.
+    let sid = self.id
+    let learned = await MainActor.run {
+      SourceLearningStore.shared.candidateURLs(
+        for: sid, game: game, baseURL: baseURL, limit: 1
+      )
+    }
+    if let candidate = learned.first {
+      return candidate
+    }
+
     let homepageLinks = await scrapeLinks()
     guard !homepageLinks.isEmpty else { return nil }
+
+    // v2.30 pre-LLM filter: drop universal navigation / legal noise
+    // (login, register, about, dmca, etc.). Source-agnostic — every
+    // aggregator has these and they only pollute the LLM input.
+    let filteredLinks = homepageLinks.filter { link in
+      guard let url = URL(string: link.href, relativeTo: baseURL) else {
+        return true
+      }
+      return !LinkNoise.isNoise(url)
+    }
 
     // iOS 26+: ask the LLM. extractGames already knows how to extract
     // game listings from arbitrary aggregator markup; we filter the
     // result to the one matching our target Game.
     if FoundationModelScraper.isSupported,
        let extracted = await FoundationModelScraper.shared.extractGames(
-         from: homepageLinks,
+         from: filteredLinks,
          baseURL: baseURL,
          pageTitle: nil
        ) {
@@ -447,7 +474,7 @@ struct CustomStreamSource: StreamSource {
     // Static fallback (also fires when the LLM extract returned but no
     // candidate matched). Walk scraped links looking for both team
     // names in the link text or URL.
-    return staticPageMatch(for: game, in: homepageLinks)
+    return staticPageMatch(for: game, in: filteredLinks)
   }
 
   /// Lightweight team-pair substring match. Both team names (normalised

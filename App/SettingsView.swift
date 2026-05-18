@@ -30,6 +30,14 @@ struct SettingsView: View {
           }
           .padding(.vertical, 2)
         }
+        NavigationLink(destination: SourceStatsView()) {
+          HStack(spacing: 12) {
+            settingsIcon(systemName: "chart.bar.fill", color: .teal)
+            Text("Source Stats")
+              .foregroundStyle(Color(.label))
+          }
+          .padding(.vertical, 2)
+        }
       }
 
       // MARK: Favorites

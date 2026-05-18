@@ -306,7 +306,10 @@ struct HomeView: View {
 
     // v2.23: ESPN-first listing. Start with the canonical list, no
     // aggregator dependency. ESPN owns teams, time, score, league.
-    let espnGames = await ESPNScheduleService.shared.todaysGames(forceRefresh: forceRefresh)
+    // v2.30: ScheduleAggregator wraps ESPN + complementary producers
+    // (TheSportsDB for IIHF + cricket). ESPN-covered fixtures still
+    // win on collision so reconcile rules behave unchanged.
+    let espnGames = await ScheduleAggregator.shared.todaysGames(forceRefresh: forceRefresh)
 
     // For each enabled source, scrape its full feed (in parallel).
     // The aggregator path keeps the v2.21 ESPN-canonical reconcile logic

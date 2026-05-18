@@ -57,6 +57,11 @@ struct PlayerView: View {
                 let p = makePlayer(url: streamURL, cookies: cookies, referer: current.pageURL)
                 avPlayer = p
                 p.play()
+                // v2.30: success recording. The source that produced this
+                // stream gets credit in SourceHealth, becomes the league's
+                // last-successful preference, teaches SourceLearningStore
+                // about its URL pattern, and clears any prior failures.
+                recordSuccess(attempt: current)
               }
             }
             .id(current.id)
@@ -132,6 +137,9 @@ struct PlayerView: View {
       while currentAttemptIdx < attempts.count {
         let startedIdx = currentAttemptIdx
         attempts[startedIdx].status = .trying
+        // v2.30: count this as an attempt so SourceHealth's success-rate
+        // denominator reflects what we actually tried.
+        SourceHealth.shared.recordAttempt(sourceID: attempts[startedIdx].sourceID)
         try? await Task.sleep(nanoseconds: UInt64(Self.perSourceBudget * 1_000_000_000))
         if avPlayer != nil { return }
         if currentAttemptIdx == startedIdx {
@@ -140,7 +148,12 @@ struct PlayerView: View {
         }
       }
       // Exhausted all candidates without a stream.
-      if avPlayer == nil { allFailed = true }
+      if avPlayer == nil {
+        allFailed = true
+        // v2.30: record each tried source as a failure for this game so
+        // a subsequent tap-and-retry on the same game skips them.
+        recordAllFailures()
+      }
     }
   }
 
@@ -158,8 +171,19 @@ struct PlayerView: View {
     let preResolvedIDs = Set(
       game.streamURLs.map(\.sourceID)
     )
+    let gameKey = GameKey.make(for: game)
+    let failureStore = FailureStore.shared
+    let health = SourceHealth.shared
     let toSearch = registry.enabledSources
       .filter { !preResolvedIDs.contains($0.id) }
+      // v2.30: skip sources that recently failed for this exact game
+      // (1h memory in FailureStore). Avoids re-burning 12 s on a known
+      // dead end during tap-and-retry.
+      .filter { !failureStore.isFailedRecently(gameKey: gameKey, sourceID: $0.id) }
+      // v2.30: skip sources currently in a parking cooldown (≥3
+      // parking detections within the past hour). They're not going to
+      // resolve and they slow the race down.
+      .filter { !health.isInParkingCooldown($0.id) }
     guard !toSearch.isEmpty else { return }
 
     isSearchingSources = true
@@ -213,11 +237,20 @@ struct PlayerView: View {
   /// orchestrator match) still walks through the user's pool instead
   /// of falling back to a misleading "Trying ESPN page" message.
   private func buildAttempts() {
+    let gameKey = GameKey.make(for: game)
+    let failureStore = FailureStore.shared
+    let health = SourceHealth.shared
+    let preference = SourcePreference.shared
+
     var built: [SourceAttempt] = []
     // 1. Aggregator URLs the orchestrator pre-matched at listing time.
     //    Highest-confidence candidates — the aggregator's own per-game
     //    page, JS-intercept layer is most likely to find a stream here.
+    //    v2.30: drop pre-matched candidates whose source is in
+    //    failure-memory or parking-cooldown for this game.
     for c in game.streamURLs {
+      if failureStore.isFailedRecently(gameKey: gameKey, sourceID: c.sourceID) { continue }
+      if health.isInParkingCooldown(c.sourceID) { continue }
       built.append(SourceAttempt(sourceID: c.sourceID, pageURL: c.pageURL))
     }
     // 2. v2.28: every other enabled source as a "check this source"
@@ -226,10 +259,38 @@ struct PlayerView: View {
     //    view of the site happens to surface. Even without auto-resolve
     //    the per-source retry UI gives the user a clear "Browse Manually"
     //    on the last attempt.
+    //
+    //    v2.30: order the fallback pool by recent success rate
+    //    (SourceHealth), then bias the league's last-successful source
+    //    to the front. Sources demoted by health (< 10% success after
+    //    ≥5 attempts) get pushed to the back so they only try if every
+    //    healthier source has failed.
     let preResolvedIDs = Set(game.streamURLs.map(\.sourceID))
-    for source in registry.enabledSources where !preResolvedIDs.contains(source.id) {
+    let fallbackSources = registry.enabledSources
+      .filter { !preResolvedIDs.contains($0.id) }
+      .filter { !failureStore.isFailedRecently(gameKey: gameKey, sourceID: $0.id) }
+      .filter { !health.isInParkingCooldown($0.id) }
+    let fallbackIDs = fallbackSources.map(\.id)
+    let demotedIDs = Set(fallbackIDs.filter { health.isDemoted($0) })
+    let healthyIDs = fallbackIDs.filter { !demotedIDs.contains($0) }
+
+    // Order healthy fallbacks by health.
+    var orderedHealthy = health.orderedByHealth(healthyIDs)
+    // Bias league's last-successful source to attempt-first within healthy.
+    if let preferred = preference.lastSuccessfulSource(for: game.league),
+       let idx = orderedHealthy.firstIndex(of: preferred), idx > 0 {
+      orderedHealthy.remove(at: idx)
+      orderedHealthy.insert(preferred, at: 0)
+    }
+    // Demoted sources go to the back, themselves ordered by health.
+    let orderedDemoted = health.orderedByHealth(Array(demotedIDs))
+    let orderedFallbackIDs = orderedHealthy + orderedDemoted
+
+    for sourceID in orderedFallbackIDs {
+      guard let source = fallbackSources.first(where: { $0.id == sourceID }) else { continue }
       built.append(SourceAttempt(sourceID: source.id, pageURL: source.baseURL))
     }
+
     // 3. Absolute last resort: no enabled sources at all → one ESPN-
     //    page attempt so the retry UI still has something to show
     //    (clearly labelled "ESPN page" — not a misleading default).
@@ -239,6 +300,33 @@ struct PlayerView: View {
     attempts = built
     currentAttemptIdx = 0
     allFailed = false
+  }
+
+  /// v2.30: record success across all relevant stores when the WebView
+  /// JS-intercept successfully hands AVPlayer a playable URL. Called
+  /// from the StreamWebView callback once on first successful stream.
+  private func recordSuccess(attempt: SourceAttempt) {
+    let gameKey = GameKey.make(for: game)
+    let sid = attempt.sourceID
+    SourceHealth.shared.recordSuccess(sourceID: sid)
+    SourcePreference.shared.recordSuccess(league: game.league, sourceID: sid)
+    SourceLearningStore.shared.recordSuccess(
+      sourceID: sid, gamePageURL: attempt.pageURL, game: game
+    )
+    FailureStore.shared.clearForGame(gameKey: gameKey)
+  }
+
+  /// v2.30: called when every attempt failed without producing a stream.
+  /// Records each tried source's pair in FailureStore so the next tap-and-
+  /// retry on this game skips them for the next hour. We don't record
+  /// health-failures here — SourceHealth.attempt was already recorded at
+  /// the top of each loop iteration; "attempt without success" is exactly
+  /// what its denominator reflects.
+  private func recordAllFailures() {
+    let gameKey = GameKey.make(for: game)
+    for a in attempts {
+      FailureStore.shared.markFailed(gameKey: gameKey, sourceID: a.sourceID)
+    }
   }
 
   private func sourceName(for sourceID: String) -> String {

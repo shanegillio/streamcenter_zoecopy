@@ -39,6 +39,13 @@
 		AB1F2C3D4E5F6789ABCDEF01 /* TeamDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1F2C3D4E5F6789ABCDEF02 /* TeamDatabase.swift */; };
 		CD3E4F5A6B7C8D9EABCDEF03 /* teams.json in Resources */ = {isa = PBXBuildFile; fileRef = CD3E4F5A6B7C8D9EABCDEF04 /* teams.json */; };
 		EF2C3D4E5F6789ABCDEF0123 /* ESPNScheduleService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF2C3D4E5F6789ABCDEF0124 /* ESPNScheduleService.swift */; };
+		230AAAA000000000F0000001 /* FailureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 230AAAA000000000F0000002 /* FailureStore.swift */; };
+		230AAAA000000000F0000003 /* SourcePreference.swift in Sources */ = {isa = PBXBuildFile; fileRef = 230AAAA000000000F0000004 /* SourcePreference.swift */; };
+		230AAAA000000000F0000005 /* SourceHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 230AAAA000000000F0000006 /* SourceHealth.swift */; };
+		230AAAA000000000F0000007 /* SourceLearningStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 230AAAA000000000F0000008 /* SourceLearningStore.swift */; };
+		230AAAA000000000F0000009 /* ScheduleAggregator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 230AAAA000000000F000000A /* ScheduleAggregator.swift */; };
+		230AAAA000000000F000000B /* TheSportsDBProducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 230AAAA000000000F000000C /* TheSportsDBProducer.swift */; };
+		230AAAA000000000F000000D /* SourceStatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 230AAAA000000000F000000E /* SourceStatsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -75,6 +82,13 @@
 		EF2C3D4E5F6789ABCDEF0124 /* ESPNScheduleService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ESPNScheduleService.swift; sourceTree = "<group>"; };
 		F61FD923A4E0905961E4DCB5 /* CredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialStore.swift; sourceTree = "<group>"; };
 		FCFA4080C079EB355C8D66AA /* TeamLogoCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeamLogoCache.swift; sourceTree = "<group>"; };
+		230AAAA000000000F0000002 /* FailureStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FailureStore.swift; sourceTree = "<group>"; };
+		230AAAA000000000F0000004 /* SourcePreference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourcePreference.swift; sourceTree = "<group>"; };
+		230AAAA000000000F0000006 /* SourceHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceHealth.swift; sourceTree = "<group>"; };
+		230AAAA000000000F0000008 /* SourceLearningStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceLearningStore.swift; sourceTree = "<group>"; };
+		230AAAA000000000F000000A /* ScheduleAggregator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduleAggregator.swift; sourceTree = "<group>"; };
+		230AAAA000000000F000000C /* TheSportsDBProducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TheSportsDBProducer.swift; sourceTree = "<group>"; };
+		230AAAA000000000F000000E /* SourceStatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceStatsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -113,6 +127,13 @@
 				FCFA4080C079EB355C8D66AA /* TeamLogoCache.swift */,
 				4A6504AEC4339F83F2F84B9D /* TeamLogoService.swift */,
 				C7C675FF1EFECE8222D6827F /* WebViewScraper.swift */,
+				230AAAA000000000F0000002 /* FailureStore.swift */,
+				230AAAA000000000F0000004 /* SourcePreference.swift */,
+				230AAAA000000000F0000006 /* SourceHealth.swift */,
+				230AAAA000000000F0000008 /* SourceLearningStore.swift */,
+				230AAAA000000000F000000A /* ScheduleAggregator.swift */,
+				230AAAA000000000F000000C /* TheSportsDBProducer.swift */,
+				230AAAA000000000F000000E /* SourceStatsView.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -229,6 +250,13 @@
 				FA9F83CBC9C4D4FADA624B61 /* TeamLogoCache.swift in Sources */,
 				CF16C1D2FEEA0FA41990C854 /* TeamLogoService.swift in Sources */,
 				F05DD61FBCB822396FCAB39C /* WebViewScraper.swift in Sources */,
+				230AAAA000000000F0000001 /* FailureStore.swift in Sources */,
+				230AAAA000000000F0000003 /* SourcePreference.swift in Sources */,
+				230AAAA000000000F0000005 /* SourceHealth.swift in Sources */,
+				230AAAA000000000F0000007 /* SourceLearningStore.swift in Sources */,
+				230AAAA000000000F0000009 /* ScheduleAggregator.swift in Sources */,
+				230AAAA000000000F000000B /* TheSportsDBProducer.swift in Sources */,
+				230AAAA000000000F000000D /* SourceStatsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
