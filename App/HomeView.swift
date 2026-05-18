@@ -516,13 +516,24 @@ struct HomeView: View {
     })
   }
 
-  private static func pairKeyForMatching(home: String, away: String) -> String {
+  /// v2.29: order-insensitive team-pair predicate exposed for callers
+  /// outside HomeView (CustomStreamSource.findStreamPage uses it to
+  /// pick the LLM-extracted game that matches the user's tap target).
+  /// Same normalisation as `pairKeyForMatching` — lowercase, diacritic-
+  /// fold, strip punctuation, drop common club suffixes.
+  static func matchesTeamPair(home: String, away: String, target: Game) -> Bool {
+    let lhs = pairKeyForMatching(home: home, away: away)
+    let rhs = pairKeyForMatching(home: target.homeTeam, away: target.awayTeam)
+    return lhs == rhs
+  }
+
+  static func pairKeyForMatching(home: String, away: String) -> String {
     let h = normalizeForMatch(home)
     let a = normalizeForMatch(away)
     return h <= a ? "\(h)|\(a)" : "\(a)|\(h)"
   }
 
-  private static func normalizeForMatch(_ s: String) -> String {
+  static func normalizeForMatch(_ s: String) -> String {
     s.lowercased()
       .folding(options: .diacriticInsensitive, locale: Locale(identifier: "en_US"))
       .replacingOccurrences(of: "[^a-z0-9 ]", with: " ", options: .regularExpression)

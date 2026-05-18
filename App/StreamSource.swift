@@ -9,6 +9,13 @@ protocol StreamSource {
   func fetchAvailableLeagues() async throws -> [SportLeague]
   func fetchAvailableLeagues(forceRefresh: Bool) async throws -> [SportLeague]
   func fetchGames(for league: SportLeague) async throws -> [Game]
+  /// v2.29: given a target Game, scrape this source and return the
+  /// per-game page URL most likely to host the stream. Returns nil
+  /// when the source isn't searchable (built-in placeholders) or no
+  /// page on the source matches the target. CustomStreamSource
+  /// overrides with a real implementation that uses WebViewScraper +
+  /// FoundationModelScraper.
+  func findStreamPage(for game: Game) async -> URL?
 }
 
 extension StreamSource {
@@ -19,6 +26,10 @@ extension StreamSource {
   func fetchAvailableLeagues(forceRefresh: Bool) async throws -> [SportLeague] {
     try await fetchAvailableLeagues()
   }
+
+  /// Default: no per-game search capability. Sources that can't be
+  /// scraped (placeholder/sentinel) just return nil.
+  func findStreamPage(for game: Game) async -> URL? { nil }
 }
 
 /// Distinguishes *why* `fetchAvailableLeagues` couldn't find any leagues so
@@ -87,6 +98,7 @@ struct AnyStreamSource: Identifiable, Equatable {
   private let _fetchLeagues: () async throws -> [SportLeague]
   private let _fetchLeaguesForced: (Bool) async throws -> [SportLeague]
   private let _fetchGames: (SportLeague) async throws -> [Game]
+  private let _findStreamPage: (Game) async -> URL?
 
   init<S: StreamSource>(_ source: S, builtIn: Bool = false) {
     id = source.id
@@ -96,6 +108,7 @@ struct AnyStreamSource: Identifiable, Equatable {
     _fetchLeagues = source.fetchAvailableLeagues
     _fetchLeaguesForced = source.fetchAvailableLeagues(forceRefresh:)
     _fetchGames = source.fetchGames
+    _findStreamPage = source.findStreamPage(for:)
   }
 
   func fetchAvailableLeagues() async throws -> [SportLeague] {
@@ -108,6 +121,10 @@ struct AnyStreamSource: Identifiable, Equatable {
 
   func fetchGames(for league: SportLeague) async throws -> [Game] {
     try await _fetchGames(league)
+  }
+
+  func findStreamPage(for game: Game) async -> URL? {
+    await _findStreamPage(game)
   }
 
   static func == (lhs: AnyStreamSource, rhs: AnyStreamSource) -> Bool {

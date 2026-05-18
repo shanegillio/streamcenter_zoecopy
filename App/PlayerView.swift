@@ -22,6 +22,11 @@ struct PlayerView: View {
   /// Becomes true after the user explicitly hits "Browse manually" on the
   /// retry UI — reveals the raw WebView for the failing source.
   @State private var showWebFallback = false
+  /// v2.29: true while parallel per-source LLM page search runs before
+  /// the sequential attempt loop. Overlay reads "Searching sources…"
+  /// during this phase and "Checking sources…" afterwards.
+  @State private var isSearchingSources = false
+  @State private var searchSourcesRemaining = 0
 
   struct SourceAttempt: Identifiable {
     let id = UUID()
@@ -59,14 +64,33 @@ struct PlayerView: View {
             .opacity(showWebFallback ? 1 : 0)
 
             if !showWebFallback {
-              StreamSearchingOverlay(
-                attemptIndex: currentAttemptIdx,
-                totalAttempts: attempts.count,
-                sourceName: sourceName(for: current.sourceID)
-              )
+              if isSearchingSources {
+                StreamSearchingOverlay(
+                  attemptIndex: 0,
+                  totalAttempts: 0,
+                  sourceName: "",
+                  searchingCount: searchSourcesRemaining
+                )
+              } else {
+                StreamSearchingOverlay(
+                  attemptIndex: currentAttemptIdx,
+                  totalAttempts: attempts.count,
+                  sourceName: sourceName(for: current.sourceID),
+                  searchingCount: 0
+                )
+              }
             }
           } else {
-            StreamLoadingView()
+            if isSearchingSources {
+              StreamSearchingOverlay(
+                attemptIndex: 0,
+                totalAttempts: 0,
+                sourceName: "",
+                searchingCount: searchSourcesRemaining
+              )
+            } else {
+              StreamLoadingView()
+            }
           }
         }
 
@@ -100,6 +124,10 @@ struct PlayerView: View {
       ruleList = await AdBlockRules.compile()
       rulesReady = true
       buildAttempts()
+      // v2.29: enrich attempts with LLM-discovered per-game pages from
+      // every enabled source the orchestrator didn't pre-match. This
+      // runs in parallel before the sequential attempt loop.
+      await searchSourcesForGamePage()
       // Each candidate gets its budget; if it doesn't resolve, advance.
       while currentAttemptIdx < attempts.count {
         let startedIdx = currentAttemptIdx
@@ -113,6 +141,68 @@ struct PlayerView: View {
       }
       // Exhausted all candidates without a stream.
       if avPlayer == nil { allFailed = true }
+    }
+  }
+
+  /// v2.29: kick off per-source `findStreamPage` in parallel for every
+  /// enabled source that doesn't already have a pre-resolved URL in
+  /// `attempts`. Each task has a 12 s budget. Resolved URLs are inserted
+  /// AHEAD of the source's existing baseURL-homepage fallback so the
+  /// per-game page gets tried first (higher confidence). Cleaned-up
+  /// `attempts` is what the sequential loop walks.
+  private func searchSourcesForGamePage() async {
+    // Source IDs already represented by a per-game URL (orchestrator
+    // pre-match). Sources currently in attempts via their baseURL
+    // (the v2.28 fallback) still count as "needs search" — the LLM
+    // page might find something better than the homepage.
+    let preResolvedIDs = Set(
+      game.streamURLs.map(\.sourceID)
+    )
+    let toSearch = registry.enabledSources
+      .filter { !preResolvedIDs.contains($0.id) }
+    guard !toSearch.isEmpty else { return }
+
+    isSearchingSources = true
+    searchSourcesRemaining = toSearch.count
+    let discovered = await withTaskGroup(of: (String, URL?).self) { group in
+      for source in toSearch {
+        group.addTask {
+          // 12 s per source — enough for the WKWebView homepage load,
+          // CF clearance (if needed), the JS-rendered link extraction,
+          // and one Foundation Models pass.
+          let work = Task { await source.findStreamPage(for: game) }
+          let timer = Task<URL?, Never> {
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            work.cancel()
+            return nil
+          }
+          let url = await work.value
+          timer.cancel()
+          return (source.id, url)
+        }
+      }
+      var results: [(String, URL?)] = []
+      for await pair in group {
+        results.append(pair)
+        await MainActor.run { searchSourcesRemaining -= 1 }
+      }
+      return results
+    }
+    isSearchingSources = false
+
+    // Splice newly-discovered URLs into `attempts`. For each match,
+    // insert before any existing baseURL-homepage fallback for the
+    // same source.
+    for (sourceID, maybeURL) in discovered {
+      guard let url = maybeURL else { continue }
+      let baseURL = registry.sources.first(where: { $0.id == sourceID })?.baseURL
+      let insertAt = attempts.firstIndex(where: {
+        $0.sourceID == sourceID && $0.pageURL == baseURL
+      }) ?? attempts.count
+      attempts.insert(
+        SourceAttempt(sourceID: sourceID, pageURL: url),
+        at: insertAt
+      )
     }
   }
 
@@ -250,6 +340,10 @@ private struct StreamSearchingOverlay: View {
   let attemptIndex: Int
   let totalAttempts: Int
   let sourceName: String
+  /// v2.29: when > 0, overlay is in the parallel-search phase
+  /// ("Searching sources… looking through N sources"). When 0,
+  /// it's the sequential-attempt phase.
+  let searchingCount: Int
   @State private var pulse = false
 
   var body: some View {
@@ -261,16 +355,20 @@ private struct StreamSearchingOverlay: View {
           .scaleEffect(pulse ? 1.25 : 1.0)
           .opacity(pulse ? 0 : 0.6)
           .animation(.easeOut(duration: 1.2).repeatForever(autoreverses: false), value: pulse)
-        Image(systemName: "antenna.radiowaves.left.and.right")
+        Image(systemName: searchingCount > 0
+              ? "magnifyingglass"
+              : "antenna.radiowaves.left.and.right")
           .font(.system(size: 28, weight: .semibold))
           .foregroundStyle(.white.opacity(0.85))
       }
-      Text("Checking sources…")
+      Text(searchingCount > 0 ? "Searching sources…" : "Checking sources…")
         .font(.headline)
         .foregroundStyle(.white)
-      Text(totalAttempts > 1
-           ? "\(sourceName) (\(attemptIndex + 1) of \(totalAttempts))"
-           : sourceName)
+      Text(searchingCount > 0
+           ? "Looking through \(searchingCount) source\(searchingCount == 1 ? "" : "s") for this game"
+           : (totalAttempts > 1
+              ? "\(sourceName) (\(attemptIndex + 1) of \(totalAttempts))"
+              : sourceName))
         .font(.subheadline)
         .foregroundStyle(.white.opacity(0.6))
         .multilineTextAlignment(.center)

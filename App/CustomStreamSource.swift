@@ -408,6 +408,67 @@ struct CustomStreamSource: StreamSource {
     return try await fetchAvailableLeagues()
   }
 
+  /// v2.29: scrape this source's homepage and return the per-game page
+  /// URL most likely to host the stream for the supplied Game. Used by
+  /// `PlayerView`'s pre-tap resolver to find game-specific pages on
+  /// aggregator sites (e.g., v2.streameast.ga's
+  /// `/soccer/{slug}` per-game pages) that the listing-time orchestrator
+  /// couldn't pre-match (typically because the source is CF-blocked at
+  /// the HTTP layer but renders fine in a WKWebView).
+  ///
+  /// Pipeline: homepage scrape (CF-aware) → optional LLM extract →
+  /// team-pair match against the target Game. iOS < 26 falls through
+  /// to a static substring-on-link-text fallback so the feature
+  /// degrades cleanly rather than disappearing.
+  func findStreamPage(for game: Game) async -> URL? {
+    let homepageLinks = await scrapeLinks()
+    guard !homepageLinks.isEmpty else { return nil }
+
+    // iOS 26+: ask the LLM. extractGames already knows how to extract
+    // game listings from arbitrary aggregator markup; we filter the
+    // result to the one matching our target Game.
+    if FoundationModelScraper.isSupported,
+       let extracted = await FoundationModelScraper.shared.extractGames(
+         from: homepageLinks,
+         baseURL: baseURL,
+         pageTitle: nil
+       ) {
+      for candidate in extracted {
+        if HomeView.matchesTeamPair(
+          home: candidate.homeTeam,
+          away: candidate.awayTeam,
+          target: game
+        ) {
+          return candidate.pageURL
+        }
+      }
+    }
+
+    // Static fallback (also fires when the LLM extract returned but no
+    // candidate matched). Walk scraped links looking for both team
+    // names in the link text or URL.
+    return staticPageMatch(for: game, in: homepageLinks)
+  }
+
+  /// Lightweight team-pair substring match. Both team names (normalised
+  /// via the same diacritic-fold + punctuation-strip routine HomeView's
+  /// matcher uses) must appear in the link's text or href. For solo
+  /// events (empty awayTeam) only the home name needs to match.
+  private func staticPageMatch(for game: Game, in links: [ScrapedLink]) -> URL? {
+    let homeKey = HomeView.normalizeForMatch(game.homeTeam)
+    let awayKey = HomeView.normalizeForMatch(game.awayTeam)
+    guard !homeKey.isEmpty else { return nil }
+    for link in links {
+      let blob = HomeView.normalizeForMatch(link.text + " " + link.href)
+      let hasHome = blob.contains(homeKey)
+      let hasAway = awayKey.isEmpty || blob.contains(awayKey)
+      if hasHome && hasAway, let url = URL(string: link.href, relativeTo: baseURL) {
+        return url
+      }
+    }
+    return nil
+  }
+
   func fetchAvailableLeagues() async throws -> [SportLeague] {
     // Kick off ESPN prewarm at the top so every downstream path — including
     // the API-discovery and observed-URL early returns below — has a warm
