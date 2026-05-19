@@ -374,6 +374,11 @@ struct StreamWebView: UIViewRepresentable {
 
     let proxy = WeakScriptProxy(delegate: context.coordinator)
     config.userContentController.add(proxy, name: "streamURL")
+    // v2.37: cross-origin iframes get a separate channel so the
+    // Coordinator can decide to drill into them (navigate top-level)
+    // instead of treating their URL as a stream URL.
+    let iframeProxy = WeakScriptProxy(delegate: context.coordinator)
+    config.userContentController.add(iframeProxy, name: "streamIframe")
 
     let popupJS = browseMode ? Self.popupRedirectJS : Self.popupSuppressJS
     config.userContentController.addUserScript(WKUserScript(
@@ -505,6 +510,73 @@ struct StreamWebView: UIViewRepresentable {
         if (!clean || _r[clean] || !isStreamURL(clean) || isAdHost(clean)) return;
         _r[clean] = 1;
         try { window.webkit.messageHandlers.streamURL.postMessage(clean); } catch(e){}
+      }
+
+      // v2.37: cross-origin iframe drill-down.
+      // WKWebView's JS injection is blocked in cross-origin subframes, so
+      // m3u8s born inside embed-host iframes (FileMoon, Doodstream, etc.)
+      // are invisible to this shim. Surface those iframe URLs to native
+      // through a separate channel; Coordinator navigates the top frame
+      // into them so the shim runs same-origin and catches the stream.
+      var _seenIframes = {};
+      // Known embed/player hosts — used ONLY as a priority hint for which
+      // iframe to drill into when there are multiple. Not a parser list.
+      var _knownEmbedHosts = [
+        'filemoon', 'doodstream', 'dood.', 'vidcloud', 'embed.tube',
+        'watchsb', 'streamtape', 'vidsrc', 'vidplay', 'mixdrop',
+        'streamwish', 'streamhg', 'streamhide', 'voe.sx', 'upstream',
+        'fileone', 'streamlare', 'embedsito'
+      ];
+
+      function _iframePriorityScore(el) {
+        // Lower = more eager. Heuristic order matches the plan.
+        var hostMatch = 9999;
+        try {
+          var host = (new URL(el.src || el.getAttribute('src') || '', location.href)).host.toLowerCase();
+          for (var i = 0; i < _knownEmbedHosts.length; i++) {
+            if (host.indexOf(_knownEmbedHosts[i]) !== -1) { hostMatch = 100; break; }
+          }
+        } catch(e){}
+        var ancestorBoost = 9999;
+        var anc = el.parentElement;
+        for (var lvl = 0; lvl < 4 && anc; lvl++) {
+          var sig = ((anc.className || '') + ' ' + (anc.id || '')).toLowerCase();
+          if (/player|video|stream|embed|frame/.test(sig)) { ancestorBoost = 50; break; }
+          anc = anc.parentElement;
+        }
+        // Larger iframes are more likely to be the actual player.
+        var sizePenalty = 9999;
+        var w = parseInt(el.getAttribute('width') || el.clientWidth || 0, 10) || 0;
+        var h = parseInt(el.getAttribute('height') || el.clientHeight || 0, 10) || 0;
+        if (w * h > 0) sizePenalty = Math.max(0, 1000 - (w * h));
+        return Math.min(hostMatch, ancestorBoost, sizePenalty, 500);
+      }
+
+      function reportIframe(srcRaw, el) {
+        if (!srcRaw || typeof srcRaw !== 'string') return;
+        var resolved;
+        try {
+          var parsed = new URL(srcRaw, location.href);
+          resolved = parsed.href;
+          if (!parsed.host || parsed.host === location.host) return;  // same-origin: shim already runs
+          if (isAdHost(resolved)) return;
+        } catch(e) { return; }
+        if (_seenIframes[resolved]) return;
+        _seenIframes[resolved] = 1;
+        var score = el ? _iframePriorityScore(el) : 500;
+        try {
+          window.webkit.messageHandlers.streamIframe.postMessage(
+            JSON.stringify({ url: resolved, score: score })
+          );
+        } catch(e){}
+      }
+
+      function harvestIframes() {
+        var iframes = document.querySelectorAll('iframe[src]');
+        for (var i = 0; i < iframes.length && i < 25; i++) {
+          var f = iframes[i];
+          reportIframe(f.src || f.getAttribute('src'), f);
+        }
       }
 
       // Network intercepts
@@ -815,6 +887,8 @@ struct StreamWebView: UIViewRepresentable {
           });
         });
         scanScripts();
+        // v2.37: harvest cross-origin iframes for drill-down.
+        try { harvestIframes(); } catch(e){}
         document.querySelectorAll('video').forEach(function(v) {
           if (v.paused) v.play().catch(function(){});
         });
@@ -879,7 +953,13 @@ struct StreamWebView: UIViewRepresentable {
           mut.addedNodes.forEach(function(node) {
             if (node.tagName === 'IFRAME') {
               var src = node.src || node.getAttribute('src') || '';
-              if (src) report(src);
+              if (src) {
+                // v2.37: cross-origin iframe → drill-down candidate.
+                // Same-origin (and non-iframe stream URLs from the
+                // existing intercept paths) keep flowing through report().
+                reportIframe(src, node);
+                report(src);  // also fall through in case the src is itself a stream URL
+              }
             }
             if (node.tagName === 'SCRIPT' && !node.src) {
               setTimeout(scanScripts, 200);
@@ -932,6 +1012,20 @@ struct StreamWebView: UIViewRepresentable {
     private var seenURLs = Set<String>()
     private var firstObservedURL: URL?
     weak var webView: WKWebView?
+    // v2.37: cross-origin iframe drill-down state. When the JS-shim
+    // reports an iframe URL via the streamIframe channel, we navigate
+    // the top WebView into it so the shim runs same-origin and catches
+    // the m3u8 emitted by the embed-host player. Bounded by maxHops.
+    private var iframeHops = 0
+    private static let maxIframeHops = 2
+    private var visitedIframeURLs = Set<String>()
+    /// Best (lowest-score) iframe URL we've seen for the current page.
+    private var pendingBestIframe: (url: URL, score: Int)?
+    /// Deadline by which we'll commit to the best iframe candidate.
+    /// Allows accumulating a few candidates before picking the smallest-
+    /// scoring one. 750ms is enough for fast pages, short enough not
+    /// to feel laggy.
+    private var iframeCommitTask: Task<Void, Never>?
 
     init(onStreamURLFound: ((URL, [HTTPCookie]) -> Void)?, browseMode: Bool) {
       self.onStreamURLFound = onStreamURLFound
@@ -939,9 +1033,68 @@ struct StreamWebView: UIViewRepresentable {
     }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-      guard let urlString = message.body as? String,
-            let url = URL(string: urlString) else { return }
-      report(url)
+      switch message.name {
+      case "streamIframe":
+        // v2.37: JSON payload {url, score}. Coordinator decides
+        // whether and when to navigate the top WebView into it.
+        handleIframeCandidate(message.body)
+      case "streamURL":
+        fallthrough
+      default:
+        guard let urlString = message.body as? String,
+              let url = URL(string: urlString) else { return }
+        report(url)
+      }
+    }
+
+    // v2.37: receive cross-origin iframe candidates. Collect for a
+    // short window, then drill into the best (lowest-score) one by
+    // navigating the top WebView there with parent as Referer.
+    private func handleIframeCandidate(_ body: Any) {
+      guard !found, iframeHops < Self.maxIframeHops else { return }
+      guard let s = body as? String,
+            let data = s.data(using: .utf8),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let urlStr = json["url"] as? String,
+            let url = URL(string: urlStr) else { return }
+      let score = (json["score"] as? Int) ?? 500
+      if visitedIframeURLs.contains(urlStr) { return }  // don't loop
+      // Track best; if first candidate, schedule a commit after a
+      // short window so we accumulate alternatives before deciding.
+      if pendingBestIframe == nil || score < (pendingBestIframe?.score ?? Int.max) {
+        pendingBestIframe = (url, score)
+      }
+      if iframeCommitTask == nil {
+        iframeCommitTask = Task { [weak self] in
+          try? await Task.sleep(nanoseconds: 750_000_000)
+          await MainActor.run { self?.commitPendingIframe() }
+        }
+      }
+    }
+
+    private func commitPendingIframe() {
+      defer { pendingBestIframe = nil; iframeCommitTask = nil }
+      guard !found,
+            iframeHops < Self.maxIframeHops,
+            let pick = pendingBestIframe,
+            let webView else { return }
+      // Skip if we already navigated to this URL.
+      if webView.url?.absoluteString == pick.url.absoluteString { return }
+      iframeHops += 1
+      visitedIframeURLs.insert(pick.url.absoluteString)
+      var request = URLRequest(url: pick.url)
+      request.setValue(
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+        forHTTPHeaderField: "User-Agent"
+      )
+      if let parent = webView.url?.absoluteString {
+        request.setValue(parent, forHTTPHeaderField: "Referer")
+        // Many embed hosts gate on Origin too.
+        if let scheme = webView.url?.scheme, let host = webView.url?.host {
+          request.setValue("\(scheme)://\(host)", forHTTPHeaderField: "Origin")
+        }
+      }
+      webView.load(request)
     }
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
