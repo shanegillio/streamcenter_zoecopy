@@ -2,10 +2,13 @@ import SwiftUI
 import WebKit
 import AVKit
 
-/// v2.32 simplified: tap a game, walk the attempts list, first URL the
-/// shim catches that AVURLAsset says is playable wins. No accumulator,
-/// no scoring, no parallel pre-resolve race. ~v2.28 shape with the v2.31
-/// target-game-aware card scoping retained because it's tiny and useful.
+/// v2.38 verification mode: the WebView is visible from the start, the
+/// walk + iframe drill-down still run automatically (driving navigation
+/// toward the discovered destination), every detected stream URL is
+/// surfaced in a bottom strip the user can tap to manually play, and
+/// the navigation history is shown so the user can verify we landed on
+/// the right page. AVPlayer auto-commit is OFF — once we confirm
+/// navigation works on real sites, v2.39 brings auto-play back.
 struct PlayerView: View {
   let game: Game
   @Environment(SourceRegistry.self) private var registry
@@ -15,12 +18,14 @@ struct PlayerView: View {
   @State private var attempts: [SourceAttempt] = []
   @State private var currentAttemptIdx: Int = 0
   @State private var allFailed: Bool = false
-  /// Per-source budget. 8s — long enough for a homepage + CF clearance
-  /// + the JS-intercept layer to surface a stream URL; short enough that
-  /// dead sources fail fast.
-  private static let perSourceBudget: TimeInterval = 8
-  /// Revealed when user hits "Browse Manually" on the retry UI.
-  @State private var showWebFallback = false
+  /// Per-source budget. v2.38: relaxed to 20 s because we no longer
+  /// auto-advance — the user manually picks "Try next source" if they
+  /// want to abandon. 20 s gives the walk + iframe drill-down time to
+  /// reach the discovered destination on slow sites.
+  private static let perSourceBudget: TimeInterval = 20
+  /// v2.38: WebView is visible by default in verification mode. Was
+  /// previously gated on "Browse Manually" from the retry UI.
+  @State private var showWebFallback = true
 
   struct SourceAttempt: Identifiable {
     let id = UUID()
@@ -29,6 +34,25 @@ struct PlayerView: View {
     var status: Status = .pending
     enum Status { case pending, trying, failed }
   }
+
+  /// v2.38: a stream URL the JS-shim detected. User taps "Play" in the
+  /// bottom strip to commit one to AVPlayer.
+  struct StreamCandidate: Identifiable, Equatable {
+    let id = UUID()
+    let url: URL
+    let cookies: [HTTPCookie]
+    let referer: URL
+    static func == (lhs: StreamCandidate, rhs: StreamCandidate) -> Bool {
+      lhs.url == rhs.url
+    }
+  }
+  /// v2.38: stream URLs the shim caught on the current attempt. Reset
+  /// whenever currentAttemptIdx changes.
+  @State private var capturedStreams: [StreamCandidate] = []
+  /// v2.38: every URL the WebView has navigated to during this attempt,
+  /// in order. Surfaced as a "via X → Y → Z" breadcrumb. Coordinator
+  /// appends here on each `webView(_:didCommit:)`.
+  @State private var navigationHistory: [URL] = []
 
   var body: some View {
     ZStack {
@@ -41,29 +65,35 @@ struct PlayerView: View {
             retryUI
           } else if !attempts.isEmpty, currentAttemptIdx < attempts.count {
             let current = attempts[currentAttemptIdx]
-            StreamWebView(
-              url: current.pageURL,
-              ruleList: ruleList,
-              onStreamURLFound: { streamURL, cookies in
-                Task { @MainActor in
-                  let p = makePlayer(url: streamURL, cookies: cookies, referer: current.pageURL)
-                  avPlayer = p
-                  p.play()
-                  recordSuccess(attempt: current)
-                }
-              },
-              targetGame: game
-            )
-            .id(current.id)
-            .ignoresSafeArea()
-            .opacity(showWebFallback ? 1 : 0)
-            if !showWebFallback {
-              StreamLoadingOverlay(
-                attemptIndex: currentAttemptIdx,
-                totalAttempts: attempts.count,
-                sourceName: sourceName(for: current.sourceID)
+            // v2.38: verification layout — top URL strip, visible
+            // WebView in the middle, captured-streams strip at bottom.
+            VStack(spacing: 0) {
+              navStrip(sourceName: sourceName(for: current.sourceID))
+              StreamWebView(
+                url: current.pageURL,
+                ruleList: ruleList,
+                onStreamURLFound: { streamURL, cookies in
+                  Task { @MainActor in
+                    appendCandidate(
+                      url: streamURL,
+                      cookies: cookies,
+                      referer: current.pageURL
+                    )
+                  }
+                },
+                onNavigation: { navURL in
+                  Task { @MainActor in
+                    appendNavigation(navURL)
+                  }
+                },
+                targetGame: game
               )
+              .id(current.id)
+              if !capturedStreams.isEmpty {
+                capturedStreamsStrip(referer: current.pageURL)
+              }
             }
+            .ignoresSafeArea(edges: .bottom)
           } else {
             StreamLoadingOverlay(attemptIndex: 0, totalAttempts: 0, sourceName: "")
           }
@@ -97,20 +127,14 @@ struct PlayerView: View {
       ruleList = await AdBlockRules.compile()
       rulesReady = true
       buildAttempts()
-      while currentAttemptIdx < attempts.count {
-        let startedIdx = currentAttemptIdx
-        attempts[startedIdx].status = .trying
-        SourceHealth.shared.recordAttempt(sourceID: attempts[startedIdx].sourceID)
-        try? await Task.sleep(nanoseconds: UInt64(Self.perSourceBudget * 1_000_000_000))
-        if avPlayer != nil { return }
-        if currentAttemptIdx == startedIdx {
-          attempts[startedIdx].status = .failed
-          currentAttemptIdx += 1
-        }
-      }
-      if avPlayer == nil {
-        allFailed = true
-        recordAllFailures()
+      // v2.38: no auto-advance. We just record an attempt for the
+      // current source and let the WebView load. The user decides
+      // when to advance via the "Try next" button in navStrip.
+      if !attempts.isEmpty {
+        attempts[currentAttemptIdx].status = .trying
+        SourceHealth.shared.recordAttempt(
+          sourceID: attempts[currentAttemptIdx].sourceID
+        )
       }
     }
   }
@@ -164,6 +188,145 @@ struct PlayerView: View {
     attempts = built
     currentAttemptIdx = 0
     allFailed = false
+  }
+
+  // MARK: v2.38 verification UI
+
+  /// Top strip: source name, current page URL, "via" breadcrumb of the
+  /// path our walk/drill-down navigated through, and a "Try next source"
+  /// button when more attempts exist.
+  private func navStrip(sourceName: String) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(spacing: 6) {
+        Image(systemName: "antenna.radiowaves.left.and.right")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(.white.opacity(0.55))
+        Text(sourceName)
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.white.opacity(0.85))
+        Spacer()
+        if currentAttemptIdx + 1 < attempts.count {
+          Button {
+            advanceAttempt()
+          } label: {
+            HStack(spacing: 4) {
+              Text("Try next").font(.caption2)
+              Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
+            }
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(Color.white.opacity(0.12), in: Capsule())
+            .foregroundStyle(.white.opacity(0.85))
+          }
+        }
+      }
+      if let last = navigationHistory.last {
+        Text(displayURL(last))
+          .font(.caption2.monospaced())
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .foregroundStyle(.white)
+      }
+      if navigationHistory.count > 1 {
+        Text(breadcrumbText)
+          .font(.system(size: 9))
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .foregroundStyle(.white.opacity(0.5))
+      }
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(Color.black.opacity(0.85))
+  }
+
+  /// Bottom strip: every stream URL the shim has caught on this
+  /// attempt, with a Play button each.
+  private func capturedStreamsStrip(referer: URL) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(spacing: 6) {
+        Image(systemName: "waveform")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(.green.opacity(0.9))
+        Text("Detected streams (\(capturedStreams.count))")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.white.opacity(0.85))
+      }
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 8) {
+          ForEach(capturedStreams) { cand in
+            Button {
+              playCandidate(cand)
+            } label: {
+              HStack(spacing: 6) {
+                Image(systemName: "play.fill").font(.system(size: 10, weight: .bold))
+                Text(displayURL(cand.url))
+                  .font(.system(size: 11, weight: .medium).monospaced())
+                  .lineLimit(1)
+                  .truncationMode(.middle)
+              }
+              .padding(.horizontal, 10).padding(.vertical, 6)
+              .background(Color.green.opacity(0.18), in: Capsule())
+              .foregroundStyle(.white)
+            }
+          }
+        }
+      }
+    }
+    .padding(.horizontal, 12)
+    .padding(.top, 8)
+    .padding(.bottom, 12)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(Color.black.opacity(0.92))
+  }
+
+  /// Compact URL for display: host + last path segment.
+  private func displayURL(_ url: URL) -> String {
+    let host = url.host ?? ""
+    let lastPath = url.pathComponents.last(where: { $0 != "/" }) ?? ""
+    if lastPath.isEmpty { return host }
+    return "\(host)/…/\(lastPath)"
+  }
+
+  private var breadcrumbText: String {
+    let hops = navigationHistory.dropLast().suffix(4)
+    if hops.isEmpty { return "" }
+    let parts = hops.map { $0.host ?? "?" }
+    return "via " + parts.joined(separator: " → ")
+  }
+
+  private func appendCandidate(url: URL, cookies: [HTTPCookie], referer: URL) {
+    if capturedStreams.contains(where: { $0.url == url }) { return }
+    capturedStreams.append(StreamCandidate(url: url, cookies: cookies, referer: referer))
+  }
+
+  private func appendNavigation(_ url: URL) {
+    if navigationHistory.last == url { return }
+    navigationHistory.append(url)
+    if navigationHistory.count > 8 {
+      navigationHistory.removeFirst(navigationHistory.count - 8)
+    }
+  }
+
+  private func playCandidate(_ cand: StreamCandidate) {
+    let p = makePlayer(url: cand.url, cookies: cand.cookies, referer: cand.referer)
+    avPlayer = p
+    p.play()
+    // Record success for the source that yielded this candidate. We
+    // don't know which attempt index it was from precisely, but for
+    // health-stats purposes the current attempt is a reasonable proxy.
+    if currentAttemptIdx < attempts.count {
+      recordSuccess(attempt: attempts[currentAttemptIdx])
+    }
+  }
+
+  /// User-driven advance to next attempt. Resets per-attempt state.
+  private func advanceAttempt() {
+    guard currentAttemptIdx + 1 < attempts.count else { return }
+    SourceHealth.shared.recordAttempt(sourceID: attempts[currentAttemptIdx].sourceID)
+    capturedStreams = []
+    navigationHistory = []
+    currentAttemptIdx += 1
   }
 
   // v2.34: shown when the user has no sources toggled on AND the game
@@ -244,39 +407,22 @@ struct PlayerView: View {
       .padding(.vertical, 8)
       HStack(spacing: 14) {
         Button {
+          // v2.38: just rebuild attempts and let verification mode
+          // re-load the first attempt's page from scratch.
           buildAttempts()
+          capturedStreams = []
+          navigationHistory = []
           allFailed = false
-          Task {
-            while currentAttemptIdx < attempts.count {
-              let startedIdx = currentAttemptIdx
-              attempts[startedIdx].status = .trying
-              SourceHealth.shared.recordAttempt(sourceID: attempts[startedIdx].sourceID)
-              try? await Task.sleep(nanoseconds: UInt64(Self.perSourceBudget * 1_000_000_000))
-              if avPlayer != nil { return }
-              if currentAttemptIdx == startedIdx {
-                attempts[startedIdx].status = .failed
-                currentAttemptIdx += 1
-              }
-            }
-            if avPlayer == nil { allFailed = true }
+          if !attempts.isEmpty {
+            SourceHealth.shared.recordAttempt(
+              sourceID: attempts[currentAttemptIdx].sourceID
+            )
           }
         } label: {
           Label("Try Again", systemImage: "arrow.clockwise")
             .padding(.horizontal, 16).padding(.vertical, 10)
             .background(Color.white.opacity(0.15), in: Capsule())
             .foregroundStyle(.white)
-        }
-        if !attempts.isEmpty {
-          Button {
-            showWebFallback = true
-            allFailed = false
-            currentAttemptIdx = max(0, attempts.count - 1)
-          } label: {
-            Label("Browse Manually", systemImage: "safari")
-              .padding(.horizontal, 16).padding(.vertical, 10)
-              .background(Color.white.opacity(0.08), in: Capsule())
-              .foregroundStyle(.white.opacity(0.8))
-          }
         }
       }
       .padding(.top, 4)
@@ -356,6 +502,10 @@ struct StreamWebView: UIViewRepresentable {
   let url: URL
   let ruleList: WKContentRuleList?
   var onStreamURLFound: ((URL, [HTTPCookie]) -> Void)? = nil
+  /// v2.38: fired on every top-frame navigation commit (initial load,
+  /// iframe-drill navigations, redirect chains). Used by PlayerView to
+  /// build the breadcrumb the user sees in verification mode.
+  var onNavigation: ((URL) -> Void)? = nil
   var browseMode: Bool = false
   /// v2.31 retained: when set, the JS-shim scopes mirror-clicking to the
   /// card whose innerText matches both team slugs. The one v2.31 idea
@@ -363,7 +513,11 @@ struct StreamWebView: UIViewRepresentable {
   var targetGame: Game? = nil
 
   func makeCoordinator() -> Coordinator {
-    Coordinator(onStreamURLFound: onStreamURLFound, browseMode: browseMode)
+    Coordinator(
+      onStreamURLFound: onStreamURLFound,
+      onNavigation: onNavigation,
+      browseMode: browseMode
+    )
   }
 
   func makeUIView(context: Context) -> WKWebView {
@@ -1007,6 +1161,9 @@ struct StreamWebView: UIViewRepresentable {
 
   final class Coordinator: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     let onStreamURLFound: ((URL, [HTTPCookie]) -> Void)?
+    /// v2.38: invoked from `webView(_:didCommit:)` so PlayerView can
+    /// render the navigation breadcrumb.
+    let onNavigation: ((URL) -> Void)?
     let browseMode: Bool
     private var found = false
     private var seenURLs = Set<String>()
@@ -1027,8 +1184,11 @@ struct StreamWebView: UIViewRepresentable {
     /// to feel laggy.
     private var iframeCommitTask: Task<Void, Never>?
 
-    init(onStreamURLFound: ((URL, [HTTPCookie]) -> Void)?, browseMode: Bool) {
+    init(onStreamURLFound: ((URL, [HTTPCookie]) -> Void)?,
+         onNavigation: ((URL) -> Void)? = nil,
+         browseMode: Bool) {
       self.onStreamURLFound = onStreamURLFound
+      self.onNavigation = onNavigation
       self.browseMode = browseMode
     }
 
@@ -1103,6 +1263,15 @@ struct StreamWebView: UIViewRepresentable {
         webView.load(URLRequest(url: url))
       }
       return nil
+    }
+
+    // v2.38: fire onNavigation on every top-frame commit so the
+    // breadcrumb in PlayerView reflects what we've navigated through
+    // (initial load, iframe drill-down hops, redirects).
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+      if let url = webView.url {
+        DispatchQueue.main.async { self.onNavigation?(url) }
+      }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
