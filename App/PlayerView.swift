@@ -60,6 +60,17 @@ struct PlayerView: View {
   /// v2.39: load-failure surfaced when WebView's provisional navigation
   /// fails AND host-fallback couldn't recover.
   @State private var loadFailure: String? = nil
+  /// v2.40: latest game-shaped cards the shim spotted on the page.
+  /// Lets the user see whether their target IS on this source. Tap
+  /// to dispatch a click via evaluateJavaScript.
+  @State private var detectedCards: [StreamWebView.DetectedCard] = []
+  /// v2.40: set when the shim recognized an auth/login wall on the
+  /// current page.
+  @State private var authWallReason: String? = nil
+  /// v2.40: small bridge that holds a weak ref to the WKWebView so the
+  /// detected-cards UI can dispatch a `click()` via evaluateJavaScript
+  /// when the user taps an alternative game.
+  @StateObject private var webBridge = StreamWebViewBridge()
 
   var body: some View {
     ZStack {
@@ -95,7 +106,7 @@ struct PlayerView: View {
                 },
                 onWalkEvent: { event in
                   Task { @MainActor in
-                    lastWalkEvent = event
+                    handleWalkEvent(event)
                   }
                 },
                 onLoadFailed: { _, message in
@@ -103,6 +114,7 @@ struct PlayerView: View {
                     loadFailure = message
                   }
                 },
+                bridge: webBridge,
                 targetGame: game
               )
               .id(current.id)
@@ -275,6 +287,44 @@ struct PlayerView: View {
             .foregroundStyle(.red.opacity(0.9))
         }
       }
+      // v2.40: auth-wall warning (streameast SSO, etc.)
+      if let auth = authWallReason {
+        HStack(spacing: 4) {
+          Image(systemName: "lock.fill")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(.orange)
+          Text("This source requires login (\(auth))")
+            .font(.system(size: 10))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .foregroundStyle(.orange.opacity(0.9))
+        }
+      }
+      // v2.40: detected cards — what's actually on the page. Tappable
+      // so user can navigate to an alternative if our target matcher
+      // missed (or if their game just isn't on this source).
+      if !detectedCards.isEmpty {
+        Text("Found on this page (\(detectedCards.count))")
+          .font(.system(size: 9, weight: .semibold))
+          .foregroundStyle(.white.opacity(0.6))
+          .padding(.top, 2)
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 6) {
+            ForEach(detectedCards) { card in
+              Button {
+                webBridge.clickFirstMatching(card.text)
+              } label: {
+                Text(card.text)
+                  .font(.system(size: 11, weight: .medium))
+                  .lineLimit(1)
+                  .padding(.horizontal, 8).padding(.vertical, 4)
+                  .background(Color.white.opacity(0.12), in: Capsule())
+                  .foregroundStyle(.white)
+              }
+            }
+          }
+        }
+      }
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
@@ -369,6 +419,21 @@ struct PlayerView: View {
     capturedStreams.append(StreamCandidate(url: url, cookies: cookies, referer: referer))
   }
 
+  /// v2.40: dispatch incoming walk events. detected_cards updates the
+  /// alternative-cards list; auth_wall sets the inline warning. Everything
+  /// else falls through to the latest-walk-event display.
+  private func handleWalkEvent(_ event: StreamWebView.WalkEvent) {
+    switch event.kind {
+    case "detected_cards":
+      detectedCards = event.detectedCards
+    case "auth_wall":
+      authWallReason = event.info
+      lastWalkEvent = event
+    default:
+      lastWalkEvent = event
+    }
+  }
+
   private func appendNavigation(_ url: URL) {
     if navigationHistory.last == url { return }
     navigationHistory.append(url)
@@ -397,6 +462,8 @@ struct PlayerView: View {
     navigationHistory = []
     lastWalkEvent = nil
     loadFailure = nil
+    detectedCards = []
+    authWallReason = nil
     currentAttemptIdx += 1
   }
 
@@ -485,6 +552,8 @@ struct PlayerView: View {
           navigationHistory = []
           lastWalkEvent = nil
           loadFailure = nil
+          detectedCards = []
+          authWallReason = nil
           allFailed = false
           if !attempts.isEmpty {
             SourceHealth.shared.recordAttempt(
@@ -571,6 +640,44 @@ struct VideoPlayerView: UIViewControllerRepresentable {
 
 // MARK: - WebKit stream view with m3u8 interception
 
+/// v2.40: thin bridge so PlayerView can drive the underlying WKWebView
+/// (e.g. dispatch a click via evaluateJavaScript when the user taps a
+/// detected card). Holds the WKWebView weakly so the proxy doesn't
+/// extend its lifetime.
+final class StreamWebViewBridge: ObservableObject {
+  weak var webView: WKWebView?
+
+  /// Find a clickable element on the page whose readable text contains
+  /// `pair` and click it. Used when the user taps an alternative game
+  /// in the "Detected on this page" strip and our exact matcher missed.
+  func clickFirstMatching(_ pair: String) {
+    guard let webView else { return }
+    let escaped = pair
+      .replacingOccurrences(of: "\\", with: "\\\\")
+      .replacingOccurrences(of: "'", with: "\\'")
+    let js = """
+    (function(){
+      var t = '\(escaped)'.toLowerCase();
+      var sel = 'a[href],button,[onclick],[data-match],[data-event],[data-game],' +
+                '[role="button"],[class*="card" i],[class*="match" i],[class*="game" i]';
+      var els = document.querySelectorAll(sel);
+      for (var i = 0; i < els.length && i < 2000; i++) {
+        var e = els[i];
+        var b = ((e.innerText || e.textContent || '') + ' ' +
+                 (e.getAttribute && (e.getAttribute('aria-label') || '')) + ' ' +
+                 (e.getAttribute && (e.getAttribute('title') || ''))).toLowerCase();
+        if (b.indexOf(t) !== -1) {
+          try { e.click(); } catch(err) {}
+          return true;
+        }
+      }
+      return false;
+    })();
+    """
+    webView.evaluateJavaScript(js, completionHandler: nil)
+  }
+}
+
 struct StreamWebView: UIViewRepresentable {
   let url: URL
   let ruleList: WKContentRuleList?
@@ -589,6 +696,10 @@ struct StreamWebView: UIViewRepresentable {
   /// couldn't find a working variant. PlayerView shows this inline.
   var onLoadFailed: ((URL, String) -> Void)? = nil
   var browseMode: Bool = false
+  /// v2.40: optional proxy that gets assigned the WKWebView in
+  /// makeUIView so callers (PlayerView) can dispatch follow-up
+  /// commands like clicking an alternative card the user tapped.
+  var bridge: StreamWebViewBridge? = nil
   /// v2.31 retained: when set, the JS-shim scopes mirror-clicking to the
   /// card whose innerText matches both team slugs. The one v2.31 idea
   /// kept because it directly matches the user's mental model and is tiny.
@@ -597,8 +708,29 @@ struct StreamWebView: UIViewRepresentable {
   /// v2.39: parsed walk event from the JS-shim's streamWalk channel.
   struct WalkEvent: Equatable {
     let kind: String   // "clicked" | "category_click" | "no_match" | "click_failed"
+                       // | "auth_wall" | "detected_cards" (payload version)
     let info: String
     let at: Date
+    /// v2.40: parsed payload for detected_cards events (one entry per
+    /// game-shaped card the shim spotted on the current page).
+    let detectedCards: [DetectedCard]
+    init(kind: String, info: String, at: Date,
+         detectedCards: [DetectedCard] = []) {
+      self.kind = kind
+      self.info = info
+      self.at = at
+      self.detectedCards = detectedCards
+    }
+  }
+
+  /// v2.40: a single card we detected on the page. `text` is the
+  /// canonical "Home vs Away" pair; `blob` is the readable text we
+  /// pulled from the element (truncated). PlayerView lets the user
+  /// tap one to dispatch a click through evaluateJavaScript.
+  struct DetectedCard: Identifiable, Equatable {
+    let id = UUID()
+    let text: String
+    let blob: String
   }
 
   func makeCoordinator() -> Coordinator {
@@ -656,6 +788,9 @@ struct StreamWebView: UIViewRepresentable {
     webView.backgroundColor = .black
     webView.isOpaque = false
     context.coordinator.webView = webView
+    // v2.40: expose the WebView to the bridge so PlayerView can
+    // dispatch evaluateJavaScript commands (detected-card taps).
+    bridge?.webView = webView
 
     var request = URLRequest(url: url)
     request.setValue(
@@ -1012,6 +1147,82 @@ struct StreamWebView: UIViewRepresentable {
           }));
         } catch(e){}
       }
+      function postWalkPayload(kind, payload) {
+        try {
+          window.webkit.messageHandlers.streamWalk.postMessage(JSON.stringify({
+            kind: kind,
+            payload: payload,
+            time: Date.now()
+          }));
+        } catch(e){}
+      }
+
+      // v2.40: harvest game-shaped cards from the current DOM so the user
+      // can see what's actually on the page (rather than just "no match").
+      // If their target game IS in the list but our exact matcher missed,
+      // they can tap it manually. If it's NOT in the list, they know to
+      // switch sources.
+      var _gameLinePattern = /([A-Z][\\w'.\\-]+(?:\\s[A-Z][\\w'.\\-]+){0,3})\\s+(?:vs\\.?|@|—|–)\\s+([A-Z][\\w'.\\-]+(?:\\s[A-Z][\\w'.\\-]+){0,3})/;
+      var _lastDetectedSerialized = '';
+      var _lastDetectedPostedAt = 0;
+      function harvestDetectedCards() {
+        var now = Date.now();
+        if (now - _lastDetectedPostedAt < 2000) return;  // throttle
+        var found = [];
+        var seen = {};
+        var candidates;
+        try {
+          candidates = document.querySelectorAll(
+            'a[href], button, [onclick], [data-match], [data-event], [data-game], ' +
+            '[role="button"], ' +
+            '[class*="match" i],[class*="game" i],[class*="card" i],[class*="event" i],' +
+            '[class*="fixture" i]'
+          );
+        } catch(e) { return; }
+        var cap = Math.min(candidates.length, 1200);
+        for (var i = 0; i < cap && found.length < 12; i++) {
+          var el = candidates[i];
+          var blob = readableTextFromElement(el);
+          if (!blob || blob.length < 8 || blob.length > 600) continue;
+          var m = blob.match(_gameLinePattern);
+          if (!m) continue;
+          var pair = (m[1] + ' vs ' + m[2]).trim();
+          var key = pair.toLowerCase();
+          if (seen[key]) continue;
+          seen[key] = 1;
+          found.push({ text: pair, blob: blob.slice(0, 140) });
+        }
+        if (found.length === 0) return;
+        var serialized = JSON.stringify(found);
+        if (serialized === _lastDetectedSerialized) return;  // unchanged
+        _lastDetectedSerialized = serialized;
+        _lastDetectedPostedAt = now;
+        postWalkPayload('detected_cards', found);
+      }
+
+      // v2.40: detect auth/login walls so the user knows why we can't
+      // navigate further (streameast's SSO frame is the textbook case).
+      var _authWallReported = false;
+      function detectAuthWall() {
+        if (_authWallReported) return;
+        var url = location.href.toLowerCase();
+        var title = (document.title || '').toLowerCase();
+        var hostHints = ['/sso', '/signin', '/sign-in', '/login', '/log-in', '/auth', 'auth.', 'login.', 'sso-frame'];
+        var titleHints = ['sign in', 'log in', 'login', 'authentication required', 'access denied'];
+        var hostMatch = hostHints.some(function(h){ return url.indexOf(h) !== -1; });
+        var titleMatch = titleHints.some(function(h){ return title.indexOf(h) !== -1; });
+        // Also: very tiny DOM with no game-shaped content is suspicious.
+        var domSize = 0;
+        try { domSize = document.querySelectorAll('*').length; } catch(e){}
+        var tinyAndEmpty = domSize < 50 && document.querySelectorAll('input[type="password"], input[name*="pass" i], input[id*="pass" i]').length > 0;
+        if (hostMatch || titleMatch || tinyAndEmpty) {
+          _authWallReported = true;
+          var reason = hostMatch ? 'host: ' + (new URL(location.href)).host
+                     : titleMatch ? 'title: ' + (document.title || '').slice(0, 60)
+                     : 'password field detected';
+          postWalkEvent('auth_wall', reason);
+        }
+      }
 
       function readableTextFromElement(el) {
         if (!el) return '';
@@ -1176,6 +1387,9 @@ struct StreamWebView: UIViewRepresentable {
         // v2.35: drive page navigation toward the target game / category.
         // Bounded by _maxWalkClicks; no-op once we've clicked enough.
         try { tryAdvance(); } catch(e){}
+        // v2.40: surface page content for the verification strip.
+        try { harvestDetectedCards(); } catch(e){}
+        try { detectAuthWall(); } catch(e){}
 
         var mirrorSelectors = [
           '.vjs-big-play-button', '.jw-icon-display', '.jw-display-icon-display',
@@ -1346,14 +1560,26 @@ struct StreamWebView: UIViewRepresentable {
       }
     }
 
-    // v2.39: parse + forward a walk event.
+    // v2.39/v2.40: parse + forward a walk event.
     private func handleWalkEvent(_ body: Any) {
       guard let s = body as? String,
             let data = s.data(using: .utf8),
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let kind = json["kind"] as? String else { return }
       let info = (json["info"] as? String) ?? ""
-      let event = StreamWebView.WalkEvent(kind: kind, info: info, at: Date())
+      var detected: [StreamWebView.DetectedCard] = []
+      // v2.40: detected_cards events carry a payload array
+      if kind == "detected_cards",
+         let raw = json["payload"] as? [[String: Any]] {
+        for entry in raw {
+          guard let text = entry["text"] as? String, !text.isEmpty else { continue }
+          let blob = (entry["blob"] as? String) ?? ""
+          detected.append(StreamWebView.DetectedCard(text: text, blob: blob))
+        }
+      }
+      let event = StreamWebView.WalkEvent(
+        kind: kind, info: info, at: Date(), detectedCards: detected
+      )
       DispatchQueue.main.async { self.onWalkEvent?(event) }
     }
 
