@@ -53,6 +53,13 @@ struct PlayerView: View {
   /// in order. Surfaced as a "via X → Y → Z" breadcrumb. Coordinator
   /// appends here on each `webView(_:didCommit:)`.
   @State private var navigationHistory: [URL] = []
+  /// v2.39: most-recent walk activity event from the JS-shim. Shown
+  /// in navStrip so the user can see whether the walk fired, what it
+  /// clicked, or that it gave up.
+  @State private var lastWalkEvent: StreamWebView.WalkEvent? = nil
+  /// v2.39: load-failure surfaced when WebView's provisional navigation
+  /// fails AND host-fallback couldn't recover.
+  @State private var loadFailure: String? = nil
 
   var body: some View {
     ZStack {
@@ -84,6 +91,16 @@ struct PlayerView: View {
                 onNavigation: { navURL in
                   Task { @MainActor in
                     appendNavigation(navURL)
+                  }
+                },
+                onWalkEvent: { event in
+                  Task { @MainActor in
+                    lastWalkEvent = event
+                  }
+                },
+                onLoadFailed: { _, message in
+                  Task { @MainActor in
+                    loadFailure = message
                   }
                 },
                 targetGame: game
@@ -233,11 +250,63 @@ struct PlayerView: View {
           .truncationMode(.middle)
           .foregroundStyle(.white.opacity(0.5))
       }
+      // v2.39: walk activity + load failure surfaced inline.
+      if let event = lastWalkEvent {
+        HStack(spacing: 4) {
+          Image(systemName: walkIcon(for: event.kind))
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(walkColor(for: event.kind))
+          Text(walkLabel(for: event))
+            .font(.system(size: 10))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .foregroundStyle(.white.opacity(0.85))
+        }
+      }
+      if let failure = loadFailure {
+        HStack(spacing: 4) {
+          Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(.red)
+          Text("Load failed: \(failure)")
+            .font(.system(size: 10))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .foregroundStyle(.red.opacity(0.9))
+        }
+      }
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(Color.black.opacity(0.85))
+  }
+
+  private func walkIcon(for kind: String) -> String {
+    switch kind {
+    case "clicked": return "hand.tap.fill"
+    case "category_click": return "folder.fill"
+    case "click_failed": return "xmark.octagon.fill"
+    case "no_match": return "magnifyingglass"
+    default: return "circle"
+    }
+  }
+  private func walkColor(for kind: String) -> Color {
+    switch kind {
+    case "clicked", "category_click": return .green
+    case "click_failed": return .red
+    case "no_match": return .yellow
+    default: return .white.opacity(0.6)
+    }
+  }
+  private func walkLabel(for event: StreamWebView.WalkEvent) -> String {
+    switch event.kind {
+    case "clicked": return "Walk clicked: \(event.info.replacingOccurrences(of: "card: ", with: ""))"
+    case "category_click": return "Walk → category: \(event.info)"
+    case "click_failed": return "Walk click error: \(event.info)"
+    case "no_match": return "Walk: no matching card yet (\(event.info))"
+    default: return "Walk: \(event.kind) — \(event.info)"
+    }
   }
 
   /// Bottom strip: every stream URL the shim has caught on this
@@ -326,6 +395,8 @@ struct PlayerView: View {
     SourceHealth.shared.recordAttempt(sourceID: attempts[currentAttemptIdx].sourceID)
     capturedStreams = []
     navigationHistory = []
+    lastWalkEvent = nil
+    loadFailure = nil
     currentAttemptIdx += 1
   }
 
@@ -412,6 +483,8 @@ struct PlayerView: View {
           buildAttempts()
           capturedStreams = []
           navigationHistory = []
+          lastWalkEvent = nil
+          loadFailure = nil
           allFailed = false
           if !attempts.isEmpty {
             SourceHealth.shared.recordAttempt(
@@ -506,16 +579,34 @@ struct StreamWebView: UIViewRepresentable {
   /// iframe-drill navigations, redirect chains). Used by PlayerView to
   /// build the breadcrumb the user sees in verification mode.
   var onNavigation: ((URL) -> Void)? = nil
+  /// v2.39: walk activity from the JS-shim — clicked element text,
+  /// "no match" notices, category-link picks. PlayerView surfaces the
+  /// most recent in the navStrip so the user can see what the walk is
+  /// actually doing.
+  var onWalkEvent: ((WalkEvent) -> Void)? = nil
+  /// v2.39: fired when the WebView's provisional navigation is cancelled
+  /// (frame load interrupted, sinkhole MIME, etc.) and host-fallback
+  /// couldn't find a working variant. PlayerView shows this inline.
+  var onLoadFailed: ((URL, String) -> Void)? = nil
   var browseMode: Bool = false
   /// v2.31 retained: when set, the JS-shim scopes mirror-clicking to the
   /// card whose innerText matches both team slugs. The one v2.31 idea
   /// kept because it directly matches the user's mental model and is tiny.
   var targetGame: Game? = nil
 
+  /// v2.39: parsed walk event from the JS-shim's streamWalk channel.
+  struct WalkEvent: Equatable {
+    let kind: String   // "clicked" | "category_click" | "no_match" | "click_failed"
+    let info: String
+    let at: Date
+  }
+
   func makeCoordinator() -> Coordinator {
     Coordinator(
       onStreamURLFound: onStreamURLFound,
       onNavigation: onNavigation,
+      onWalkEvent: onWalkEvent,
+      onLoadFailed: onLoadFailed,
       browseMode: browseMode
     )
   }
@@ -533,6 +624,9 @@ struct StreamWebView: UIViewRepresentable {
     // instead of treating their URL as a stream URL.
     let iframeProxy = WeakScriptProxy(delegate: context.coordinator)
     config.userContentController.add(iframeProxy, name: "streamIframe")
+    // v2.39: walk-activity events for verification-mode visibility.
+    let walkProxy = WeakScriptProxy(delegate: context.coordinator)
+    config.userContentController.add(walkProxy, name: "streamWalk")
 
     let popupJS = browseMode ? Self.popupRedirectJS : Self.popupSuppressJS
     config.userContentController.addUserScript(WKUserScript(
@@ -904,6 +998,21 @@ struct StreamWebView: UIViewRepresentable {
       var _maxWalkClicks = 4;
       var _walkClickedEls = [];
 
+      // v2.39: surface walk activity to native so PlayerView's verification
+      // strip can show what's happening. Without this, walks are silent —
+      // the user can't tell whether tryAdvance() fired, found a match,
+      // clicked something, or struck out.
+      var _lastNoMatchPosted = 0;
+      function postWalkEvent(kind, info) {
+        try {
+          window.webkit.messageHandlers.streamWalk.postMessage(JSON.stringify({
+            kind: kind,
+            info: (info || '').slice(0, 160),
+            time: Date.now()
+          }));
+        } catch(e){}
+      }
+
       function readableTextFromElement(el) {
         if (!el) return '';
         var parts = [];
@@ -1017,7 +1126,11 @@ struct StreamWebView: UIViewRepresentable {
           _walkClicks++;
           _currentMirrorEl = node;
           _mirrorClickAt = Date.now();
-          try { node.click(); } catch(e){}
+          var blob = readableTextFromElement(node);
+          postWalkEvent('clicked', 'card: ' + blob);
+          try { node.click(); } catch(e){
+            postWalkEvent('click_failed', String(e));
+          }
           return;
         }
         // Step 4b: no game match — at depth 0 try a league-named category link.
@@ -1028,9 +1141,22 @@ struct StreamWebView: UIViewRepresentable {
             _walkClicks++;
             _currentMirrorEl = catNode;
             _mirrorClickAt = Date.now();
-            try { catNode.click(); } catch(e){}
+            var catBlob = readableTextFromElement(catNode);
+            postWalkEvent('category_click', catBlob);
+            try { catNode.click(); } catch(e){
+              postWalkEvent('click_failed', String(e));
+            }
             return;
           }
+        }
+        // Throttled "no match" event — once every 3s while DOM looks
+        // settled — gives the user proof we're looking and not finding.
+        var now = Date.now();
+        if (now - _lastNoMatchPosted > 3000) {
+          _lastNoMatchPosted = now;
+          var domSize = 0;
+          try { domSize = document.querySelectorAll('*').length; } catch(e){}
+          postWalkEvent('no_match', 'dom=' + domSize);
         }
       }
 
@@ -1164,6 +1290,11 @@ struct StreamWebView: UIViewRepresentable {
     /// v2.38: invoked from `webView(_:didCommit:)` so PlayerView can
     /// render the navigation breadcrumb.
     let onNavigation: ((URL) -> Void)?
+    /// v2.39: walk-activity events from the JS-shim.
+    let onWalkEvent: ((StreamWebView.WalkEvent) -> Void)?
+    /// v2.39: fired when provisional navigation fails AND host-fallback
+    /// couldn't recover. PlayerView shows it inline in navStrip.
+    let onLoadFailed: ((URL, String) -> Void)?
     let browseMode: Bool
     private var found = false
     private var seenURLs = Set<String>()
@@ -1186,9 +1317,13 @@ struct StreamWebView: UIViewRepresentable {
 
     init(onStreamURLFound: ((URL, [HTTPCookie]) -> Void)?,
          onNavigation: ((URL) -> Void)? = nil,
+         onWalkEvent: ((StreamWebView.WalkEvent) -> Void)? = nil,
+         onLoadFailed: ((URL, String) -> Void)? = nil,
          browseMode: Bool) {
       self.onStreamURLFound = onStreamURLFound
       self.onNavigation = onNavigation
+      self.onWalkEvent = onWalkEvent
+      self.onLoadFailed = onLoadFailed
       self.browseMode = browseMode
     }
 
@@ -1198,6 +1333,10 @@ struct StreamWebView: UIViewRepresentable {
         // v2.37: JSON payload {url, score}. Coordinator decides
         // whether and when to navigate the top WebView into it.
         handleIframeCandidate(message.body)
+      case "streamWalk":
+        // v2.39: JSON payload {kind, info, time}. Coordinator forwards
+        // to PlayerView for navStrip display.
+        handleWalkEvent(message.body)
       case "streamURL":
         fallthrough
       default:
@@ -1205,6 +1344,17 @@ struct StreamWebView: UIViewRepresentable {
               let url = URL(string: urlString) else { return }
         report(url)
       }
+    }
+
+    // v2.39: parse + forward a walk event.
+    private func handleWalkEvent(_ body: Any) {
+      guard let s = body as? String,
+            let data = s.data(using: .utf8),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let kind = json["kind"] as? String else { return }
+      let info = (json["info"] as? String) ?? ""
+      let event = StreamWebView.WalkEvent(kind: kind, info: info, at: Date())
+      DispatchQueue.main.async { self.onWalkEvent?(event) }
     }
 
     // v2.37: receive cross-origin iframe candidates. Collect for a
@@ -1271,6 +1421,59 @@ struct StreamWebView: UIViewRepresentable {
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
       if let url = webView.url {
         DispatchQueue.main.async { self.onNavigation?(url) }
+      }
+    }
+
+    // v2.39: host-fallback retry when the WebView's provisional
+    // navigation fails. Frame-load-interrupted (WebKitErrorDomain 102),
+    // cancelled requests, and similar early-fail cases often mean the
+    // host is unreachable (TLD seizure, sinkhole, etc.) and a sibling
+    // domain (e.g. v2.streameast.gd, .net, .app) may be live. Reuses
+    // the same HostFallback already powering WebViewScraper's listing-
+    // time DNS-failure recovery.
+    private var hostFallbackAttempted = false
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
+                 withError error: Error) {
+      let nsErr = error as NSError
+      guard !hostFallbackAttempted else {
+        DispatchQueue.main.async {
+          if let u = webView.url ?? URL(string: "about:blank") {
+            self.onLoadFailed?(u, nsErr.localizedDescription)
+          }
+        }
+        return
+      }
+      // Pull the URL from the failing request when available; the
+      // userInfo NSErrorFailingURL key carries it even when webView.url
+      // hasn't updated yet.
+      let failingURL: URL? = (nsErr.userInfo[NSURLErrorFailingURLErrorKey] as? URL)
+                          ?? (nsErr.userInfo[NSURLErrorFailingURLStringErrorKey] as? String).flatMap(URL.init(string:))
+                          ?? webView.url
+      guard let url = failingURL else {
+        DispatchQueue.main.async {
+          self.onLoadFailed?(URL(string: "about:blank")!, nsErr.localizedDescription)
+        }
+        return
+      }
+      hostFallbackAttempted = true
+      Task { @MainActor in
+        if let fallback = await HostFallback.shared.tryVariants(of: url) {
+          var req = URLRequest(url: fallback)
+          req.setValue(
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+            forHTTPHeaderField: "User-Agent"
+          )
+          // Persist replacement so subsequent attempts use it too.
+          if let host = url.host {
+            for src in SourceRegistry.shared.sources where src.baseURL.host == host {
+              SourceRegistry.shared.replaceSourceURL(originalID: src.id, newURL: fallback)
+              break
+            }
+          }
+          webView.load(req)
+        } else {
+          self.onLoadFailed?(url, nsErr.localizedDescription)
+        }
       }
     }
 
