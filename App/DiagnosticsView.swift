@@ -194,7 +194,6 @@ struct DiagnosticsView: View {
   @ViewBuilder
   private func linkRow(_ link: ScrapedLink) -> some View {
     let isGame = passesIsGameLink(link)
-    let league = CustomStreamSource.detectLeague(href: link.href, text: link.text)
     VStack(alignment: .leading, spacing: 4) {
       Text(link.href)
         .font(.caption.monospaced())
@@ -213,25 +212,13 @@ struct DiagnosticsView: View {
           .foregroundStyle(.orange)
           .lineLimit(1)
       }
-      if isGame || league != nil {
-        HStack(spacing: 6) {
-          if isGame {
-            Text("GAME")
-              .font(.caption2.weight(.bold))
-              .padding(.horizontal, 5)
-              .padding(.vertical, 1)
-              .background(Color.green.opacity(0.15), in: Capsule())
-              .foregroundStyle(.green)
-          }
-          if let l = league {
-            Text("LEAGUE: \(l.displayName)")
-              .font(.caption2.weight(.bold))
-              .padding(.horizontal, 5)
-              .padding(.vertical, 1)
-              .background(l.accentColor.opacity(0.15), in: Capsule())
-              .foregroundStyle(l.accentColor)
-          }
-        }
+      if isGame {
+        Text("GAME")
+          .font(.caption2.weight(.bold))
+          .padding(.horizontal, 5)
+          .padding(.vertical, 1)
+          .background(Color.green.opacity(0.15), in: Capsule())
+          .foregroundStyle(.green)
       }
     }
     .padding(.vertical, 2)
@@ -356,10 +343,9 @@ struct DiagnosticsView: View {
       isRunning = false
       refreshKey += 1
     }
-    // v2.23: forceRefresh=true so the button actually re-scrapes the
-    // network. Previously this would hit APIDiscovery's per-host cache
-    // and return instantly without doing anything visible.
-    _ = try? await source.fetchAvailableLeagues(forceRefresh: true)
+    // v2.32: refresh by re-running the canonical orchestrator. Each
+    // source's homepage scrape will record fresh diagnostics.
+    _ = await ScheduleAggregator.shared.todaysGames(forceRefresh: true)
   }
 
   private static let timeFmt: DateFormatter = {

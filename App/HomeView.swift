@@ -8,9 +8,6 @@ struct HomeView: View {
   @State private var allUpcomingGames: [Game] = []
   @State private var isLoadingLeagues = true
   @State private var isLoadingLive = false
-  /// Specific classified reason for the empty state, set when fetchAvailableLeagues
-  /// throws a `LoadFailureReason`. `nil` means either still loading or success.
-  @State private var loadFailureReason: LoadFailureReason? = nil
   @State private var isRetrying = false
   /// Active filter for the chip row. `nil` means "All" (show every league).
   @State private var selectedFilter: SportLeague? = nil
@@ -221,65 +218,40 @@ struct HomeView: View {
     }
   }
 
-  // MARK: - Empty / failed state
+  // MARK: - Empty state
 
-  /// Reason to render in the empty state — either the classified
-  /// `loadFailureReason` from a thrown LoadFailureReason, or `.noLeagues` as
-  /// the generic fallback when nothing failed but no games surfaced.
-  private var effectiveFailureReason: LoadFailureReason {
-    loadFailureReason ?? .noLeagues
-  }
-
+  /// v2.32: single empty-state mode. With ESPN+TheSportsDB canonical
+  /// listings, the only way the home feed is empty is "no games today
+  /// across covered leagues" — usually off-season + no live cards.
+  /// Source-side classification (Cloudflare-blocked, parked, sinkholed)
+  /// went away with the old aggregator-as-truth model.
   private var emptyState: some View {
     VStack(spacing: 16) {
+      Image(systemName: "sportscourt")
+        .font(.system(size: 52))
+        .foregroundStyle(.quaternary)
+      Text("No games right now")
+        .font(.headline)
+        .foregroundStyle(.secondary)
+      Text("Pull to refresh, or check back closer to game time.")
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 28)
       if !registry.selectedSource.isBuiltIn {
-        let reason = effectiveFailureReason
-        Image(systemName: reason.emptyStateSymbol)
-          .font(.system(size: 48))
-          .foregroundStyle(.secondary)
-        Text(reason == .unreachable
-             ? "Couldn't reach \(registry.selectedSource.name)"
-             : reason.emptyStateHeadline)
-          .font(.headline)
-          .multilineTextAlignment(.center)
-          .padding(.horizontal, 16)
-        Text(reason.emptyStateBody)
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
-          .multilineTextAlignment(.center)
-          .padding(.horizontal, 28)
-        // Hide the "Browse" button for parked / sinkholed domains — there's
-        // nothing meaningful to browse to, and surfacing the button implies
-        // the URL is recoverable when it usually isn't.
-        if reason != .parked && reason != .sinkholed {
-          NavigationLink(destination: BrowseView(source: registry.selectedSource)) {
-            Label("Browse \(registry.selectedSource.name)", systemImage: "globe")
-              .padding(.horizontal, 8)
-          }
-          .buttonStyle(.borderedProminent)
+        NavigationLink(destination: BrowseView(source: registry.selectedSource)) {
+          Label("Browse \(registry.selectedSource.name)", systemImage: "globe")
+            .padding(.horizontal, 8)
         }
-        Button(reason == .cloudflareBlocked ? "Try Again" : "Retry") {
-          guard !isRetrying else { return }
-          isRetrying = true
-          Task { await loadLeagues(forceRefresh: true); isRetrying = false }
-        }
-        .disabled(isRetrying)
-        .buttonStyle(.bordered)
-      } else {
-        Image(systemName: "sportscourt")
-          .font(.system(size: 52))
-          .foregroundStyle(.quaternary)
-        Text("No leagues available")
-          .font(.headline)
-          .foregroundStyle(.secondary)
-        Button("Retry") {
-          guard !isRetrying else { return }
-          isRetrying = true
-          Task { await loadLeagues(forceRefresh: true); isRetrying = false }
-        }
-        .disabled(isRetrying)
-        .buttonStyle(.bordered)
+        .buttonStyle(.borderedProminent)
       }
+      Button("Retry") {
+        guard !isRetrying else { return }
+        isRetrying = true
+        Task { await loadLeagues(forceRefresh: true); isRetrying = false }
+      }
+      .disabled(isRetrying)
+      .buttonStyle(.bordered)
     }
   }
 
@@ -290,7 +262,6 @@ struct HomeView: View {
   /// of loading, not fetched separately first. This function just sets
   /// loading state and delegates to `loadAllLiveGames`.
   private func loadLeagues(forceRefresh: Bool = false) async {
-    loadFailureReason = nil
     selectedFilter = nil
     isLoadingLeagues = true
     await loadAllLiveGames(forceRefresh: forceRefresh)
@@ -304,62 +275,38 @@ struct HomeView: View {
     let favSports  = favorites.favoriteSports
     let enabled = registry.enabledSources
 
-    // v2.23: ESPN-first listing. Start with the canonical list, no
-    // aggregator dependency. ESPN owns teams, time, score, league.
-    // v2.30: ScheduleAggregator wraps ESPN + complementary producers
-    // (TheSportsDB for IIHF + cricket). ESPN-covered fixtures still
-    // win on collision so reconcile rules behave unchanged.
-    let espnGames = await ScheduleAggregator.shared.todaysGames(forceRefresh: forceRefresh)
+    // v2.32: canonical listings come from ScheduleAggregator (ESPN +
+    // TheSportsDB). Each enabled source then contributes per-game
+    // stream URLs by plain substring-matching its scraped homepage
+    // links against today's canonical games.
+    let canonicalGames = await ScheduleAggregator.shared.todaysGames(forceRefresh: forceRefresh)
 
-    // For each enabled source, scrape its full feed (in parallel).
-    // The aggregator path keeps the v2.21 ESPN-canonical reconcile logic
-    // so ESPN-covered fixtures it returns are already ESPN-shaped — easy
-    // to match by team-pair. Non-ESPN-covered fixtures (cricket, IIHF,
-    // MotoGP, niche soccer) come back unchanged.
-    var aggregatorResults: [(sourceID: String, games: [Game])] = []
-    await withTaskGroup(of: (String, [Game]).self) { group in
+    var matchesBySource: [(sourceID: String, matches: [String: URL])] = []
+    await withTaskGroup(of: (String, [String: URL]).self) { group in
       for source in enabled {
         group.addTask {
-          // v2.28: 15 s per-source budget. A single hanging source
-          // (CF challenge, DNS stall, slow JS-render) used to stall
-          // pull-to-refresh indefinitely because no leaf had a timeout.
-          // Race the scrape against a sleep and cancel whichever loses.
-          await Self.boundedSourceFetch(source: source,
-                                        forceRefresh: forceRefresh,
-                                        budgetSeconds: 15)
+          // 15 s per-source budget — long enough for homepage load +
+          // CF clearance + JS render + substring match. Plain matching
+          // is cheap; the budget mostly bounds the scrape itself.
+          await Self.boundedMatchedGameURLs(
+            source: source, canonical: canonicalGames, budgetSeconds: 15
+          )
         }
       }
-      for await pair in group { aggregatorResults.append(pair) }
+      for await pair in group { matchesBySource.append(pair) }
     }
 
-    // Merge: attach streamURLs to ESPN games via team-pair matching;
-    // games the aggregator surfaced that ESPN doesn't have become
-    // gap-fills IFF the league is one ESPN doesn't cover. Stale ESPN-
-    // covered fixtures (Streamed-images-json's "Detroit Pistons vs
-    // Orlando Magic" from two weeks ago) get dropped — they have no
-    // ESPN match in the supported set, but their league is ESPN-covered,
-    // so we know they're stale rather than a coverage gap.
-    var streamsByEspnID: [String: [GameStreamCandidate]] = [:]
-    var gapFills: [Game] = []
-    for (sourceID, games) in aggregatorResults {
-      for agg in games {
-        if let espn = Self.matchESPNGame(for: agg, in: espnGames) {
-          let cand = GameStreamCandidate(sourceID: sourceID, pageURL: agg.pageURL)
-          streamsByEspnID[espn.id, default: []].append(cand)
-        } else if ESPNScoreboardService.apiPath(for: agg.league) == nil {
-          // League ESPN doesn't cover — keep as gap-fill.
-          gapFills.append(agg)
-        }
-        // else: ESPN-covered league + no ESPN match = stale, drop.
+    var streamsByGameID: [String: [GameStreamCandidate]] = [:]
+    for (sourceID, matches) in matchesBySource {
+      for (gameID, url) in matches {
+        streamsByGameID[gameID, default: []].append(
+          GameStreamCandidate(sourceID: sourceID, pageURL: url)
+        )
       }
     }
 
-    // Build the final list. ESPN-canonical games carry their canonical
-    // fields untouched; aggregator-supplied pageURL becomes the primary
-    // pageURL when available (so PlayerView's existing path keeps working
-    // until v2.24's StreamResolver rolls in).
-    let espnWithStreams: [Game] = espnGames.map { game in
-      let streams = streamsByEspnID[game.id] ?? []
+    let gamesWithStreams: [Game] = canonicalGames.map { game in
+      let streams = streamsByGameID[game.id] ?? []
       let primaryURL = streams.first?.pageURL ?? game.pageURL
       return Game(
         id: game.id,
@@ -377,26 +324,16 @@ struct HomeView: View {
       )
     }
 
-    // Dedupe gap-fills across sources (same fixture from multiple
-    // aggregators) using v2.20's team-pair key.
-    let dedupedGapFills = Self.dedupeGapFills(gapFills)
-    // v2.25: cutoff filter — only list games up through end of tomorrow
-    // ET. Live games always pass through regardless of their scheduled
-    // start. Future-time games more than ~36 h out get dropped to keep
-    // the feed focused on what's happening soon. ESPN games already
-    // respect this via the v2.25 narrower window, but aggregator gap-
-    // fills (cricket, IIHF, MotoGP) come from arbitrary catalogs that
-    // may list weekend fixtures.
+    // v2.25 cutoff: only list through end of tomorrow ET. Live games
+    // always pass.
     let cutoff: Date = {
       let etTZ = TimeZone(identifier: "America/New_York")!
       var cal = Calendar(identifier: .gregorian)
       cal.timeZone = etTZ
       let startOfToday = cal.startOfDay(for: Date())
-      // End of "tomorrow" ET = start of day after tomorrow.
       return cal.date(byAdding: .day, value: 2, to: startOfToday) ?? Date.distantFuture
     }()
-    let unfiltered = espnWithStreams + dedupedGapFills
-    let allGames = unfiltered.filter { game in
+    let allGames = gamesWithStreams.filter { game in
       if game.isLive { return true }
       guard let st = game.scheduledTime else { return true }
       return st < cutoff
@@ -444,55 +381,21 @@ struct HomeView: View {
     allLiveGames     = all.filter {  $0.isLive }.sorted(by: liveSortFn)
     allUpcomingGames = all.filter { !$0.isLive }.sorted(by: upcomingSortFn)
 
-    // v2.23: surface a failure reason only when the entire pipeline came
-    // back empty AND we have no enabled sources to retry. ESPN alone is
-    // enough to keep the feed populated for most users; the empty case
-    // is rare (e.g., off-season + ESPN issue + no aggregators enabled).
-    if all.isEmpty && enabled.isEmpty {
-      loadFailureReason = .noLeagues
-    }
     isLoadingLive = false
   }
 
-  /// v2.28: bounded per-source scrape. Races the source's full feed
-  /// fetch against a `budgetSeconds` sleep; whichever finishes first
-  /// wins. Used by the orchestrator's per-source task group so a
-  /// hanging source (CF / DNS / slow JS-render) can't stall the whole
-  /// refresh. Returns `(source.id, [])` on timeout.
-  static func boundedSourceFetch(
+  /// v2.32: bounded per-source matching call. Races the source's
+  /// `matchedGameURLs` against a `budgetSeconds` sleep; whichever
+  /// finishes first wins. Returns `(source.id, [:])` on timeout.
+  static func boundedMatchedGameURLs(
     source: AnyStreamSource,
-    forceRefresh: Bool,
+    canonical: [Game],
     budgetSeconds: Int
-  ) async -> (String, [Game]) {
-    let result = await withTaskGroup(of: (String, [Game])?.self) { group in
+  ) async -> (String, [String: URL]) {
+    let result = await withTaskGroup(of: (String, [String: URL])?.self) { group in
       group.addTask {
-        guard let leagues = try? await source.fetchAvailableLeagues(forceRefresh: forceRefresh) else {
-          return (source.id, [])
-        }
-        var bucket: [Game] = []
-        await withTaskGroup(of: [Game].self) { sub in
-          for league in leagues {
-            sub.addTask {
-              // Per-league sub-budget: ~10 s so a single hanging league
-              // inside an otherwise-ok source can't burn the whole
-              // source budget. Race against a sleep, take whichever.
-              await withTaskGroup(of: [Game]?.self) { leagueGroup in
-                leagueGroup.addTask {
-                  (try? await source.fetchGames(for: league)) ?? []
-                }
-                leagueGroup.addTask {
-                  try? await Task.sleep(nanoseconds: 10_000_000_000)
-                  return nil
-                }
-                let winner = await leagueGroup.next() ?? nil
-                leagueGroup.cancelAll()
-                return winner ?? []
-              }
-            }
-          }
-          for await g in sub { bucket.append(contentsOf: g) }
-        }
-        return (source.id, bucket)
+        let m = await source.matchedGameURLs(amongCanonical: canonical)
+        return (source.id, m)
       }
       group.addTask {
         try? await Task.sleep(nanoseconds: UInt64(budgetSeconds) * 1_000_000_000)
@@ -502,28 +405,13 @@ struct HomeView: View {
       group.cancelAll()
       return winner
     }
-    return result ?? (source.id, [])
+    return result ?? (source.id, [:])
   }
 
-  /// v2.23: order-insensitive team-pair match between an aggregator-side
-  /// Game and one of ESPN's canonical Games. ESPN-covered aggregator
-  /// fixtures already carry ESPN-canonical team names (the v2.21
-  /// reconcileWithESPN overwrites them on the way out of fetchGames), so
-  /// this is an exact-after-normalization match for ESPN-covered leagues.
-  /// Non-ESPN aggregator fixtures won't find a match here — that's the
-  /// signal to keep them as gap-fills.
-  static func matchESPNGame(for aggGame: Game, in espnGames: [Game]) -> Game? {
-    let aggKey = pairKeyForMatching(home: aggGame.homeTeam, away: aggGame.awayTeam)
-    return espnGames.first(where: { espn in
-      pairKeyForMatching(home: espn.homeTeam, away: espn.awayTeam) == aggKey
-    })
-  }
-
-  /// v2.29: order-insensitive team-pair predicate exposed for callers
-  /// outside HomeView (CustomStreamSource.findStreamPage uses it to
-  /// pick the LLM-extracted game that matches the user's tap target).
-  /// Same normalisation as `pairKeyForMatching` — lowercase, diacritic-
-  /// fold, strip punctuation, drop common club suffixes.
+  /// Order-insensitive team-pair predicate. Used by CustomStreamSource's
+  /// LLM fallback to map extracted games to canonical games. Same
+  /// normalisation as `normalizeForMatch` — lowercase, diacritic-fold,
+  /// strip punctuation.
   static func matchesTeamPair(home: String, away: String, target: Game) -> Bool {
     let lhs = pairKeyForMatching(home: home, away: away)
     let rhs = pairKeyForMatching(home: target.homeTeam, away: target.awayTeam)
@@ -542,35 +430,6 @@ struct HomeView: View {
       .replacingOccurrences(of: "[^a-z0-9 ]", with: " ", options: .regularExpression)
       .replacingOccurrences(of: " +", with: " ", options: .regularExpression)
       .trimmingCharacters(in: .whitespaces)
-  }
-
-  /// Dedupe gap-fills across sources by team-pair. Multiple aggregators
-  /// may list the same cricket / IIHF fixture; we keep the most-info-rich
-  /// one (live > has-score > has-time > first).
-  static func dedupeGapFills(_ games: [Game]) -> [Game] {
-    var byKey: [String: Game] = [:]
-    var orderKeys: [String] = []
-    for game in games {
-      let key = pairKeyForMatching(home: game.homeTeam, away: game.awayTeam)
-      if let existing = byKey[key] {
-        byKey[key] = preferredGapFill(existing, game)
-      } else {
-        byKey[key] = game
-        orderKeys.append(key)
-      }
-    }
-    return orderKeys.compactMap { byKey[$0] }
-  }
-
-  private static func preferredGapFill(_ a: Game, _ b: Game) -> Game {
-    if a.isLive != b.isLive { return a.isLive ? a : b }
-    let aHasStatus = a.liveStatus?.isEmpty == false
-    let bHasStatus = b.liveStatus?.isEmpty == false
-    if aHasStatus != bHasStatus { return aHasStatus ? a : b }
-    let aHasTime = a.scheduledTime != nil && a.timeIsKnown
-    let bHasTime = b.scheduledTime != nil && b.timeIsKnown
-    if aHasTime != bHasTime { return aHasTime ? a : b }
-    return a
   }
 
   /// Re-sorts `allLiveGames` and `allUpcomingGames` against current

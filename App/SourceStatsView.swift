@@ -1,19 +1,11 @@
 import SwiftUI
 
-/// v2.30: read-only operational view of what the app has learned about
-/// the user's enabled sources over the past 7 days. Source-agnostic —
-/// every row is driven by data, no source IDs appear in code.
-///
-/// Shows per source:
-/// - 7-day success rate (from SourceHealth)
-/// - attempts / successes / parking-detection counts
-/// - learned URL template count + learned team-slug count (from
-///   SourceLearningStore) so the user can see the fast-path filling in
-/// - last successful match timestamp
+/// v2.32 trimmed: read-only per-source health stats from SourceHealth.
+/// Dropped the v2.30/v2.31 Templates / Team-slugs / Play-hosts chips
+/// after the SourceLearningStore deletion.
 struct SourceStatsView: View {
   @Environment(SourceRegistry.self) private var registry
   @StateObject private var health = SourceHealth.shared
-  @StateObject private var learning = SourceLearningStore.shared
 
   var body: some View {
     List {
@@ -31,8 +23,7 @@ struct SourceStatsView: View {
       } footer: {
         Text("Stats accumulate over the last 7 days as you tap games. " +
              "Sources with low success rate after a few attempts get " +
-             "demoted in the parallel search; learned templates and " +
-             "team slugs make subsequent taps on similar games sub-second.")
+             "demoted in the player's attempt order.")
       }
     }
     .navigationTitle("Source Stats")
@@ -42,7 +33,6 @@ struct SourceStatsView: View {
   private var rows: [Row] {
     registry.enabledSources.map { src in
       let s = health.stats[src.id]
-      let l = learning.learning(for: src.id)
       return Row(
         sourceID: src.id,
         name: src.name,
@@ -50,13 +40,9 @@ struct SourceStatsView: View {
         successes: s?.successes ?? 0,
         parkingCount: s?.parkingDetections ?? 0,
         successRate: s?.successRate,
-        lastSuccessAt: s?.lastSuccessAt,
-        learnedTemplates: l.templates.count,
-        learnedSlugs: l.teamSlugMap.count,
-        learnedHosts: l.playbackHosts.count
+        lastSuccessAt: s?.lastSuccessAt
       )
     }
-    // Sort: highest success rate first, then by attempts desc.
     .sorted { a, b in
       let ra = a.successRate ?? -1
       let rb = b.successRate ?? -1
@@ -73,9 +59,6 @@ struct SourceStatsView: View {
     let parkingCount: Int
     let successRate: Double?
     let lastSuccessAt: Date?
-    let learnedTemplates: Int
-    let learnedSlugs: Int
-    let learnedHosts: Int
   }
 }
 
@@ -85,8 +68,7 @@ private struct SourceStatsRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack {
-        Text(row.name)
-          .font(.headline)
+        Text(row.name).font(.headline)
         Spacer()
         Text(rateLabel)
           .font(.subheadline.monospacedDigit())
@@ -96,27 +78,7 @@ private struct SourceStatsRow: View {
         statChip(label: "Attempts", value: "\(row.attempts)")
         statChip(label: "Successes", value: "\(row.successes)")
         if row.parkingCount > 0 {
-          statChip(label: "Parking", value: "\(row.parkingCount)",
-                   color: .orange)
-        }
-      }
-      HStack(spacing: 14) {
-        if row.learnedTemplates > 0 {
-          statChip(label: "Templates", value: "\(row.learnedTemplates)",
-                   color: .teal)
-        }
-        if row.learnedSlugs > 0 {
-          statChip(label: "Team slugs", value: "\(row.learnedSlugs)",
-                   color: .teal)
-        }
-        if row.learnedHosts > 0 {
-          statChip(label: "Play hosts", value: "\(row.learnedHosts)",
-                   color: .teal)
-        }
-        if row.learnedTemplates == 0 && row.learnedSlugs == 0 && row.learnedHosts == 0 {
-          Text("No learning yet")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+          statChip(label: "Parking", value: "\(row.parkingCount)", color: .orange)
         }
       }
       if let at = row.lastSuccessAt {
@@ -140,8 +102,7 @@ private struct SourceStatsRow: View {
     return .red
   }
 
-  private func statChip(label: String, value: String,
-                        color: Color = .blue) -> some View {
+  private func statChip(label: String, value: String, color: Color = .blue) -> some View {
     HStack(spacing: 4) {
       Text(value).font(.caption.weight(.semibold))
       Text(label).font(.caption2).foregroundStyle(.secondary)
