@@ -114,6 +114,11 @@ struct PlayerView: View {
                     loadFailure = message
                   }
                 },
+                onPageChanged: { _ in
+                  Task { @MainActor in
+                    resetPerPageState()
+                  }
+                },
                 bridge: webBridge,
                 targetGame: game
               )
@@ -434,6 +439,22 @@ struct PlayerView: View {
     }
   }
 
+  /// v2.41: clear per-page diagnostic state when the WebView commits
+  /// a navigation to a different host or path. Prevents two pages'
+  /// data from overlapping on screen (the v2.40 streameast case where
+  /// stale detected-cards from v2.streameast.ga hung over the new
+  /// auth.streamea.st landing). A "Walk clicked" event in the last
+  /// 1.5s is preserved — it's user-facing feedback we just gave them.
+  private func resetPerPageState() {
+    detectedCards = []
+    authWallReason = nil
+    if let event = lastWalkEvent {
+      let isFreshClick = (event.kind == "clicked" || event.kind == "category_click")
+                       && Date().timeIntervalSince(event.at) < 1.5
+      if !isFreshClick { lastWalkEvent = nil }
+    }
+  }
+
   private func appendNavigation(_ url: URL) {
     if navigationHistory.last == url { return }
     navigationHistory.append(url)
@@ -655,8 +676,28 @@ final class StreamWebViewBridge: ObservableObject {
     let escaped = pair
       .replacingOccurrences(of: "\\", with: "\\\\")
       .replacingOccurrences(of: "'", with: "\\'")
+    // v2.41: walk up to clickable ancestor before .click(). Without
+    // this, tapping a detected-cards capsule often clicks the inner
+    // <h2> / <span> whose parent <div> holds the actual onclick.
     let js = """
     (function(){
+      function findClickableAncestor(el) {
+        if (!el) return null;
+        var n = el;
+        for (var lvl = 0; lvl < 6 && n; lvl++) {
+          if (n.tagName === 'A' || n.tagName === 'BUTTON') return n;
+          if (n.hasAttribute && (
+                n.hasAttribute('onclick') ||
+                n.hasAttribute('data-match') ||
+                n.hasAttribute('data-event') ||
+                n.hasAttribute('data-game') ||
+                n.hasAttribute('data-id') ||
+                n.getAttribute('role') === 'button'
+              )) return n;
+          n = n.parentElement;
+        }
+        return el;
+      }
       var t = '\(escaped)'.toLowerCase();
       var sel = 'a[href],button,[onclick],[data-match],[data-event],[data-game],' +
                 '[role="button"],[class*="card" i],[class*="match" i],[class*="game" i]';
@@ -667,7 +708,8 @@ final class StreamWebViewBridge: ObservableObject {
                  (e.getAttribute && (e.getAttribute('aria-label') || '')) + ' ' +
                  (e.getAttribute && (e.getAttribute('title') || ''))).toLowerCase();
         if (b.indexOf(t) !== -1) {
-          try { e.click(); } catch(err) {}
+          var target = findClickableAncestor(e);
+          try { target.click(); } catch(err) {}
           return true;
         }
       }
@@ -695,6 +737,12 @@ struct StreamWebView: UIViewRepresentable {
   /// (frame load interrupted, sinkhole MIME, etc.) and host-fallback
   /// couldn't find a working variant. PlayerView shows this inline.
   var onLoadFailed: ((URL, String) -> Void)? = nil
+  /// v2.41: fired when the WebView commits a top-frame navigation
+  /// where the host or path *changed* — distinct from onNavigation
+  /// which fires on every commit including redirects to the same
+  /// effective page. PlayerView uses this to reset per-page state
+  /// (detected cards, auth-wall warnings, stale walk events).
+  var onPageChanged: ((URL) -> Void)? = nil
   var browseMode: Bool = false
   /// v2.40: optional proxy that gets assigned the WKWebView in
   /// makeUIView so callers (PlayerView) can dispatch follow-up
@@ -739,6 +787,7 @@ struct StreamWebView: UIViewRepresentable {
       onNavigation: onNavigation,
       onWalkEvent: onWalkEvent,
       onLoadFailed: onLoadFailed,
+      onPageChanged: onPageChanged,
       browseMode: browseMode
     )
   }
@@ -1224,6 +1273,32 @@ struct StreamWebView: UIViewRepresentable {
         }
       }
 
+      // v2.41: walk up from a text-matched element to the nearest
+      // actually clickable ancestor. Many SPA frameworks wrap
+      // clickable cards around an inner text node (e.g. bintv's
+      // <div class="match-card" onclick="..."><h2>X vs Y</h2></div>) —
+      // matching the smallest text node and clicking it does nothing
+      // because the onclick lives on a parent. Walking up to that
+      // parent fixes a whole class of "matched the right card but
+      // didn't navigate" failures.
+      function findClickableAncestor(el) {
+        if (!el) return null;
+        var n = el;
+        for (var lvl = 0; lvl < 6 && n; lvl++) {
+          if (n.tagName === 'A' || n.tagName === 'BUTTON') return n;
+          if (n.hasAttribute && (
+                n.hasAttribute('onclick') ||
+                n.hasAttribute('data-match') ||
+                n.hasAttribute('data-event') ||
+                n.hasAttribute('data-game') ||
+                n.hasAttribute('data-id') ||
+                n.getAttribute('role') === 'button'
+              )) return n;
+          n = n.parentElement;
+        }
+        return el;  // fallback — original match
+      }
+
       function readableTextFromElement(el) {
         if (!el) return '';
         var parts = [];
@@ -1281,7 +1356,9 @@ struct StreamWebView: UIViewRepresentable {
             smallest = el;
           }
         }
-        return smallest;
+        // v2.41: clicking the smallest text-matched element often fails
+        // because the onclick is on a wrapping ancestor. Walk up.
+        return findClickableAncestor(smallest);
       }
 
       // League raw-value → URL/text hints for category-link traversal.
@@ -1509,6 +1586,12 @@ struct StreamWebView: UIViewRepresentable {
     /// v2.39: fired when provisional navigation fails AND host-fallback
     /// couldn't recover. PlayerView shows it inline in navStrip.
     let onLoadFailed: ((URL, String) -> Void)?
+    /// v2.41: fires on each commit whose host or path differs from the
+    /// previous commit — signals "the page actually changed" so per-
+    /// page UI state (detected cards, auth-wall warning) can reset.
+    let onPageChanged: ((URL) -> Void)?
+    /// v2.41: last URL whose commit we forwarded as a page change.
+    private var lastCommittedKey: String?
     let browseMode: Bool
     private var found = false
     private var seenURLs = Set<String>()
@@ -1533,11 +1616,13 @@ struct StreamWebView: UIViewRepresentable {
          onNavigation: ((URL) -> Void)? = nil,
          onWalkEvent: ((StreamWebView.WalkEvent) -> Void)? = nil,
          onLoadFailed: ((URL, String) -> Void)? = nil,
+         onPageChanged: ((URL) -> Void)? = nil,
          browseMode: Bool) {
       self.onStreamURLFound = onStreamURLFound
       self.onNavigation = onNavigation
       self.onWalkEvent = onWalkEvent
       self.onLoadFailed = onLoadFailed
+      self.onPageChanged = onPageChanged
       self.browseMode = browseMode
     }
 
@@ -1593,6 +1678,19 @@ struct StreamWebView: UIViewRepresentable {
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let urlStr = json["url"] as? String,
             let url = URL(string: urlStr) else { return }
+      // v2.41: skip auth/SSO iframes. v2.37's drill-down was navigating
+      // INTO streameast's auth.streamea.st/sso-frame.php iframe and
+      // abandoning the actual game listing on the parent page. An SSO
+      // frame is never going to give us a stream.
+      let host = (url.host ?? "").lowercased()
+      let path = url.path.lowercased()
+      let authHostPrefixes = ["auth.", "login.", "sso.", "accounts.", "id."]
+      let authPathFragments = ["/sso", "/signin", "/sign-in", "/login",
+                               "/log-in", "/auth", "/oauth"]
+      if authHostPrefixes.contains(where: { host.hasPrefix($0) }) ||
+         authPathFragments.contains(where: { path.contains($0) }) {
+        return
+      }
       let score = (json["score"] as? Int) ?? 500
       if visitedIframeURLs.contains(urlStr) { return }  // don't loop
       // Track best; if first candidate, schedule a commit after a
@@ -1644,9 +1742,17 @@ struct StreamWebView: UIViewRepresentable {
     // v2.38: fire onNavigation on every top-frame commit so the
     // breadcrumb in PlayerView reflects what we've navigated through
     // (initial load, iframe drill-down hops, redirects).
+    // v2.41: additionally fire onPageChanged when the host or path
+    // differs from the previous commit — used by PlayerView to reset
+    // per-page state (detected cards, auth-wall flag, stale walk
+    // events) so different pages' data don't overlap on one screen.
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-      if let url = webView.url {
-        DispatchQueue.main.async { self.onNavigation?(url) }
+      guard let url = webView.url else { return }
+      DispatchQueue.main.async { self.onNavigation?(url) }
+      let key = (url.host ?? "") + url.path
+      if lastCommittedKey != key {
+        lastCommittedKey = key
+        DispatchQueue.main.async { self.onPageChanged?(url) }
       }
     }
 
