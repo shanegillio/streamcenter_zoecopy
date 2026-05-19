@@ -438,8 +438,11 @@ struct StreamWebView: UIViewRepresentable {
     };
   """
 
-  /// Sets `window.__sc_target` for selectTargetGameCard in the shim.
-  /// nil game → __sc_target=null → shim falls back to generic clicking.
+  /// Sets `window.__sc_target` for the shim's walk routine.
+  /// v2.35: carries `league` raw value too so findCategoryLink can pick
+  /// the right league-named category link when the user-target game
+  /// isn't on the homepage. nil game → __sc_target=null → shim falls
+  /// back to generic clicking.
   static func slugConfigJS(for game: Game?) -> String {
     func slug(_ s: String) -> String {
       let folded = s.folding(options: [.diacriticInsensitive, .caseInsensitive],
@@ -454,7 +457,10 @@ struct StreamWebView: UIViewRepresentable {
         .replacingOccurrences(of: "'", with: "\\'")
     }
     guard let g = game else { return "window.__sc_target = null;" }
-    return "window.__sc_target = {home: '\(slug(g.homeTeam))', away: '\(slug(g.awayTeam))'};"
+    let h = slug(g.homeTeam)
+    let a = slug(g.awayTeam)
+    let l = g.league.rawValue.replacingOccurrences(of: "'", with: "\\'")
+    return "window.__sc_target = {home: '\(h)', away: '\(a)', league: '\(l)'};"
   }
 
   /// v2.32 shim: simple URL string posting (no structured payload),
@@ -660,8 +666,38 @@ struct StreamWebView: UIViewRepresentable {
         });
       }
 
-      // v2.31 retained: target-game card scoping
-      function selectTargetGameCard() {
+      // v2.35: goal-directed traversal.
+      // The walk works like a person browsing the site: at each page
+      // load, find an element mentioning the target game (or — if not
+      // found and we're at depth 0 — a league-named category link),
+      // click it, and let the page navigate. Bounded by _maxWalkClicks
+      // so we never loop forever. All the actual .m3u8 capture stays
+      // in the existing intercept paths; the walk just drives the page
+      // toward a state where streams emerge.
+      var _walkClicks = 0;
+      var _maxWalkClicks = 4;
+      var _walkClickedEls = [];
+
+      function readableTextFromElement(el) {
+        if (!el) return '';
+        var parts = [];
+        var t = '';
+        try { t = (el.innerText || el.textContent || '').replace(/\\s+/g,' ').trim(); } catch(e){}
+        if (t) parts.push(t);
+        if (el.getAttribute) {
+          var aria = el.getAttribute('aria-label');
+          if (aria) parts.push(aria);
+          var title = el.getAttribute('title');
+          if (title) parts.push(title);
+          var dm = el.getAttribute('data-match');
+          if (dm) parts.push(dm);
+        }
+        var out = parts.join(' | ');
+        if (out.length > 600) out = out.slice(0, 600);
+        return out;
+      }
+
+      function selectTargetGameElement() {
         if (!window.__sc_target) return null;
         var home = (window.__sc_target.home || '').toLowerCase();
         var away = (window.__sc_target.away || '').toLowerCase();
@@ -669,34 +705,107 @@ struct StreamWebView: UIViewRepresentable {
         function tokens(slug) {
           var t = [];
           if (slug.length >= 4) t.push(slug);
-          slug.split('-').forEach(function(w) { if (w.length >= 4) t.push(w); });
+          slug.split('-').forEach(function(w){ if (w.length >= 4) t.push(w); });
           return t;
         }
         var ht = tokens(home), at = tokens(away);
         if (!ht.length || !at.length) return null;
-        function matches(text) {
+        function bothPresent(text) {
           var lower = text.toLowerCase();
-          return ht.some(function(t) { return lower.indexOf(t) !== -1; })
-              && at.some(function(t) { return lower.indexOf(t) !== -1; });
+          return ht.some(function(tok){ return lower.indexOf(tok) !== -1; })
+              && at.some(function(tok){ return lower.indexOf(tok) !== -1; });
         }
-        var sels = ['[class*="game"]', '[class*="card"]', '[class*="match"]',
-                    '[class*="event"]', '[class*="fixture"]', '[class*="row"]',
-                    'article', 'li'];
-        var seen = [];
-        for (var s = 0; s < sels.length; s++) {
-          var els;
-          try { els = document.querySelectorAll(sels[s]); } catch(e){ continue; }
-          for (var i = 0; i < els.length; i++) {
-            var el = els[i];
-            if (seen.indexOf(el) !== -1) continue;
-            seen.push(el);
-            var t = '';
-            try { t = (el.innerText || el.textContent || ''); } catch(e){}
-            if (t.length < 4 || t.length > 1500) continue;
-            if (matches(t)) return el;
+        var candidates;
+        try {
+          candidates = document.querySelectorAll(
+            'a[href], button, [onclick], [data-match], [data-event], ' +
+            '[data-game], [data-id], [role="button"], ' +
+            '[class*="match" i],[class*="game" i],[class*="card" i],[class*="event" i]'
+          );
+        } catch(e) { return null; }
+        var smallest = null, smallestSize = Infinity;
+        var cap = Math.min(candidates.length, 3000);
+        for (var i = 0; i < cap; i++) {
+          var el = candidates[i];
+          var blob = readableTextFromElement(el);
+          if (!blob || blob.length < 6 || blob.length > 1200) continue;
+          if (!bothPresent(blob)) continue;
+          if (blob.length < smallestSize) {
+            smallestSize = blob.length;
+            smallest = el;
+          }
+        }
+        return smallest;
+      }
+
+      // League raw-value → URL/text hints for category-link traversal.
+      // Used when no game match is found and we're still at depth 0.
+      var _leagueHints = {
+        nba: ['nba','basketball'], wnba: ['wnba'],
+        ncaab: ['ncaab','college-basket','mens-college-basket'],
+        nfl: ['nfl','football'], ncaaf: ['ncaaf','college-football'],
+        mlb: ['mlb','baseball'], nhl: ['nhl','hockey'],
+        premierLeague: ['premier','epl','soccer','football'],
+        laLiga: ['laliga','la-liga','spanish','soccer'],
+        serieA: ['serie','italian','soccer'],
+        bundesliga: ['bundesliga','german','soccer'],
+        ligue1: ['ligue','french','soccer'],
+        eredivisie: ['eredivisie','dutch','soccer'],
+        mls: ['mls','soccer','football'],
+        ligaMx: ['liga-mx','ligamx','mexican','soccer'],
+        championsLeague: ['champions','ucl','soccer'],
+        europaLeague: ['europa','uel','soccer'],
+        soccer: ['soccer','football'],
+        f1: ['f1','formula','motor','racing'],
+        nascar: ['nascar','motor','racing'],
+        mma: ['mma','ufc','fight'],
+        ufc: ['ufc','mma','fight'],
+        boxing: ['boxing','fight'],
+        cricket: ['cricket','ipl'],
+        iihf: ['hockey','ice-hockey','iihf']
+      };
+
+      function findCategoryLink(leagueRawValue) {
+        var keys = _leagueHints[leagueRawValue] || [];
+        if (!keys.length) return null;
+        var anchors = document.querySelectorAll('a[href]');
+        var cap = Math.min(anchors.length, 400);
+        for (var i = 0; i < cap; i++) {
+          var a = anchors[i];
+          var blob = ((a.innerText || a.textContent || '') + ' ' + a.href).toLowerCase();
+          if (blob.length < 3 || blob.length > 200) continue;
+          for (var k = 0; k < keys.length; k++) {
+            if (blob.indexOf(keys[k]) !== -1) return a;
           }
         }
         return null;
+      }
+
+      function tryAdvance() {
+        if (_walkClicks >= _maxWalkClicks) return;
+        // Step 3: element matching target game.
+        var node = selectTargetGameElement();
+        if (node) {
+          if (_walkClickedEls.indexOf(node) !== -1) return;
+          _walkClickedEls.push(node);
+          _walkClicks++;
+          _currentMirrorEl = node;
+          _mirrorClickAt = Date.now();
+          try { node.click(); } catch(e){}
+          return;
+        }
+        // Step 4b: no game match — at depth 0 try a league-named category link.
+        if (_walkClicks === 0 && window.__sc_target && window.__sc_target.league) {
+          var catNode = findCategoryLink(window.__sc_target.league);
+          if (catNode && _walkClickedEls.indexOf(catNode) === -1) {
+            _walkClickedEls.push(catNode);
+            _walkClicks++;
+            _currentMirrorEl = catNode;
+            _mirrorClickAt = Date.now();
+            try { catNode.click(); } catch(e){}
+            return;
+          }
+        }
       }
 
       function scan() {
@@ -710,6 +819,10 @@ struct StreamWebView: UIViewRepresentable {
           if (v.paused) v.play().catch(function(){});
         });
 
+        // v2.35: drive page navigation toward the target game / category.
+        // Bounded by _maxWalkClicks; no-op once we've clicked enough.
+        try { tryAdvance(); } catch(e){}
+
         var mirrorSelectors = [
           '.vjs-big-play-button', '.jw-icon-display', '.jw-display-icon-display',
           '.plyr__control--overlaid', '[data-plyr="play"]',
@@ -721,7 +834,7 @@ struct StreamWebView: UIViewRepresentable {
           '[class*="watch"]', '[id*="watch"]',
           '[class*="source"]', '[class*="mirror"]', '[class*="stream-source"]'
         ];
-        var targetCard = selectTargetGameCard();
+        var targetCard = selectTargetGameElement();
         var scope = targetCard || document;
         var candidates = [];
         var seenEls = [];

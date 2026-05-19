@@ -544,16 +544,42 @@ final class WebViewScraper: NSObject {
           links.push({ href: resolved2, text: readableTextFor(el2), status: findStatus(el2) });
         }
 
-        // Pass 1.7: card containers wrapping nested anchors. The card's
-        // accumulated text often holds the team names even when the
-        // inner anchor itself is image-only.
+        // Pass 1.7 (v2.35): card containers — with OR without inner <a href>.
+        // SPA aggregators (bintv-style) render `<div class="match-card"
+        // data-match='...' onclick='handleMatchClick(...)'>` with no inner
+        // anchor at all. Capture those as ScrapedLinks too — synthesize
+        // a per-card pseudo-URL so each game gets a unique entry in
+        // game.streamURLs. The shim's walk routine then re-finds and
+        // clicks the matching card when the user taps.
+        function simpleCardHash(s) {
+          var h = 0;
+          for (var hi = 0; hi < s.length; hi++) {
+            h = ((h << 5) - h + s.charCodeAt(hi)) | 0;
+          }
+          return Math.abs(h).toString(36);
+        }
         var cardEls = document.querySelectorAll('[class*="match" i],[class*="game" i],[class*="event" i],[class*="fixture" i],[class*="card" i]');
         for (var ki = 0; ki < cardEls.length; ki++) {
           var card = cardEls[ki];
           var inner = card.querySelector('a[href]');
-          if (!inner) continue;
-          var href2 = inner.href;
-          if (!href2 || href2.indexOf('http') !== 0 || seen[href2]) continue;
+          var href2;
+          if (inner && inner.href && inner.href.indexOf('http') === 0) {
+            if (seen[inner.href]) continue;
+            href2 = inner.href;
+          } else {
+            // Anchor-less card — only accept if it's actually clickable.
+            var clickable = card.hasAttribute('onclick')
+                         || card.hasAttribute('data-match')
+                         || card.hasAttribute('data-event')
+                         || card.hasAttribute('data-game')
+                         || card.hasAttribute('data-id')
+                         || card.getAttribute('role') === 'button';
+            if (!clickable) continue;
+            var blob = readableTextFor(card);
+            if (!blob || blob.length < 8 || blob.length > 1200) continue;
+            href2 = location.href.split('#')[0] + '#sc-card-' + simpleCardHash(blob);
+            if (seen[href2]) continue;
+          }
           seen[href2] = 1;
           links.push({ href: href2, text: readableTextFor(card), status: findStatus(card) });
         }
