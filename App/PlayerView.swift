@@ -1215,6 +1215,10 @@ struct StreamWebView: UIViewRepresentable {
       var _lastDetectedSerialized = '';
       var _lastDetectedPostedAt = 0;
       function harvestDetectedCards() {
+        // v2.42: same-origin sub-frames have their own tiny documents
+        // and would post their own (irrelevant) card lists. Only the
+        // main frame should harvest.
+        if (window.top !== window) return;
         var now = Date.now();
         if (now - _lastDetectedPostedAt < 2000) return;  // throttle
         var found = [];
@@ -1253,6 +1257,12 @@ struct StreamWebView: UIViewRepresentable {
       // navigate further (streameast's SSO frame is the textbook case).
       var _authWallReported = false;
       function detectAuthWall() {
+        // v2.42: only the main frame's URL/title/DOM should drive the
+        // auth-wall warning. A same-origin sub-frame whose URL happens
+        // to contain "/auth" or whose host starts with "auth." would
+        // otherwise post a false-positive warning while the actual
+        // main-frame page renders games fine.
+        if (window.top !== window) return;
         if (_authWallReported) return;
         var url = location.href.toLowerCase();
         var title = (document.title || '').toLowerCase();
@@ -1405,6 +1415,12 @@ struct StreamWebView: UIViewRepresentable {
       }
 
       function tryAdvance() {
+        // v2.42: only the main frame drives the walk. The shim is injected
+        // with forMainFrameOnly:false so it runs in same-origin sub-frames
+        // too; without this guard those sub-frames each scan their own
+        // tiny document, generate misleading "no_match (dom=6)" events,
+        // and shadow the real main-frame walk.
+        if (window.top !== window) return;
         if (_walkClicks >= _maxWalkClicks) return;
         // Step 3: element matching target game.
         var node = selectTargetGameElement();
