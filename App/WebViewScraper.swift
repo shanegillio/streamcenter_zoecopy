@@ -406,8 +406,6 @@ final class WebViewScraper: NSObject {
       }
 
       function isReady() {
-        // Fast-exit titles: parking, Cloudflare hard-block, 404. No point
-        // waiting for content that's never going to render.
         var tl = (document.title || '').toLowerCase().trim();
         if (tl === 'page not found' ||
             tl.indexOf('redirecting') === 0 ||
@@ -423,9 +421,17 @@ final class WebViewScraper: NSObject {
         }
 
         // Game-shape predicates. Any of:
-        //   - 3+ anchors whose text mentions a vs / @ pattern
-        //   - 3+ anchors whose href looks game-shaped (YYYY-MM-DD, -vs-, -at-)
+        //   - 3+ anchors whose text OR aria-label OR title mentions vs / @
+        //   - 3+ anchors whose href looks game-shaped
         //   - 3+ card containers with substantive inner text
+        //   - any JSON-LD SportsEvent / BroadcastEvent script (instant ready)
+        // v2.34: aria-label fallback — image-only `<a>` cards have empty
+        //         textContent but the team-pair lives in aria-label.
+        if (document.querySelector('script[type="application/ld+json"]')) {
+          // Cheap heuristic: any LD-JSON block makes the page "ready
+          // enough" to extract — Pass 1.8 will decide what's useful.
+          return true;
+        }
         var anchors = document.querySelectorAll('a[href]');
         var vsCount = 0, dateCount = 0;
         var vsRE = /\bvs\.?\b|\s+@\s+/i;
@@ -434,7 +440,8 @@ final class WebViewScraper: NSObject {
         for (var i = 0; i < cap; i++) {
           var a = anchors[i];
           var text = (a.textContent || '').trim();
-          if (text && vsRE.test(text)) vsCount++;
+          var aria = a.getAttribute && (a.getAttribute('aria-label') || a.getAttribute('title') || '');
+          if ((text && vsRE.test(text)) || (aria && vsRE.test(aria))) vsCount++;
           if (a.href && dateRE.test(a.href)) dateCount++;
           if (vsCount >= 3 || dateCount >= 3) return true;
         }
@@ -449,6 +456,52 @@ final class WebViewScraper: NSObject {
         return false;
       }
 
+      // v2.34: build a "search blob" combining every readable signal a
+      // page exposes for an element — innerText, accessibility
+      // attributes (aria-label, aria-description, title), child <img alt>,
+      // select data-* attributes, and 3 ancestor levels of card context.
+      // This is what a screen reader actually surfaces; capturing it
+      // means image-only cards (the m-card pattern with empty innerText
+      // and aria-label only) match cleanly against canonical team names.
+      function readableTextFor(el) {
+        if (!el) return '';
+        var parts = [];
+        var seenParts = {};
+        function pushText(s) {
+          if (!s) return;
+          var t = String(s).replace(/\s+/g, ' ').trim();
+          if (!t || t.length > 500 || seenParts[t]) return;
+          seenParts[t] = 1;
+          parts.push(t);
+        }
+        pushText(el.innerText || el.textContent);
+        if (el.getAttribute) {
+          pushText(el.getAttribute('aria-label'));
+          pushText(el.getAttribute('aria-description'));
+          pushText(el.getAttribute('title'));
+          var dataAttrs = ['data-game', 'data-event', 'data-match',
+                           'data-teams', 'data-title',
+                           'data-home', 'data-away'];
+          for (var di = 0; di < dataAttrs.length; di++) {
+            pushText(el.getAttribute(dataAttrs[di]));
+          }
+        }
+        if (el.querySelectorAll) {
+          var imgs = el.querySelectorAll('img[alt]');
+          for (var ii = 0; ii < imgs.length && ii < 4; ii++) {
+            pushText(imgs[ii].getAttribute('alt'));
+          }
+        }
+        var anc = el.parentElement;
+        for (var ai = 0; ai < 3 && anc; ai++) {
+          pushText(anc.innerText || anc.textContent);
+          anc = anc.parentElement;
+        }
+        var out = parts.join(' | ');
+        if (out.length > 800) out = out.slice(0, 800);
+        return out;
+      }
+
       function extract() {
         var links = [], seen = {};
 
@@ -457,26 +510,23 @@ final class WebViewScraper: NSObject {
         for (var i = 0; i < anchors.length; i++) {
           var a = anchors[i];
           var href = a.href;
-          var text = (a.innerText || a.textContent || '').replace(/\s+/g, ' ').trim();
           if (href && !seen[href] && href.indexOf('http') === 0) {
             seen[href] = 1;
-            links.push({ href: href, text: text, status: findStatus(a) });
+            links.push({ href: href, text: readableTextFor(a), status: findStatus(a) });
           }
         }
 
         // Pass 1.5: data-href / data-url / data-link / data-stream attributes.
-        var dataAttrs = ['data-href', 'data-url', 'data-link', 'data-stream'];
-        for (var di = 0; di < dataAttrs.length; di++) {
-          var attr = dataAttrs[di];
+        var dataNavAttrs = ['data-href', 'data-url', 'data-link', 'data-stream'];
+        for (var di2 = 0; di2 < dataNavAttrs.length; di2++) {
+          var attr = dataNavAttrs[di2];
           var nodes = document.querySelectorAll('[' + attr + ']');
           for (var ni = 0; ni < nodes.length; ni++) {
             var el = nodes[ni];
             var resolved = abs(el.getAttribute(attr));
             if (!resolved || resolved.indexOf('http') !== 0 || seen[resolved]) continue;
             seen[resolved] = 1;
-            var t = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-            if (t.length > 250) t = t.slice(0, 250);
-            links.push({ href: resolved, text: t, status: findStatus(el) });
+            links.push({ href: resolved, text: readableTextFor(el), status: findStatus(el) });
           }
         }
 
@@ -491,12 +541,12 @@ final class WebViewScraper: NSObject {
           var resolved2 = abs(m[1]);
           if (!resolved2 || resolved2.indexOf('http') !== 0 || seen[resolved2]) continue;
           seen[resolved2] = 1;
-          var t2 = (el2.innerText || el2.textContent || '').replace(/\s+/g, ' ').trim();
-          if (t2.length > 250) t2 = t2.slice(0, 250);
-          links.push({ href: resolved2, text: t2, status: findStatus(el2) });
+          links.push({ href: resolved2, text: readableTextFor(el2), status: findStatus(el2) });
         }
 
-        // Pass 1.7: card containers wrapping nested anchors.
+        // Pass 1.7: card containers wrapping nested anchors. The card's
+        // accumulated text often holds the team names even when the
+        // inner anchor itself is image-only.
         var cardEls = document.querySelectorAll('[class*="match" i],[class*="game" i],[class*="event" i],[class*="fixture" i],[class*="card" i]');
         for (var ki = 0; ki < cardEls.length; ki++) {
           var card = cardEls[ki];
@@ -505,9 +555,49 @@ final class WebViewScraper: NSObject {
           var href2 = inner.href;
           if (!href2 || href2.indexOf('http') !== 0 || seen[href2]) continue;
           seen[href2] = 1;
-          var tt = (card.innerText || '').replace(/\s+/g, ' ').trim();
-          if (!tt || tt.length > 250) tt = (inner.innerText || '').replace(/\s+/g, ' ').trim();
-          links.push({ href: href2, text: tt, status: findStatus(card) });
+          links.push({ href: href2, text: readableTextFor(card), status: findStatus(card) });
+        }
+
+        // Pass 1.8 (v2.34): JSON-LD SportsEvent / BroadcastEvent / Event.
+        // Many modern sports sites publish structured data for SEO; when
+        // present this is the authoritative game-to-URL mapping. The
+        // resulting ScrapedLink carries fully canonical team names so
+        // findLink's substring matcher hits cleanly.
+        function visitLD(item) {
+          if (!item || typeof item !== 'object') return;
+          if (item['@graph'] && Array.isArray(item['@graph'])) {
+            item['@graph'].forEach(visitLD);
+          }
+          var type = item['@type'];
+          if (Array.isArray(type)) type = type[0];
+          if (type !== 'SportsEvent' && type !== 'BroadcastEvent' &&
+              type !== 'Event' && type !== 'EventSeries') return;
+          var url = item.url
+                 || (item.mainEntityOfPage && item.mainEntityOfPage.url);
+          if (!url || typeof url !== 'string' || url.indexOf('http') !== 0) return;
+          if (seen[url]) return;
+          seen[url] = 1;
+          var name = item.name || '';
+          var home = (item.homeTeam && (item.homeTeam.name || item.homeTeam)) || '';
+          var away = (item.awayTeam && (item.awayTeam.name || item.awayTeam)) || '';
+          if (typeof home !== 'string') home = '';
+          if (typeof away !== 'string') away = '';
+          var parts = [];
+          if (name) parts.push(String(name));
+          if (home) parts.push(String(home));
+          if (away) parts.push(String(away));
+          if (home && away) parts.push(home + ' vs ' + away);
+          var text = parts.join(' | ').slice(0, 500);
+          links.push({ href: url, text: text, status: '' });
+        }
+        var ldScripts = document.querySelectorAll('script[type="application/ld+json"]');
+        for (var ls = 0; ls < ldScripts.length; ls++) {
+          try {
+            var raw = ldScripts[ls].innerHTML || ldScripts[ls].textContent || '';
+            var parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) parsed.forEach(visitLD);
+            else visitLD(parsed);
+          } catch(e){}
         }
 
         // Pass 2: countdown / timer cards (upcoming games whose anchor is a

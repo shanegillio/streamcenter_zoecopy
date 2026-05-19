@@ -56,8 +56,18 @@ struct CustomStreamSource: StreamSource {
       }
     }
 
-    if matches.isEmpty, FoundationModelScraper.isSupported {
-      return (await llmFallback(links: links, games: games)) ?? [:]
+    // v2.34: LLM fills gaps. With Pass 1.8 JSON-LD and accessibility-
+    // attribute capture in v2.34 WebViewScraper, plain matching covers
+    // the common case. The LLM only fires on the unmatched remainder
+    // (one call per source per refresh, max), and only when something
+    // actually slipped through plain matching.
+    let unmatched = games.filter { matches[$0.id] == nil }
+    if !unmatched.isEmpty, FoundationModelScraper.isSupported {
+      if let llmMatches = await llmFallback(links: links, games: unmatched) {
+        for (id, url) in llmMatches where matches[id] == nil {
+          matches[id] = url
+        }
+      }
     }
     return matches
   }

@@ -35,7 +35,9 @@ struct PlayerView: View {
       Color.black.ignoresSafeArea()
       if rulesReady {
         if avPlayer == nil {
-          if allFailed {
+          if registry.enabledSources.isEmpty && game.streamURLs.isEmpty {
+            noSourcesEnabledView
+          } else if allFailed {
             retryUI
           } else if !attempts.isEmpty, currentAttemptIdx < attempts.count {
             let current = attempts[currentAttemptIdx]
@@ -156,12 +158,41 @@ struct PlayerView: View {
       guard let source = fallbackSources.first(where: { $0.id == sourceID }) else { continue }
       built.append(SourceAttempt(sourceID: source.id, pageURL: source.baseURL))
     }
-    if built.isEmpty {
-      built.append(SourceAttempt(sourceID: "espn", pageURL: game.pageURL))
-    }
+    // v2.34: when this list ends up empty, the body branch on
+    // `registry.enabledSources.isEmpty` shows the dedicated empty
+    // state. No more synthetic ESPN-page fallback that loads forever.
     attempts = built
     currentAttemptIdx = 0
     allFailed = false
+  }
+
+  // v2.34: shown when the user has no sources toggled on AND the game
+  // has no pre-matched URLs. Directs them to Settings instead of
+  // staring at a loading spinner that will never resolve.
+  @Environment(\.dismiss) private var dismissPlayer
+  private var noSourcesEnabledView: some View {
+    VStack(spacing: 18) {
+      Image(systemName: "antenna.radiowaves.left.and.right.slash")
+        .font(.system(size: 44))
+        .foregroundStyle(.white.opacity(0.7))
+      Text("No sources enabled")
+        .font(.title3.weight(.semibold))
+        .foregroundStyle(.white)
+      Text("Enable a source in Settings to find streams for this game. You can add custom streaming sites under Settings → Source Site.")
+        .font(.subheadline)
+        .foregroundStyle(.white.opacity(0.65))
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 36)
+      Button {
+        dismissPlayer()
+      } label: {
+        Label("Back to Streams", systemImage: "chevron.backward")
+          .padding(.horizontal, 16).padding(.vertical, 10)
+          .background(Color.white.opacity(0.15), in: Capsule())
+          .foregroundStyle(.white)
+      }
+    }
+    .padding(.horizontal, 24)
   }
 
   private func recordSuccess(attempt: SourceAttempt) {
