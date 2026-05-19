@@ -30,19 +30,25 @@ actor TheSportsDBProducer: ListingProducer {
       return cached.games
     }
 
-    // Today + tomorrow in user's local TZ (matches ESPNScheduleService's
-    // window). TheSportsDB uses UTC dates, but a single-day mismatch is
-    // tolerable here — schedule rendering already handles tz conversion.
+    // v2.36: yesterday + today + tomorrow ET. Matches ESPNScoreboardService's
+    // window. Yesterday catches IIHF / Cricket games that started yesterday
+    // ET (often the case — cricket international fixtures and IIHF World
+    // Championship games are timed for European/Asian audiences and run
+    // late into ET night). TheSportsDB's strStatus drops completed games
+    // at display time so finished yesterday games don't pollute the feed.
     let etTZ = TimeZone(identifier: "America/New_York")!
     var cal = Calendar(identifier: .gregorian)
     cal.timeZone = etTZ
     let today = cal.startOfDay(for: Date())
+    let yesterday = cal.date(byAdding: .day, value: -1, to: today) ?? today
     let tomorrow = cal.date(byAdding: .day, value: 1, to: today) ?? today
     let fmt = DateFormatter()
     fmt.locale = Locale(identifier: "en_US_POSIX")
     fmt.timeZone = etTZ
     fmt.dateFormat = "yyyy-MM-dd"
-    let dates = [fmt.string(from: today), fmt.string(from: tomorrow)]
+    let dates = [fmt.string(from: yesterday),
+                 fmt.string(from: today),
+                 fmt.string(from: tomorrow)]
 
     // Fan out: (date, sport) pairs. Two sports × two days = 4 calls.
     var games: [Game] = []
@@ -141,6 +147,15 @@ actor TheSportsDBProducer: ListingProducer {
     guard let id = e.idEvent, !id.isEmpty,
           let home = e.strHomeTeam, !home.isEmpty
     else { return nil }
+    // v2.36: drop completed events. With the 3-day window now including
+    // yesterday, finished games would otherwise pollute the feed.
+    if let status = e.strStatus {
+      let upper = status.uppercased()
+      if upper.contains("FINISHED") || upper == "FT" || upper == "AET"
+         || upper.contains("ABANDONED") || upper.contains("POSTPONED") {
+        return nil
+      }
+    }
     let away = e.strAwayTeam ?? ""
     let isEvent = away.isEmpty
 

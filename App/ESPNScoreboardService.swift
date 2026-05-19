@@ -89,13 +89,15 @@ actor ESPNScoreboardService {
     dateFmt.locale = Locale(identifier: "en_US_POSIX")
     dateFmt.timeZone = etTZ
     dateFmt.dateFormat = "yyyyMMdd"
-    // v2.25: 2-day window (today + tomorrow ET). User's directive: only
-    // list games within the next day; nothing 2 days or more away.
-    // Trade-off: gives back the wider lookup window v2.19 added, but the
-    // user prefers a tighter, lighter listing over catching every
-    // mid-week / weekend fixture days in advance. Cost: 14 supported
-    // leagues × 2 dates = 28 parallel HTTP requests, cached 60–90 s.
-    let dateStrings: [String] = (0..<2).map { offset in
+    // v2.36: 3-day window (yesterday + today + tomorrow ET). Yesterday
+    // catches games that ESPN tags by their ET start date but are still
+    // live past midnight ET — typical for west-coast NBA / NHL games
+    // that tip off 7-10 pm PT (10 pm-1 am ET) and run until midnight-2
+    // am ET. ESPN's per-event `isCompleted` flag drops finished games
+    // upstream of HomeView, so completed yesterday games don't pollute
+    // the feed. Cost: 14 leagues × 3 dates = 42 parallel HTTP requests,
+    // cached 60–90 s.
+    let dateStrings: [String] = (-1...1).map { offset in
       let date = etCal.date(byAdding: .day, value: offset, to: Date()) ?? Date()
       return dateFmt.string(from: date)
     }
