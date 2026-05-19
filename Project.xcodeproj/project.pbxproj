@@ -46,6 +46,10 @@
 		230AAAA000000000F0000009 /* ScheduleAggregator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 230AAAA000000000F000000A /* ScheduleAggregator.swift */; };
 		230AAAA000000000F000000B /* TheSportsDBProducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 230AAAA000000000F000000C /* TheSportsDBProducer.swift */; };
 		230AAAA000000000F000000D /* SourceStatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 230AAAA000000000F000000E /* SourceStatsView.swift */; };
+		231AAAA000000000F1000001 /* URLFingerprint.swift in Sources */ = {isa = PBXBuildFile; fileRef = 231AAAA000000000F1000002 /* URLFingerprint.swift */; };
+		231AAAA000000000F1000003 /* M3U8Scorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 231AAAA000000000F1000004 /* M3U8Scorer.swift */; };
+		231AAAA000000000F1000005 /* SegmentProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 231AAAA000000000F1000006 /* SegmentProbe.swift */; };
+		231AAAA000000000F1000007 /* CandidateScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 231AAAA000000000F1000008 /* CandidateScorer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -89,6 +93,10 @@
 		230AAAA000000000F000000A /* ScheduleAggregator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduleAggregator.swift; sourceTree = "<group>"; };
 		230AAAA000000000F000000C /* TheSportsDBProducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TheSportsDBProducer.swift; sourceTree = "<group>"; };
 		230AAAA000000000F000000E /* SourceStatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceStatsView.swift; sourceTree = "<group>"; };
+		231AAAA000000000F1000002 /* URLFingerprint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLFingerprint.swift; sourceTree = "<group>"; };
+		231AAAA000000000F1000004 /* M3U8Scorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = M3U8Scorer.swift; sourceTree = "<group>"; };
+		231AAAA000000000F1000006 /* SegmentProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentProbe.swift; sourceTree = "<group>"; };
+		231AAAA000000000F1000008 /* CandidateScorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CandidateScorer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -134,6 +142,10 @@
 				230AAAA000000000F000000A /* ScheduleAggregator.swift */,
 				230AAAA000000000F000000C /* TheSportsDBProducer.swift */,
 				230AAAA000000000F000000E /* SourceStatsView.swift */,
+				231AAAA000000000F1000002 /* URLFingerprint.swift */,
+				231AAAA000000000F1000004 /* M3U8Scorer.swift */,
+				231AAAA000000000F1000006 /* SegmentProbe.swift */,
+				231AAAA000000000F1000008 /* CandidateScorer.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -257,6 +269,10 @@
 				230AAAA000000000F0000009 /* ScheduleAggregator.swift in Sources */,
 				230AAAA000000000F000000B /* TheSportsDBProducer.swift in Sources */,
 				230AAAA000000000F000000D /* SourceStatsView.swift in Sources */,
+				231AAAA000000000F1000001 /* URLFingerprint.swift in Sources */,
+				231AAAA000000000F1000003 /* M3U8Scorer.swift in Sources */,
+				231AAAA000000000F1000005 /* SegmentProbe.swift in Sources */,
+				231AAAA000000000F1000007 /* CandidateScorer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

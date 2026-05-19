@@ -48,12 +48,18 @@ final class SourceLearningStore: ObservableObject {
     /// matches. Light hint used by `extractGames` pre-filter to prefer
     /// links under known-good directories.
     var goodPathPrefixes: Set<String>
+    /// v2.31: hostnames of stream URLs that have actually played for
+    /// this source. Drives the L1 +10 "known-good host" boost in
+    /// `URLFingerprint.score`. Self-populated on each successful
+    /// playback — source-agnostic, no hardcoded CDNs.
+    var playbackHosts: Set<String>
     var lastUpdated: Date
 
     static let empty = SourceLearning(
       templates: [],
       teamSlugMap: [:],
       goodPathPrefixes: [],
+      playbackHosts: [],
       lastUpdated: .distantPast
     )
   }
@@ -127,6 +133,33 @@ final class SourceLearningStore: ObservableObject {
     if learning.goodPathPrefixes.isEmpty { return true }
     let path = url.path.lowercased()
     return learning.goodPathPrefixes.contains { path.hasPrefix($0) }
+  }
+
+  /// v2.31: hostnames that have produced playable streams on this
+  /// source. Passed to `URLFingerprint.score` as `knownGoodHosts` for
+  /// a +10 L1 boost on subsequent candidates from the same hostname.
+  func playbackHosts(for sourceID: String) -> Set<String> {
+    bySourceID[sourceID]?.playbackHosts ?? []
+  }
+
+  /// v2.31: called from PlayerView when AVPlayer received a playable
+  /// stream URL. Records the URL's hostname against the source so
+  /// future candidates from the same host get a confidence boost.
+  /// Capped at 25 hosts per source to prevent unbounded growth.
+  func recordPlaybackHost(_ host: String, sourceID: String) {
+    let h = host.lowercased()
+    guard !h.isEmpty else { return }
+    var learning = bySourceID[sourceID] ?? .empty
+    if learning.playbackHosts.contains(h) { return }
+    learning.playbackHosts.insert(h)
+    if learning.playbackHosts.count > 25 {
+      // Drop the oldest-inserted host by re-building a smaller set.
+      // Set ordering is unstable but we just need to bound size.
+      learning.playbackHosts = Set(learning.playbackHosts.prefix(25))
+    }
+    learning.lastUpdated = Date()
+    bySourceID[sourceID] = learning
+    save()
   }
 
   // MARK: Recording (called from PlayerView on successful playback)

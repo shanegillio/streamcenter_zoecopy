@@ -52,18 +52,26 @@ struct PlayerView: View {
             // Re-keying on `current.id` means SwiftUI rebuilds StreamWebView
             // when we advance to the next attempt — discarding the previous
             // WKWebContent process cleanly.
-            StreamWebView(url: current.pageURL, ruleList: ruleList) { streamURL, cookies in
-              Task { @MainActor in
-                let p = makePlayer(url: streamURL, cookies: cookies, referer: current.pageURL)
-                avPlayer = p
-                p.play()
-                // v2.30: success recording. The source that produced this
-                // stream gets credit in SourceHealth, becomes the league's
-                // last-successful preference, teaches SourceLearningStore
-                // about its URL pattern, and clears any prior failures.
-                recordSuccess(attempt: current)
-              }
-            }
+            StreamWebView(
+              url: current.pageURL,
+              ruleList: ruleList,
+              onStreamURLFound: { streamURL, cookies in
+                Task { @MainActor in
+                  let p = makePlayer(url: streamURL, cookies: cookies, referer: current.pageURL)
+                  avPlayer = p
+                  p.play()
+                  // v2.30: success recording. The source that produced this
+                  // stream gets credit in SourceHealth, becomes the league's
+                  // last-successful preference, teaches SourceLearningStore
+                  // about its URL pattern, and clears any prior failures.
+                  // v2.31: also record the stream URL's hostname so future
+                  // candidates from the same host get an L1 +10 boost.
+                  recordSuccess(attempt: current, streamURL: streamURL)
+                }
+              },
+              targetGame: game,           // v2.31: drives L1+L3+L4 scoring
+              sourceID: current.sourceID  // v2.31: known-good-hosts + future fingerprint recording
+            )
             .id(current.id)
             .ignoresSafeArea()
             .opacity(showWebFallback ? 1 : 0)
@@ -302,10 +310,12 @@ struct PlayerView: View {
     allFailed = false
   }
 
-  /// v2.30: record success across all relevant stores when the WebView
-  /// JS-intercept successfully hands AVPlayer a playable URL. Called
-  /// from the StreamWebView callback once on first successful stream.
-  private func recordSuccess(attempt: SourceAttempt) {
+  /// v2.30/v2.31: record success across all relevant stores when the
+  /// WebView JS-intercept successfully hands AVPlayer a playable URL.
+  /// Called from the StreamWebView callback once on first successful
+  /// stream. v2.31 adds `streamURL` so we can record the stream-host
+  /// for future L1 known-good-host boosts.
+  private func recordSuccess(attempt: SourceAttempt, streamURL: URL? = nil) {
     let gameKey = GameKey.make(for: game)
     let sid = attempt.sourceID
     SourceHealth.shared.recordSuccess(sourceID: sid)
@@ -313,6 +323,9 @@ struct PlayerView: View {
     SourceLearningStore.shared.recordSuccess(
       sourceID: sid, gamePageURL: attempt.pageURL, game: game
     )
+    if let host = streamURL?.host {
+      SourceLearningStore.shared.recordPlaybackHost(host, sourceID: sid)
+    }
     FailureStore.shared.clearForGame(gameKey: gameKey)
   }
 
@@ -523,8 +536,26 @@ struct StreamWebView: UIViewRepresentable {
   /// Browse mode: allows cross-domain link navigation and redirects window.open() into
   /// the same WebView instead of suppressing it. Used by BrowseView for custom sources.
   var browseMode: Bool = false
+  /// v2.31: target Game when this WebView is auto-resolving a stream
+  /// for a specific tap. Drives URL fingerprint scoring (team slugs in
+  /// path), DOM scoring (team names in parent text), and target-game-
+  /// aware click steering (only click mirrors inside the matched card).
+  /// nil for BrowseView's exploration mode.
+  var targetGame: Game? = nil
+  /// v2.31: sourceID for the source whose pages we're loading. Lets
+  /// the Coordinator look up known-good hosts from the learning store
+  /// (boosts L1) and record successful contextFingerprints on commit.
+  var sourceID: String? = nil
 
-  func makeCoordinator() -> Coordinator { Coordinator(onStreamURLFound: onStreamURLFound, browseMode: browseMode) }
+  func makeCoordinator() -> Coordinator {
+    Coordinator(
+      onStreamURLFound: onStreamURLFound,
+      browseMode: browseMode,
+      targetGame: targetGame,
+      sourceID: sourceID,
+      baseURL: url
+    )
+  }
 
   func makeUIView(context: Context) -> WKWebView {
     let config = WKWebViewConfiguration()
@@ -539,6 +570,14 @@ struct StreamWebView: UIViewRepresentable {
     let popupJS = browseMode ? Self.popupRedirectJS : Self.popupSuppressJS
     config.userContentController.addUserScript(WKUserScript(
       source: popupJS, injectionTime: .atDocumentStart, forMainFrameOnly: false
+    ))
+    // v2.31: target-game slug config — read by the shim's
+    // selectTargetGameCard() to scope mirror-clicking to the card
+    // matching the user's tap. nil game produces an empty config that
+    // the shim treats as "no target — fall back to generic clicking".
+    let slugScript = Self.slugConfigJS(for: targetGame)
+    config.userContentController.addUserScript(WKUserScript(
+      source: slugScript, injectionTime: .atDocumentStart, forMainFrameOnly: false
     ))
     config.userContentController.addUserScript(WKUserScript(
       source: Self.autoPlayAndInterceptJS, injectionTime: .atDocumentStart, forMainFrameOnly: false
@@ -598,19 +637,47 @@ struct StreamWebView: UIViewRepresentable {
     };
   """
 
+  // v2.31: builds the slug-config snippet injected before the main shim.
+  // The shim reads `window.__sc_target` to scope mirror clicking to the
+  // card whose innerText matches the user's tapped Game. nil → empty
+  // target, shim falls back to generic clicking unchanged.
+  static func slugConfigJS(for game: Game?) -> String {
+    func slug(_ s: String) -> String {
+      let folded = s.folding(options: [.diacriticInsensitive, .caseInsensitive],
+                             locale: .current)
+      let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789- ")
+      let scalars = folded.unicodeScalars.filter { allowed.contains($0) }
+      let stripped = String(String.UnicodeScalarView(scalars))
+      let collapsed = stripped.replacingOccurrences(
+        of: "[ ]+", with: "-", options: .regularExpression
+      )
+      return collapsed
+        .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        .replacingOccurrences(of: "'", with: "\\'")
+    }
+    guard let g = game else { return "window.__sc_target = null;" }
+    return "window.__sc_target = {home: '\(slug(g.homeTeam))', away: '\(slug(g.awayTeam))'};"
+  }
+
+  // v2.31 shim. Every URL the page surfaces now posts a structured
+  // JSON payload: {url, kind, originHost, parentText, iframeSrc,
+  // hasLiveBadge, viewerCount}. Native side decodes, scores, and
+  // accumulates into a CandidatePool (see CandidateScorer.swift)
+  // rather than committing first-playable. Source-agnostic — no
+  // site-specific knowledge in here.
   static let autoPlayAndInterceptJS = """
     (function(){
       'use strict';
       var _r = {};
+      var _currentMirrorEl = null;
+      var _mirrorClickAt = 0;
 
-      // ---------- URL matching ----------
       function isStreamURL(u) {
         if (!u || typeof u !== 'string') return false;
-        if (u.indexOf('blob:') === 0) return false;         // blob URLs are opaque MSE buffers
-        var l = u.toLowerCase().split('?')[0];               // strip query string for extension check
+        if (u.indexOf('blob:') === 0) return false;
+        var l = u.toLowerCase().split('?')[0];
         if (l.indexOf('.m3u8') !== -1) return true;
         if (l.indexOf('.mpd')  !== -1) return true;
-        // Common HLS/DASH manifest path segments without extension
         var pathPatterns = ['/hls/', '/live/', '/stream/', '/chunklist', '/playlist',
                             '/manifest', '/index.m3u', '/master.m3u'];
         for (var i = 0; i < pathPatterns.length; i++) {
@@ -619,27 +686,68 @@ struct StreamWebView: UIViewRepresentable {
         return false;
       }
 
-      function report(url) {
+      // ---------- DOM context harvest (L3) ----------
+      function harvestContext(element) {
+        var ctx = { parentText: '', iframeSrc: null, hasLiveBadge: false, viewerCount: null };
+        if (!element || typeof element.parentElement === 'undefined') return ctx;
+        var anc = element;
+        var texts = [];
+        for (var i = 0; i < 6 && anc; i++) {
+          var raw = '';
+          try { raw = (anc.innerText || anc.textContent || ''); } catch(e){}
+          if (raw && raw.length < 2000) texts.push(raw.toLowerCase().slice(0, 300));
+          var cls = '';
+          try { cls = (anc.className || '').toString().toLowerCase(); } catch(e){}
+          if (cls.indexOf('live') !== -1 || /\\blive\\b/i.test(raw)) ctx.hasLiveBadge = true;
+          if (ctx.viewerCount === null) {
+            var v = raw.match(/(\\d+(?:\\.\\d+)?)([Kk]?)\\s*(viewers?|watching|online)/i);
+            if (v) {
+              var n = parseFloat(v[1]);
+              if (v[2]) n *= 1000;
+              ctx.viewerCount = Math.floor(n);
+            }
+          }
+          if (anc.tagName === 'IFRAME') {
+            try { ctx.iframeSrc = anc.src || null; } catch(e){}
+          }
+          anc = anc.parentElement;
+        }
+        ctx.parentText = texts.join(' | ').slice(0, 500);
+        return ctx;
+      }
+
+      // ---------- Report (structured payload) ----------
+      function report(url, kind, element) {
         if (!url || typeof url !== 'string') return;
         var clean = url.trim();
         if (!clean || _r[clean] || !isStreamURL(clean)) return;
         _r[clean] = 1;
-        try { window.webkit.messageHandlers.streamURL.postMessage(clean); } catch(e){}
+        var k = kind || 'unknown';
+        // Attribute URLs to recent mirror click when shim has no specific element.
+        if (!element && _currentMirrorEl && (Date.now() - _mirrorClickAt) < 4000) {
+          element = _currentMirrorEl;
+          if (k === 'xhr' || k === 'fetch' || k === 'iframeSrc' || k === 'unknown') {
+            k = 'mirrorClick';
+          }
+        }
+        var ctx = harvestContext(element);
+        ctx.url = clean;
+        ctx.kind = k;
+        ctx.originHost = location.host || '';
+        try { window.webkit.messageHandlers.streamURL.postMessage(JSON.stringify(ctx)); } catch(e){}
       }
 
       // ---------- Network interception ----------
-
-      // XHR — intercept both open() URL and the final responseURL after redirects
       var xhrOpen = XMLHttpRequest.prototype.open;
       XMLHttpRequest.prototype.open = function(m, u) {
-        if (typeof u === 'string') report(u);
+        if (typeof u === 'string') report(u, 'xhr', null);
         var self = this;
         var origOnRS = null;
         Object.defineProperty(self, 'onreadystatechange', {
           get: function() { return origOnRS; },
           set: function(fn) {
             origOnRS = function() {
-              if (self.readyState === 4 && self.responseURL) report(self.responseURL);
+              if (self.readyState === 4 && self.responseURL) report(self.responseURL, 'xhr', null);
               if (fn) fn.apply(self, arguments);
             };
           },
@@ -648,43 +756,40 @@ struct StreamWebView: UIViewRepresentable {
         return xhrOpen.apply(this, arguments);
       };
 
-      // fetch — intercept request URL and resolved response URL
       if (window.fetch) {
         var _f = window.fetch;
         window.fetch = function() {
           var arg = arguments[0];
-          if (typeof arg === 'string') report(arg);
-          else if (arg && typeof arg.url === 'string') report(arg.url);
+          if (typeof arg === 'string') report(arg, 'fetch', null);
+          else if (arg && typeof arg.url === 'string') report(arg.url, 'fetch', null);
           var p = _f.apply(this, arguments);
           if (p && typeof p.then === 'function') {
             p.then(function(resp) {
-              if (resp && resp.url) report(resp.url);
+              if (resp && resp.url) report(resp.url, 'fetch', null);
             }).catch(function(){});
           }
           return p;
         };
       }
 
-      // WebSocket — some sites deliver the stream URL or auth token via WS;
-      // watch both the WS endpoint URL and any text messages that look like stream URLs.
       var OrigWS = window.WebSocket;
       if (OrigWS) {
         window.WebSocket = function(url, proto) {
-          report(url);
+          report(url, 'websocket', null);
           var ws = proto ? new OrigWS(url, proto) : new OrigWS(url);
           var origOnMsg = null;
           Object.defineProperty(ws, 'onmessage', {
             get: function() { return origOnMsg; },
             set: function(fn) {
               origOnMsg = function(evt) {
-                if (evt && typeof evt.data === 'string') report(evt.data);
+                if (evt && typeof evt.data === 'string') report(evt.data, 'websocket', null);
                 if (fn) fn.apply(ws, arguments);
               };
             },
             configurable: true
           });
           ws.addEventListener('message', function(evt) {
-            if (evt && typeof evt.data === 'string') report(evt.data);
+            if (evt && typeof evt.data === 'string') report(evt.data, 'websocket', null);
           });
           return ws;
         };
@@ -696,131 +801,139 @@ struct StreamWebView: UIViewRepresentable {
       }
 
       // ---------- DOM element interception ----------
-
-      // HTMLVideoElement.src setter
       (function(){
         var desc = Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'src');
         if (desc && desc.set) {
           Object.defineProperty(HTMLVideoElement.prototype, 'src', {
             enumerable: desc.enumerable, configurable: desc.configurable,
             get: desc.get,
-            set: function(val) { report(val); desc.set.call(this, val); }
+            set: function(val) { report(val, 'videoElement', this); desc.set.call(this, val); }
           });
         }
       })();
-
-      // HTMLSourceElement.src setter — catches <source src="...m3u8"> added dynamically
       (function(){
         var desc = Object.getOwnPropertyDescriptor(HTMLSourceElement.prototype, 'src');
         if (desc && desc.set) {
           Object.defineProperty(HTMLSourceElement.prototype, 'src', {
             enumerable: desc.enumerable, configurable: desc.configurable,
             get: desc.get,
-            set: function(val) { report(val); desc.set.call(this, val); }
+            set: function(val) { report(val, 'videoElement', this); desc.set.call(this, val); }
           });
         }
       })();
-
-      // setAttribute — catches el.setAttribute('src', '...') on video/source
       var origSetAttr = Element.prototype.setAttribute;
       Element.prototype.setAttribute = function(name, val) {
         if ((name === 'src' || name === 'data-src') &&
             (this.tagName === 'VIDEO' || this.tagName === 'SOURCE')) {
-          report(val);
+          report(val, 'videoElement', this);
         }
         return origSetAttr.apply(this, arguments);
       };
 
-      // ---------- Inline script scanning (yt-dlp-style extractors) ----------
-
+      // ---------- Inline script + meta scanning ----------
       function decodeAtob(str) {
         try { var d = atob(str); if (d.indexOf('http') === 0) return d; } catch(e){}
         return null;
       }
-
       function scanScripts() {
         document.querySelectorAll('script:not([src])').forEach(function(s) {
           var c = s.innerHTML.replace(/[\\r\\n\\t]+/g, ' ');
-
-          // 1. Quoted stream URL anywhere in script text
           var urlMatches = c.match(/['"`]([^'"`\\s]{10,}(?:\\.m3u8|\\.mpd)[^'"`\\s]*?)['"`]/g) || [];
           urlMatches.forEach(function(m) {
             var url = m.replace(/^['"`]|['"`]$/g, '');
-            if (url.indexOf('http') !== -1) report(url);
+            if (url.indexOf('http') !== -1) report(url, 'scriptRegex', null);
           });
-
-          // 2. JW Player — jwplayer().setup({file:'url'}) or sources:[{file:'url'}]
-          //    Also catches the common {src:'...'} variant.
-          var jwPatterns = [
-            /['"]?(?:file|src)['"]?\\s*:\\s*['"]([^'"]{10,})['"]/g
-          ];
+          var jwPatterns = [/['"]?(?:file|src)['"]?\\s*:\\s*['"]([^'"]{10,})['"]/g];
           jwPatterns.forEach(function(rx) {
             var m;
-            while ((m = rx.exec(c)) !== null) { report(m[1]); }
+            while ((m = rx.exec(c)) !== null) { report(m[1], 'scriptRegex', null); }
           });
-
-          // 3. Video.js / hls.js — Hls.loadSource('url') or videojs setup sources
           var hlsLoad = c.match(/(?:loadSource|attachMedia|src)\\s*\\(\\s*['"]([^'"]{10,})['"]/g) || [];
           hlsLoad.forEach(function(m) {
             var url = m.replace(/.*['"]([^'"]+)['"].*/, '$1');
-            report(url);
+            report(url, 'scriptRegex', null);
           });
-
-          // 4. Generic JSON-like {url:'...', source:'...', stream:'...'} patterns
           var jsonPatterns = /['"](?:url|source|stream|hls|hlsUrl|streamUrl|m3u8|manifestUrl)['"]\\s*:\\s*['"]([^'"]{10,})['"]/g;
           var m2;
-          while ((m2 = jsonPatterns.exec(c)) !== null) { report(m2[1]); }
-
-          // 5. atob() encoded URLs
+          while ((m2 = jsonPatterns.exec(c)) !== null) { report(m2[1], 'scriptRegex', null); }
           var b64 = c.match(/atob\\s*\\(\\s*['"]([A-Za-z0-9+\\/=]{20,})['"]\\s*\\)/g) || [];
           b64.forEach(function(match) {
             var inner = match.replace(/^atob\\s*\\(\\s*['"]/, '').replace(/['"]\\s*\\)$/, '');
             var d = decodeAtob(inner);
-            if (d) report(d);
+            if (d) report(d, 'scriptRegex', null);
           });
-
-          // 6. Escaped Unicode URLs (some obfuscated scripts use \\u0068ttp...)
           var unescaped = c.replace(/\\\\u([0-9a-fA-F]{4})/g, function(_, h) {
             return String.fromCharCode(parseInt(h, 16));
           });
           if (unescaped !== c) {
             var escMatches = unescaped.match(/https?:\\/\\/[^\\s'"<>]{10,}/g) || [];
-            escMatches.forEach(function(u) { report(u); });
+            escMatches.forEach(function(u) { report(u, 'scriptRegex', null); });
           }
         });
-
-        // Also check <meta> og:video and twitter:player content attributes
         document.querySelectorAll('meta[property="og:video"], meta[name="twitter:player:stream"]')
-          .forEach(function(m) { var c = m.getAttribute('content'); if (c) report(c); });
+          .forEach(function(m) {
+            var c = m.getAttribute('content');
+            if (c) report(c, 'metaTag', m);
+          });
+      }
+
+      // ---------- Target-game card selection (L4) ----------
+      function selectTargetGameCard() {
+        if (!window.__sc_target) return null;
+        var home = (window.__sc_target.home || '').toLowerCase();
+        var away = (window.__sc_target.away || '').toLowerCase();
+        if (!home || !away) return null;
+        function tokens(slug) {
+          var t = [];
+          if (slug.length >= 4) t.push(slug);
+          slug.split('-').forEach(function(w) { if (w.length >= 4) t.push(w); });
+          return t;
+        }
+        var ht = tokens(home);
+        var at = tokens(away);
+        if (!ht.length || !at.length) return null;
+        function matches(text) {
+          var lower = text.toLowerCase();
+          var h = ht.some(function(t) { return lower.indexOf(t) !== -1; });
+          var a = at.some(function(t) { return lower.indexOf(t) !== -1; });
+          return h && a;
+        }
+        var selectors = [
+          '[class*="game"]', '[class*="card"]', '[class*="match"]',
+          '[class*="event"]', '[class*="fixture"]', '[class*="row"]',
+          'article', 'li'
+        ];
+        var seen = [];
+        for (var s = 0; s < selectors.length; s++) {
+          var els;
+          try { els = document.querySelectorAll(selectors[s]); } catch(e){ continue; }
+          for (var i = 0; i < els.length; i++) {
+            var el = els[i];
+            if (seen.indexOf(el) !== -1) continue;
+            seen.push(el);
+            var t = '';
+            try { t = (el.innerText || el.textContent || ''); } catch(e){}
+            if (t.length < 4 || t.length > 1500) continue;
+            if (matches(t)) return el;
+          }
+        }
+        return null;
       }
 
       // ---------- DOM scan + interaction ----------
-
       function scan() {
-        // video/source elements already in DOM
         document.querySelectorAll('video, source').forEach(function(el) {
           [el.src, el.currentSrc, el.getAttribute('src'), el.dataset && el.dataset.src].forEach(function(s) {
-            if (s) report(s);
+            if (s) report(s, 'videoElement', el);
           });
         });
-
-        // Inline script extraction (yt-dlp-style)
         scanScripts();
-
-        // Auto-play paused videos
         document.querySelectorAll('video').forEach(function(v) {
           if (v.paused) v.play().catch(function(){});
         });
 
-        // Click play / mirror buttons — extended selector list covering JW,
-        // Video.js, Plyr, Flowplayer, and aggregator mirror lists. Aggregator
-        // sites (bintv → sources.bintvs.fun) expose multiple mirrors per
-        // match, some labeled "NO IOS" because they serve codecs/DRM that
-        // AVPlayer can't play. Skip those (their ancestor text contains the
-        // marker) and click the remainder sequentially with a 2.5s stagger
-        // so each iframe has time to yield a stream URL before the next
-        // overwrites it. Native runs an AVURLAsset playability probe on each
-        // observed URL and keeps the first that actually plays.
+        // Mirror clicker — v2.31 scopes to the target-game card when found,
+        // so we don't click ad mirrors that belong to other games on the page.
         var mirrorSelectors = [
           '.vjs-big-play-button', '.jw-icon-display', '.jw-display-icon-display',
           '.plyr__control--overlaid', '[data-plyr="play"]',
@@ -832,15 +945,14 @@ struct StreamWebView: UIViewRepresentable {
           '[class*="watch"]', '[id*="watch"]',
           '[class*="source"]', '[class*="mirror"]', '[class*="stream-source"]'
         ];
+        var targetCard = selectTargetGameCard();
+        var scope = targetCard || document;
         var candidates = [];
         var seenEls = [];
         mirrorSelectors.forEach(function(sel) {
           try {
-            document.querySelectorAll(sel).forEach(function(el) {
+            scope.querySelectorAll(sel).forEach(function(el) {
               if (el._sc_clicked || seenEls.indexOf(el) !== -1) return;
-              // Walk up to 6 ancestors looking for a "NO IOS" / "NO-IOS"
-              // marker. The label can appear on the button itself, its row
-              // container, or an explanatory chip nearby.
               var anc = el;
               var noIOS = false;
               for (var i = 0; i < 6 && anc; i++) {
@@ -851,18 +963,22 @@ struct StreamWebView: UIViewRepresentable {
                 anc = anc.parentElement;
               }
               seenEls.push(el);
-              if (noIOS) { el._sc_clicked = 1; return; }  // skip
+              if (noIOS) { el._sc_clicked = 1; return; }
               candidates.push(el);
             });
           } catch(e){}
         });
         candidates.forEach(function(el, i) {
           setTimeout(function() {
-            if (!el._sc_clicked) { el._sc_clicked = 1; try { el.click(); } catch(e){} }
+            if (!el._sc_clicked) {
+              el._sc_clicked = 1;
+              _currentMirrorEl = el;
+              _mirrorClickAt = Date.now();
+              try { el.click(); } catch(e){}
+            }
           }, i * 2500);
         });
 
-        // Remove ad overlays — fixed/absolute elements with z-index > 999 that aren't video
         try {
           document.querySelectorAll('*').forEach(function(el) {
             var s = window.getComputedStyle(el);
@@ -875,25 +991,21 @@ struct StreamWebView: UIViewRepresentable {
         } catch(e){}
       }
 
-      // Watch DOM mutations for dynamically injected players/iframes/scripts
       new MutationObserver(function(mutations) {
         scan();
-        // Also watch for iframes being added — if the iframe src itself is a stream URL, grab it
         mutations.forEach(function(mut) {
           mut.addedNodes.forEach(function(node) {
             if (node.tagName === 'IFRAME') {
               var src = node.src || node.getAttribute('src') || '';
-              report(src);  // catches rare cases where iframe src IS the stream
+              if (src) report(src, 'iframeSrc', node);
             }
             if (node.tagName === 'SCRIPT' && !node.src) {
-              // New inline script added — scan after it executes
               setTimeout(scanScripts, 200);
             }
           });
         });
       }).observe(document.documentElement || document, {childList: true, subtree: true, attributes: true});
 
-      // Extended timeout ladder — sports sites often load in 10-15 s bursts
       [100, 500, 1000, 2000, 3000, 5000, 8000, 12000, 18000].forEach(function(t) {
         setTimeout(scan, t);
       });
@@ -931,54 +1043,163 @@ struct StreamWebView: UIViewRepresentable {
 
   // MARK: Coordinator
 
+  /// v2.31 Coordinator. Replaces the v2.30 "first URL that passes
+  /// AVURLAsset.isPlayable wins" decision with a structured payload +
+  /// CandidatePool flow:
+  /// 1. JS-shim posts JSON for every observed URL with DOM context.
+  /// 2. Coordinator decodes, builds a `Candidate`, and ingests into
+  ///    its `CandidatePool` (lazily initialized on first message).
+  /// 3. Pool runs L1 fingerprint + L2 manifest fetch + L5 segment
+  ///    probe in parallel for each non-rejected candidate, accumulates
+  ///    for up to 6 s, then commits the highest-scored playable one.
+  /// 4. When the pool fires its commit callback, we harvest WebView
+  ///    cookies and hand the URL to `onStreamURLFound`.
+  ///
+  /// BrowseView (which passes targetGame=nil and browseMode=true) uses
+  /// a short accumulation window so playback feels snappy; PlayerView's
+  /// auto-resolve uses the full 6 s window for better selection.
   final class Coordinator: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     let onStreamURLFound: ((URL, [HTTPCookie]) -> Void)?
     let browseMode: Bool
+    let targetGame: Game?
+    let sourceID: String?
+    let baseURL: URL
+
     private var found = false
-    /// Stream URLs already observed this session, so duplicate `report()`
-    /// calls from multiple intercept paths (XHR, fetch, navigation policy,
-    /// MIME sniff, DOM scrape) don't queue redundant playability probes.
-    private var seenURLs = Set<String>()
-    /// First observed URL — used as a last-resort fallback if every probe
-    /// rejects playability (better to attempt playback than to leave the
-    /// user staring at the loading spinner for 22 s).
-    private var firstObservedURL: URL?
+    private var pool: CandidatePool?
     weak var webView: WKWebView?
 
-    init(onStreamURLFound: ((URL, [HTTPCookie]) -> Void)?, browseMode: Bool) {
+    init(onStreamURLFound: ((URL, [HTTPCookie]) -> Void)?,
+         browseMode: Bool,
+         targetGame: Game?,
+         sourceID: String?,
+         baseURL: URL) {
       self.onStreamURLFound = onStreamURLFound
       self.browseMode = browseMode
+      self.targetGame = targetGame
+      self.sourceID = sourceID
+      self.baseURL = baseURL
     }
 
-    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-      guard let urlString = message.body as? String,
-            let url = URL(string: urlString) else { return }
-      report(url)
+    // MARK: - Pool lifecycle
+
+    @MainActor
+    private func ensurePool() -> CandidatePool {
+      if let pool { return pool }
+      // Build the headers that AVPlayer will use, so probe pass == play pass.
+      let scheme = baseURL.scheme ?? "https"
+      let host = baseURL.host ?? ""
+      let referer = "\(scheme)://\(host)"
+      let headers: [String: String] = [
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+        "Referer": referer,
+        "Origin": referer,
+      ]
+      // Known-good hosts: union of the source's baseURL host (implicit)
+      // and any stream-host that has actually played for this source
+      // before (recorded by SourceLearningStore.recordPlaybackHost on
+      // each successful first-frame). Self-populating — no hardcoded
+      // CDN lists.
+      let knownGoodHosts: Set<String> = {
+        var s: Set<String> = []
+        if let bh = baseURL.host?.lowercased() { s.insert(bh) }
+        if let sid = sourceID {
+          s.formUnion(SourceLearningStore.shared.playbackHosts(for: sid))
+        }
+        return s
+      }()
+      let window: TimeInterval = browseMode ? 1.5 : 6.0
+      let hardDeadline: TimeInterval = browseMode ? 4.0 : 10.0
+      let p = CandidatePool(
+        targetGame: targetGame,
+        sourceID: sourceID ?? "",
+        probeHeaders: headers,
+        knownGoodHosts: knownGoodHosts,
+        accumulationWindow: window,
+        hardDeadline: hardDeadline
+      ) { [weak self] candidate in
+        guard let self else { return }
+        guard let cand = candidate else {
+          // No playable candidate within budget. Don't fire callback —
+          // the outer PlayerView per-source timer will advance to the
+          // next attempt naturally.
+          return
+        }
+        self.commitURL(cand.url)
+      }
+      self.pool = p
+      return p
     }
 
-    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
-                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-      // In browse mode, load popup URLs in the same WebView instead of suppressing.
+    // MARK: - WKScriptMessageHandler
+
+    func userContentController(_ controller: WKUserContentController,
+                               didReceive message: WKScriptMessage) {
+      guard !found else { return }
+      // Two payload formats supported for forward-compat: structured
+      // JSON (v2.31) and bare URL string (legacy — should not occur
+      // since we shipped the new shim, but defensively handled).
+      var url: URL?
+      var context = DOMContext.unknown
+      if let s = message.body as? String {
+        if let data = s.data(using: .utf8),
+           let payload = try? JSONDecoder().decode(ShimPayload.self, from: data) {
+          url = URL(string: payload.url)
+          context = DOMContext(
+            kind: DOMContext.Kind(rawValue: payload.kind) ?? .unknown,
+            originHost: payload.originHost,
+            parentText: payload.parentText ?? "",
+            iframeSrc: payload.iframeSrc,
+            hasLiveBadge: payload.hasLiveBadge ?? false,
+            viewerCount: payload.viewerCount
+          )
+        } else {
+          url = URL(string: s)
+        }
+      }
+      guard let u = url else { return }
+      Task { @MainActor in
+        guard !self.found else { return }
+        _ = self.ensurePool().ingest(url: u, context: context)
+      }
+    }
+
+    /// Minimal shape mirroring what the JS-shim posts. Optional fields
+    /// degrade gracefully when older shims (or other call sites) post
+    /// less data.
+    private struct ShimPayload: Decodable {
+      let url: String
+      let kind: String
+      let originHost: String?
+      let parentText: String?
+      let iframeSrc: String?
+      let hasLiveBadge: Bool?
+      let viewerCount: Int?
+    }
+
+    // MARK: - WKNavigationDelegate / WKUIDelegate
+
+    func webView(_ webView: WKWebView,
+                 createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction,
+                 windowFeatures: WKWindowFeatures) -> WKWebView? {
       if browseMode, let url = navigationAction.request.url {
         webView.load(URLRequest(url: url))
       }
       return nil
     }
 
-    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
       if let url = action.request.url {
-        // If the page is navigating directly TO a stream URL (e.g. a redirect chain
-        // that ends at an .m3u8), intercept it before the WebView tries to load it.
         let u = url.absoluteString.lowercased()
         if u.contains(".m3u8") || u.contains(".mpd") {
-          if !found { report(url) }
+          ingestFromNavigation(url, kind: .navigation)
           decisionHandler(.cancel)
           return
         }
       }
-      // In browse mode allow everything so users can navigate naturally through the site.
-      // In standard mode, block cross-domain link taps (these are almost always ad redirects).
       if !browseMode,
          action.navigationType == .linkActivated,
          let host = action.request.url?.host,
@@ -988,108 +1209,50 @@ struct StreamWebView: UIViewRepresentable {
       decisionHandler(.allow)
     }
 
-    // Intercept responses whose MIME type identifies them as HLS/DASH manifests,
-    // even when the URL itself has no recognisable extension (e.g. /manifest or /stream).
-    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
       let mime = navigationResponse.response.mimeType?.lowercased() ?? ""
       let streamMimes = ["application/x-mpegurl", "application/vnd.apple.mpegurl",
-                         "application/dash+xml", "video/mp2t", "application/octet-stream"]
-      // Only treat octet-stream as a stream if the URL also looks like one
-      let isStreamMime = streamMimes.dropLast().contains(where: { mime.contains($0) })
+                         "application/dash+xml", "video/mp2t"]
+      let isStreamMime = streamMimes.contains(where: { mime.contains($0) })
       let url = navigationResponse.response.url
       let urlStr = url?.absoluteString.lowercased() ?? ""
       let isStreamURL = urlStr.contains(".m3u8") || urlStr.contains(".mpd")
       if (isStreamMime || (mime.contains("octet-stream") && isStreamURL)), let url {
         decisionHandler(.cancel)
-        if !found { report(url) }
+        ingestFromNavigation(url, kind: .mimeSniff)
         return
       }
       decisionHandler(.allow)
     }
 
-    private func report(_ url: URL) {
-      guard !found else { return }
-      let key = url.absoluteString
-      guard seenURLs.insert(key).inserted else { return }
-      if firstObservedURL == nil {
-        firstObservedURL = url
-        // Fallback safety net: 10s after the first URL is observed, commit
-        // it even if no probe has passed. AVURLAsset.isPlayable can return
-        // false for transient reasons (CORS preflight, slow response, etc.)
-        // — better to attempt playback than to leave the user on the
-        // spinner waiting for the 22s outer timeout to reveal the raw page.
-        Task { [weak self] in
-          try? await Task.sleep(nanoseconds: 10_000_000_000)
-          await MainActor.run { self?.commitFallbackIfNeeded() }
-        }
-      }
-      // Probe playability before committing. Aggregator pages (bintv.net via
-      // sources.bintvs.fun) expose multiple mirrors per match; AVPlayer can
-      // only play a subset on iOS. Without this probe we'd hand AVPlayer the
-      // first observed `.m3u8`, which is a coin flip when several arrive in
-      // rapid succession. Probes run concurrently — first to pass wins.
-      Task { [weak self] in
-        let playable = await Self.probePlayability(url)
-        await MainActor.run {
-          guard let self, !self.found else { return }
-          // Reject only if explicitly unplayable. AVURLAsset.load(.isPlayable)
-          // also returns false for transient network errors mid-probe — in
-          // those cases we'd rather attempt playback than leave the user
-          // stranded, so the 22s timeout's fallback URL handles that case.
-          guard playable else { return }
-          self.commitURL(url)
-        }
+    /// Funnel for URLs surfaced by native navigation hooks (not the JS
+    /// shim). These have no DOM context — we mark the kind and let L1/L2
+    /// scoring do the rest.
+    private func ingestFromNavigation(_ url: URL, kind: DOMContext.Kind) {
+      let host = baseURL.host
+      let ctx = DOMContext(
+        kind: kind, originHost: host, parentText: "",
+        iframeSrc: nil, hasLiveBadge: false, viewerCount: nil
+      )
+      Task { @MainActor in
+        guard !self.found else { return }
+        _ = self.ensurePool().ingest(url: url, context: ctx)
       }
     }
 
-    /// Called from `PlayerView.task` after the 22s no-stream timeout if no
-    /// probe-passing URL was committed. Hands AVPlayer the first observed
-    /// `.m3u8` even if its playability probe failed/timed out — strictly
-    /// better than leaving the user on the spinner since AVPlayer may
-    /// succeed where the probe didn't (e.g. transient probe network error).
-    func commitFallbackIfNeeded() {
-      guard !found, let url = firstObservedURL else { return }
-      commitURL(url)
-    }
+    // MARK: - Commit
 
     private func commitURL(_ url: URL) {
+      guard !found else { return }
       found = true
-      // Harvest cookies from the WebView session so AVPlayer can authenticate
       if let store = webView?.configuration.websiteDataStore.httpCookieStore {
         store.getAllCookies { cookies in
           DispatchQueue.main.async { self.onStreamURLFound?(url, cookies) }
         }
       } else {
         DispatchQueue.main.async { self.onStreamURLFound?(url, []) }
-      }
-    }
-
-    /// Quick playability probe via `AVURLAsset.load(.isPlayable)`. Capped at
-    /// 4 s so a non-responsive mirror doesn't hold up trying the next one.
-    /// Skips probing for non-HLS/DASH URLs (the matcher's path-pattern
-    /// branch can yield URLs that aren't actually manifests).
-    private static func probePlayability(_ url: URL) async -> Bool {
-      let lower = url.absoluteString.lowercased()
-      // Only probe what AVURLAsset can actually evaluate. For pattern-only
-      // matches (e.g. `/manifest`) without an explicit extension, accept
-      // optimistically — probe would likely fail on a redirect anyway.
-      let isManifest = lower.contains(".m3u8") || lower.contains(".mpd")
-      guard isManifest else { return true }
-      var headers: [String: String] = [:]
-      headers["User-Agent"] = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-      let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
-      return await withTaskGroup(of: Bool.self) { group in
-        group.addTask {
-          (try? await asset.load(.isPlayable)) ?? false
-        }
-        group.addTask {
-          try? await Task.sleep(nanoseconds: 4_000_000_000)
-          return false
-        }
-        let result = await group.next() ?? false
-        group.cancelAll()
-        return result
       }
     }
   }

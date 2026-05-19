@@ -52,7 +52,8 @@ struct SourceStatsView: View {
         successRate: s?.successRate,
         lastSuccessAt: s?.lastSuccessAt,
         learnedTemplates: l.templates.count,
-        learnedSlugs: l.teamSlugMap.count
+        learnedSlugs: l.teamSlugMap.count,
+        learnedHosts: l.playbackHosts.count
       )
     }
     // Sort: highest success rate first, then by attempts desc.
@@ -74,6 +75,7 @@ struct SourceStatsView: View {
     let lastSuccessAt: Date?
     let learnedTemplates: Int
     let learnedSlugs: Int
+    let learnedHosts: Int
   }
 }
 
@@ -107,7 +109,11 @@ private struct SourceStatsRow: View {
           statChip(label: "Team slugs", value: "\(row.learnedSlugs)",
                    color: .teal)
         }
-        if row.learnedTemplates == 0 && row.learnedSlugs == 0 {
+        if row.learnedHosts > 0 {
+          statChip(label: "Play hosts", value: "\(row.learnedHosts)",
+                   color: .teal)
+        }
+        if row.learnedTemplates == 0 && row.learnedSlugs == 0 && row.learnedHosts == 0 {
           Text("No learning yet")
             .font(.caption)
             .foregroundStyle(.secondary)
