@@ -342,7 +342,7 @@ struct PlayerView: View {
     case "clicked": return "hand.tap.fill"
     case "category_click": return "folder.fill"
     case "click_failed": return "xmark.octagon.fill"
-    case "no_match": return "magnifyingglass"
+    case "scan", "no_match": return "magnifyingglass"
     default: return "circle"
     }
   }
@@ -350,7 +350,7 @@ struct PlayerView: View {
     switch kind {
     case "clicked", "category_click": return .green
     case "click_failed": return .red
-    case "no_match": return .yellow
+    case "scan", "no_match": return .yellow
     default: return .white.opacity(0.6)
     }
   }
@@ -359,6 +359,7 @@ struct PlayerView: View {
     case "clicked": return "Walk clicked: \(event.info.replacingOccurrences(of: "card: ", with: ""))"
     case "category_click": return "Walk → category: \(event.info)"
     case "click_failed": return "Walk click error: \(event.info)"
+    case "scan": return "Walk: \(event.info)"
     case "no_match": return "Walk: no matching card yet (\(event.info))"
     default: return "Walk: \(event.kind) — \(event.info)"
     }
@@ -1328,7 +1329,11 @@ struct StreamWebView: UIViewRepresentable {
         return out;
       }
 
+      // v2.43: side-channel stats so tryAdvance can post a scan event.
+      var _scanStats = { candidates: 0, matched: 0, sample: '' };
+
       function selectTargetGameElement() {
+        _scanStats = { candidates: 0, matched: 0, sample: '' };
         if (!window.__sc_target) return null;
         var home = (window.__sc_target.home || '').toLowerCase();
         var away = (window.__sc_target.away || '').toLowerCase();
@@ -1354,6 +1359,7 @@ struct StreamWebView: UIViewRepresentable {
             '[class*="match" i],[class*="game" i],[class*="card" i],[class*="event" i]'
           );
         } catch(e) { return null; }
+        _scanStats.candidates = candidates.length;
         var smallest = null, smallestSize = Infinity;
         var cap = Math.min(candidates.length, 3000);
         for (var i = 0; i < cap; i++) {
@@ -1361,9 +1367,12 @@ struct StreamWebView: UIViewRepresentable {
           var blob = readableTextFromElement(el);
           if (!blob || blob.length < 6 || blob.length > 1200) continue;
           if (!bothPresent(blob)) continue;
+          _scanStats.matched++;
           if (blob.length < smallestSize) {
             smallestSize = blob.length;
             smallest = el;
+            // capture a short sample of the smallest matching blob
+            _scanStats.sample = blob.slice(0, 80);
           }
         }
         // v2.41: clicking the smallest text-matched element often fails
@@ -1453,15 +1462,23 @@ struct StreamWebView: UIViewRepresentable {
             return;
           }
         }
-        // Throttled "no match" event — once every 3s while DOM looks
-        // settled — gives the user proof we're looking and not finding.
-        var now = Date.now();
-        if (now - _lastNoMatchPosted > 3000) {
-          _lastNoMatchPosted = now;
-          var domSize = 0;
-          try { domSize = document.querySelectorAll('*').length; } catch(e){}
-          postWalkEvent('no_match', 'dom=' + domSize);
+        // v2.43: per-scan diagnostic. Posted on every tryAdvance that
+        // doesn't click anything, with the real counts: how many
+        // candidate elements were queried, how many passed
+        // bothPresent, what the smallest matched blob looked like,
+        // and the main-frame doc element count. Replaces the
+        // throttled no_match so the user sees REAL-TIME progress
+        // instead of a single stale snapshot from the earliest scan.
+        var domSize = 0;
+        try { domSize = document.querySelectorAll('*').length; } catch(e){}
+        var info = 'dom=' + domSize
+                 + ' cands=' + _scanStats.candidates
+                 + ' matched=' + _scanStats.matched
+                 + ' main=' + (window.top === window ? '1' : '0');
+        if (_scanStats.matched > 0 && _scanStats.sample) {
+          info += ' sample="' + _scanStats.sample + '"';
         }
+        postWalkEvent('scan', info);
       }
 
       function scan() {
