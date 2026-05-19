@@ -123,13 +123,21 @@ struct PlayerView: View {
     let health = SourceHealth.shared
     let preference = SourcePreference.shared
 
+    // v2.33 fix: respect the user's source toggles at tap time. The
+    // game's `streamURLs` may carry URLs from sources that were
+    // enabled at listing-scrape time but have since been toggled off.
+    // Filter both the pre-matched list and the `preResolvedIDs` set
+    // by the CURRENT enabled set so disabled sources are never tried.
+    let enabledIDs = Set(registry.enabledSources.map(\.id))
+
     var built: [SourceAttempt] = []
     for c in game.streamURLs {
+      if !enabledIDs.contains(c.sourceID) { continue }
       if failureStore.isFailedRecently(gameKey: gameKey, sourceID: c.sourceID) { continue }
       if health.isInParkingCooldown(c.sourceID) { continue }
       built.append(SourceAttempt(sourceID: c.sourceID, pageURL: c.pageURL))
     }
-    let preResolvedIDs = Set(game.streamURLs.map(\.sourceID))
+    let preResolvedIDs = Set(built.map(\.sourceID))
     let fallbackSources = registry.enabledSources
       .filter { !preResolvedIDs.contains($0.id) }
       .filter { !failureStore.isFailedRecently(gameKey: gameKey, sourceID: $0.id) }
