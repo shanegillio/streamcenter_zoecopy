@@ -71,6 +71,10 @@ struct PlayerView: View {
   /// detected-cards UI can dispatch a `click()` via evaluateJavaScript
   /// when the user taps an alternative game.
   @StateObject private var webBridge = StreamWebViewBridge()
+  /// v2.46: per-tap session id in the traversal log. Updated when the
+  /// user advances to a different attempt. Used by all callbacks to
+  /// route their events into the right TraversalSession.
+  @State private var traversalSessionID: UUID? = nil
 
   var body: some View {
     ZStack {
@@ -97,21 +101,38 @@ struct PlayerView: View {
                       cookies: cookies,
                       referer: current.pageURL
                     )
+                    if let sid = traversalSessionID {
+                      TraversalLog.shared.recordStream(sid, url: streamURL)
+                    }
                   }
                 },
                 onNavigation: { navURL in
                   Task { @MainActor in
                     appendNavigation(navURL)
+                    if let sid = traversalSessionID {
+                      TraversalLog.shared.recordNavigation(sid, url: navURL)
+                    }
                   }
                 },
                 onWalkEvent: { event in
                   Task { @MainActor in
                     handleWalkEvent(event)
+                    if let sid = traversalSessionID {
+                      TraversalLog.shared.recordEvent(
+                        sid, kind: event.kind, info: event.info
+                      )
+                    }
                   }
                 },
-                onLoadFailed: { _, message in
+                onLoadFailed: { url, message in
                   Task { @MainActor in
                     loadFailure = message
+                    if let sid = traversalSessionID {
+                      TraversalLog.shared.recordEvent(
+                        sid, kind: "load_failure",
+                        info: "\(url.absoluteString): \(message)"
+                      )
+                    }
                   }
                 },
                 onPageChanged: { _ in
@@ -169,8 +190,33 @@ struct PlayerView: View {
         SourceHealth.shared.recordAttempt(
           sourceID: attempts[currentAttemptIdx].sourceID
         )
+        startTraversalSession()
       }
     }
+    .onDisappear {
+      if let sid = traversalSessionID {
+        TraversalLog.shared.endSession(sid)
+        traversalSessionID = nil
+      }
+    }
+  }
+
+  /// v2.46: open a TraversalSession for the current attempt. Sessions
+  /// hold the full event timeline for the tap — used by
+  /// Settings → Traversal Log to evaluate how reliably we navigate.
+  private func startTraversalSession() {
+    guard currentAttemptIdx < attempts.count else { return }
+    let current = attempts[currentAttemptIdx]
+    let sourceName = self.sourceName(for: current.sourceID)
+    let sid = TraversalLog.shared.startSession(
+      sourceID: current.sourceID,
+      sourceName: sourceName,
+      sourceURL: current.pageURL,
+      gameHome: game.homeTeam,
+      gameAway: game.awayTeam,
+      gameLeague: game.league.rawValue
+    )
+    traversalSessionID = sid
   }
 
   /// Builds the sequential attempt list. Pre-matched per-source URLs
@@ -484,12 +530,26 @@ struct PlayerView: View {
     if currentAttemptIdx < attempts.count {
       recordSuccess(attempt: attempts[currentAttemptIdx])
     }
+    // v2.46: log that the user explicitly chose to play this captured
+    // URL — gives us a hint that AVPlayer was at least attempted.
+    if let sid = traversalSessionID {
+      TraversalLog.shared.recordEvent(
+        sid, kind: "user_play",
+        info: cand.url.absoluteString
+      )
+    }
   }
 
   /// User-driven advance to next attempt. Resets per-attempt state.
   private func advanceAttempt() {
     guard currentAttemptIdx + 1 < attempts.count else { return }
     SourceHealth.shared.recordAttempt(sourceID: attempts[currentAttemptIdx].sourceID)
+    // v2.46: close out the prior attempt's traversal session before
+    // starting a new one for the next source.
+    if let sid = traversalSessionID {
+      TraversalLog.shared.endSession(sid)
+      traversalSessionID = nil
+    }
     capturedStreams = []
     navigationHistory = []
     lastWalkEvent = nil
@@ -497,6 +557,7 @@ struct PlayerView: View {
     detectedCards = []
     authWallReason = nil
     currentAttemptIdx += 1
+    startTraversalSession()
   }
 
   // v2.34: shown when the user has no sources toggled on AND the game

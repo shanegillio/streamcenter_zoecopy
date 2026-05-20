@@ -38,6 +38,14 @@ struct SettingsView: View {
           }
           .padding(.vertical, 2)
         }
+        NavigationLink(destination: TraversalLogView()) {
+          HStack(spacing: 12) {
+            settingsIcon(systemName: "list.bullet.rectangle.fill", color: .indigo)
+            Text("Traversal Log")
+              .foregroundStyle(Color(.label))
+          }
+          .padding(.vertical, 2)
+        }
       }
 
       // MARK: Favorites

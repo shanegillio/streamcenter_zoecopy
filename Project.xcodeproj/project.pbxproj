@@ -42,6 +42,8 @@
 		230AAAA000000000F000000B /* TheSportsDBProducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 230AAAA000000000F000000C /* TheSportsDBProducer.swift */; };
 		230AAAA000000000F000000D /* SourceStatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 230AAAA000000000F000000E /* SourceStatsView.swift */; };
 		232AAAA000000000F2000001 /* SharedViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 232AAAA000000000F2000002 /* SharedViews.swift */; };
+		246A0A0000000000F0000001 /* TraversalLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 246A0A0000000000F0000002 /* TraversalLog.swift */; };
+		246A0A0000000000F0000003 /* TraversalLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 246A0A0000000000F0000004 /* TraversalLogView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -81,6 +83,8 @@
 		230AAAA000000000F000000C /* TheSportsDBProducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TheSportsDBProducer.swift; sourceTree = "<group>"; };
 		230AAAA000000000F000000E /* SourceStatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceStatsView.swift; sourceTree = "<group>"; };
 		232AAAA000000000F2000002 /* SharedViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedViews.swift; sourceTree = "<group>"; };
+		246A0A0000000000F0000002 /* TraversalLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraversalLog.swift; sourceTree = "<group>"; };
+		246A0A0000000000F0000004 /* TraversalLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraversalLogView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -122,6 +126,8 @@
 				230AAAA000000000F000000C /* TheSportsDBProducer.swift */,
 				230AAAA000000000F000000E /* SourceStatsView.swift */,
 				232AAAA000000000F2000002 /* SharedViews.swift */,
+				246A0A0000000000F0000002 /* TraversalLog.swift */,
+				246A0A0000000000F0000004 /* TraversalLogView.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -241,6 +247,8 @@
 				230AAAA000000000F000000B /* TheSportsDBProducer.swift in Sources */,
 				230AAAA000000000F000000D /* SourceStatsView.swift in Sources */,
 				232AAAA000000000F2000001 /* SharedViews.swift in Sources */,
+				246A0A0000000000F0000001 /* TraversalLog.swift in Sources */,
+				246A0A0000000000F0000003 /* TraversalLogView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
