@@ -1324,16 +1324,32 @@ struct StreamWebView: UIViewRepresentable {
           var dm = el.getAttribute('data-match');
           if (dm) parts.push(dm);
         }
+        // v2.44: many sites render score cards with team LOGOS only —
+        // full team names live in <img alt="…">. Without this we'd
+        // miss "Cleveland Cavaliers" on streameast (visible text:
+        // "Cavaliers 104 110 Knicks"). Mirrors what WebViewScraper's
+        // listing-time readableTextFor does already.
+        if (el.querySelectorAll) {
+          try {
+            var imgs = el.querySelectorAll('img[alt]');
+            for (var ii = 0; ii < imgs.length && ii < 4; ii++) {
+              var altTxt = imgs[ii].getAttribute('alt');
+              if (altTxt) parts.push(altTxt);
+            }
+          } catch(e){}
+        }
         var out = parts.join(' | ');
         if (out.length > 600) out = out.slice(0, 600);
         return out;
       }
 
       // v2.43: side-channel stats so tryAdvance can post a scan event.
-      var _scanStats = { candidates: 0, matched: 0, sample: '' };
+      // v2.44: rejSample is the longest blob the matcher rejected — shown
+      // to the user when matched=0 so we can see what we're scanning.
+      var _scanStats = { candidates: 0, matched: 0, sample: '', rejSample: '' };
 
       function selectTargetGameElement() {
-        _scanStats = { candidates: 0, matched: 0, sample: '' };
+        _scanStats = { candidates: 0, matched: 0, sample: '', rejSample: '' };
         if (!window.__sc_target) return null;
         var home = (window.__sc_target.home || '').toLowerCase();
         var away = (window.__sc_target.away || '').toLowerCase();
@@ -1361,12 +1377,22 @@ struct StreamWebView: UIViewRepresentable {
         } catch(e) { return null; }
         _scanStats.candidates = candidates.length;
         var smallest = null, smallestSize = Infinity;
+        var longestRej = 0;
         var cap = Math.min(candidates.length, 3000);
         for (var i = 0; i < cap; i++) {
           var el = candidates[i];
           var blob = readableTextFromElement(el);
           if (!blob || blob.length < 6 || blob.length > 1200) continue;
-          if (!bothPresent(blob)) continue;
+          if (!bothPresent(blob)) {
+            // v2.44: track the longest rejected blob so the user can see
+            // what content the matcher is rejecting. Diagnostic only —
+            // does not affect matching logic.
+            if (blob.length > longestRej) {
+              longestRej = blob.length;
+              _scanStats.rejSample = blob.slice(0, 80);
+            }
+            continue;
+          }
           _scanStats.matched++;
           if (blob.length < smallestSize) {
             smallestSize = blob.length;
@@ -1410,14 +1436,31 @@ struct StreamWebView: UIViewRepresentable {
       function findCategoryLink(leagueRawValue) {
         var keys = _leagueHints[leagueRawValue] || [];
         if (!keys.length) return null;
-        var anchors = document.querySelectorAll('a[href]');
-        var cap = Math.min(anchors.length, 400);
+        // v2.44: many category landing pages (crackstreams' "NBA Streams"
+        // card, etc.) wrap their category in a styled <div onclick=> or
+        // <button>, not a plain <a>. Broaden to all clickable shapes.
+        var els;
+        try {
+          els = document.querySelectorAll(
+            'a[href], button, [onclick], [data-href], [role="button"], ' +
+            '[class*="card" i], [class*="link" i]'
+          );
+        } catch(e) { return null; }
+        var cap = Math.min(els.length, 600);
         for (var i = 0; i < cap; i++) {
-          var a = anchors[i];
-          var blob = ((a.innerText || a.textContent || '') + ' ' + a.href).toLowerCase();
+          var el = els[i];
+          var href = '';
+          try { href = (el.getAttribute && (el.getAttribute('href') || el.getAttribute('data-href'))) || ''; } catch(e){}
+          var txt = (el.innerText || el.textContent || '');
+          var blob = (txt + ' ' + href).toLowerCase();
           if (blob.length < 3 || blob.length > 200) continue;
           for (var k = 0; k < keys.length; k++) {
-            if (blob.indexOf(keys[k]) !== -1) return a;
+            if (blob.indexOf(keys[k]) !== -1) {
+              // Walk up to the clickable ancestor (same fix as v2.41
+              // for selectTargetGameElement) — the matched element may
+              // be an inner text node whose parent has the onclick.
+              return findClickableAncestor(el);
+            }
           }
         }
         return null;
@@ -1477,6 +1520,13 @@ struct StreamWebView: UIViewRepresentable {
                  + ' main=' + (window.top === window ? '1' : '0');
         if (_scanStats.matched > 0 && _scanStats.sample) {
           info += ' sample="' + _scanStats.sample + '"';
+        }
+        // v2.44: when no candidate matched both teams, show the longest
+        // rejected blob — most likely to be a real game card vs UI
+        // chrome — so we can see exactly what content the matcher is
+        // looking at and why it isn't matching.
+        if (_scanStats.matched === 0 && _scanStats.rejSample) {
+          info += ' rej="' + _scanStats.rejSample + '"';
         }
         postWalkEvent('scan', info);
       }
