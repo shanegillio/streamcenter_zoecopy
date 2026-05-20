@@ -32,7 +32,17 @@ struct TraversalSession: Codable, Identifiable {
   enum PlaybackOutcome: String, Codable { case worked, failed, unsure }
 
   // Derived
+  /// Raw hop count from didCommit. Includes trivial trailing-slash
+  /// changes and TLD redirects — over-reports navigation. Kept for
+  /// backwards compatibility but UI should prefer `meaningfulHopCount`.
   var maxHopReached: Int { navigationHops.count }
+  /// v2.47: collapses trivial redirects (trailing-slash variations,
+  /// TLD-only changes that keep the same path) into a single hop.
+  /// Counts distinct paths+queries visited. Matches the user's
+  /// perception of "different page." This is what the UI displays.
+  var meaningfulHopCount: Int {
+    URLNormalization.meaningfulHopCount(navigationHops)
+  }
   var streamCaptured: Bool { !capturedStreams.isEmpty }
   var durationMs: Int? {
     guard let endedAt else { return nil }
@@ -41,6 +51,35 @@ struct TraversalSession: Codable, Identifiable {
 
   var gameTitle: String {
     gameAway.isEmpty ? gameHome : "\(gameAway) vs \(gameHome)"
+  }
+}
+
+/// v2.47: shared URL-normalization helpers. A "meaningful hop" is when
+/// the path+query of the WebView's URL changes — not just a TLD
+/// redirect or trailing-slash variant that keeps the same content.
+enum URLNormalization {
+  /// Normalize a URL string to "path?query" (with trailing slash on
+  /// non-root paths stripped). Drops the host so TLD-only redirects
+  /// don't get counted as a new page. Used for hop-counting.
+  static func normalize(_ urlString: String) -> String {
+    guard let u = URL(string: urlString) else { return urlString }
+    var path = u.path
+    if path.isEmpty { path = "/" }
+    if path.hasSuffix("/") && path.count > 1 {
+      path = String(path.dropLast())
+    }
+    if let q = u.query, !q.isEmpty {
+      return "\(path)?\(q)"
+    }
+    return path
+  }
+
+  static func meaningfulHopCount(_ urls: [String]) -> Int {
+    var seen: Set<String> = []
+    for s in urls {
+      seen.insert(normalize(s))
+    }
+    return seen.count
   }
 }
 
@@ -161,11 +200,13 @@ final class TraversalLog: ObservableObject {
   }
 
   /// Computes stats over sessions in the last `windowDays` days.
+  /// v2.47: uses `meaningfulHopCount` so TLD-only redirects don't
+  /// over-inflate "reached Hop 2+" counts.
   func aggregateStats(windowDays: Int = 7) -> AggregateStats {
     let cutoff = Date().addingTimeInterval(-Double(windowDays) * 86400)
     let recent = sessions.filter { $0.startedAt >= cutoff }
     let total = recent.count
-    let hop2 = recent.filter { $0.maxHopReached >= 2 }.count
+    let hop2 = recent.filter { $0.meaningfulHopCount >= 2 }.count
     let captured = recent.filter { $0.streamCaptured }.count
     let worked = recent.filter { $0.playbackOutcome == .worked }.count
 
@@ -173,7 +214,7 @@ final class TraversalLog: ObservableObject {
     for s in recent {
       var entry = bySource[s.sourceID] ?? (s.sourceName, 0, 0, 0, 0)
       entry.attempts += 1
-      if s.maxHopReached >= 2 { entry.hop2 += 1 }
+      if s.meaningfulHopCount >= 2 { entry.hop2 += 1 }
       if s.streamCaptured { entry.captured += 1 }
       if s.playbackOutcome == .worked { entry.worked += 1 }
       bySource[s.sourceID] = entry

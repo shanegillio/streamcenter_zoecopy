@@ -126,7 +126,9 @@ struct TraversalLogView: View {
           .foregroundStyle(.secondary)
       }
       HStack(spacing: 6) {
-        hopChip(session.maxHopReached)
+        // v2.47: meaningful hop count (collapses TLD/trailing-slash
+        // redirects so the chip matches user perception of "different page").
+        hopChip(session.meaningfulHopCount)
         streamChip(session)
         outcomeChip(session)
       }
@@ -198,8 +200,9 @@ struct TraversalSessionDetailView: View {
           }
         }
       }
-      // Navigation hops
-      Section("Navigation (\(session.maxHopReached) hop\(session.maxHopReached == 1 ? "" : "s"))") {
+      // Navigation hops — show both meaningful and raw so user sees
+      // whether trivial redirects inflated the raw count.
+      Section("Navigation (\(session.meaningfulHopCount) meaningful, \(session.maxHopReached) raw)") {
         ForEach(Array(session.navigationHops.enumerated()), id: \.offset) { idx, hop in
           HStack(alignment: .top, spacing: 8) {
             Text("\(idx + 1).")
@@ -327,12 +330,13 @@ struct TraversalSessionDetailView: View {
     case "auth_wall":       return "lock.fill"
     case "load_failure":    return "exclamationmark.triangle.fill"
     case "user_play":       return "play.circle.fill"
+    case "auto_play":       return "play.fill"
     default: return "circle"
     }
   }
   private func eventColor(_ kind: String) -> Color {
     switch kind {
-    case "clicked", "category_click", "navigation", "stream_url", "user_play": return .green
+    case "clicked", "category_click", "navigation", "stream_url", "user_play", "auto_play": return .green
     case "click_failed", "load_failure": return .red
     case "scan", "cat_scan": return .yellow
     case "iframe_drill": return .cyan

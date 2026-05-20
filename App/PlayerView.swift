@@ -104,6 +104,25 @@ struct PlayerView: View {
                     if let sid = traversalSessionID {
                       TraversalLog.shared.recordStream(sid, url: streamURL)
                     }
+                    // v2.47: auto-play return, gated on meaningful Hop ≥ 2.
+                    // We only auto-commit when navigation actually
+                    // advanced past the source's homepage — protects
+                    // against committing a stream URL that surfaced from
+                    // an ad iframe before the user-targeted nav happened.
+                    // Stays off for the initial Hop 1 captures; user can
+                    // still tap the strip pill manually in that case.
+                    if avPlayer == nil {
+                      let hops = URLNormalization.meaningfulHopCount(
+                        navigationHistory.map { $0.absoluteString }
+                      )
+                      if hops >= 2 {
+                        autoPlayCapturedStream(
+                          url: streamURL,
+                          cookies: cookies,
+                          referer: current.pageURL
+                        )
+                      }
+                    }
                   }
                 },
                 onNavigation: { navURL in
@@ -284,10 +303,14 @@ struct PlayerView: View {
         Text(sourceName)
           .font(.caption.weight(.semibold))
           .foregroundStyle(.white.opacity(0.85))
-        // v2.45: hop counter — makes multi-page traversal observable.
-        // Reads navigationHistory.count (each top-frame commit appends).
-        if navigationHistory.count >= 1 {
-          Text("Hop \(navigationHistory.count)")
+        // v2.45 + v2.47: meaningful hop counter — TLD/trailing-slash
+        // redirects collapse into a single hop so the chip matches
+        // user perception of "different page."
+        let hopCount = URLNormalization.meaningfulHopCount(
+          navigationHistory.map { $0.absoluteString }
+        )
+        if hopCount >= 1 {
+          Text("Hop \(hopCount)")
             .font(.system(size: 9, weight: .semibold).monospacedDigit())
             .foregroundStyle(.cyan.opacity(0.95))
             .padding(.horizontal, 6).padding(.vertical, 2)
@@ -536,6 +559,25 @@ struct PlayerView: View {
       TraversalLog.shared.recordEvent(
         sid, kind: "user_play",
         info: cand.url.absoluteString
+      )
+    }
+  }
+
+  /// v2.47: auto-commit a captured stream when meaningful navigation
+  /// has happened past the source's homepage. Mirrors playCandidate
+  /// but logs a different event kind so we can distinguish auto-play
+  /// from user-tap-play in the timeline.
+  private func autoPlayCapturedStream(url: URL, cookies: [HTTPCookie], referer: URL) {
+    let p = makePlayer(url: url, cookies: cookies, referer: referer)
+    avPlayer = p
+    p.play()
+    if currentAttemptIdx < attempts.count {
+      recordSuccess(attempt: attempts[currentAttemptIdx])
+    }
+    if let sid = traversalSessionID {
+      TraversalLog.shared.recordEvent(
+        sid, kind: "auto_play",
+        info: url.absoluteString
       )
     }
   }
