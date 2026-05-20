@@ -132,8 +132,41 @@ struct TraversalLogView: View {
         streamChip(session)
         outcomeChip(session)
       }
+      // v2.49: surface why a session stalled at Hop 1 right in the row.
+      // Without this, diagnosing 5-of-6-sources-stuck-at-homepage means
+      // opening every session detail. Shows the most recent walk verdict.
+      if let summary = walkSummary(for: session) {
+        Text(summary)
+          .font(.caption2.monospaced())
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .truncationMode(.tail)
+      }
     }
     .padding(.vertical, 2)
+  }
+
+  /// v2.49: compact one-line summary of the walk's most recent verdict.
+  /// Reads the session's events in reverse — prefers "clicked"/"category_click"
+  /// (proof we navigated) over "scan"/"cat_scan" (proof we tried).
+  private func walkSummary(for session: TraversalSession) -> String? {
+    for ev in session.events.reversed() {
+      switch ev.kind {
+      case "clicked":         return "walk: clicked \(shortInfo(ev.info))"
+      case "category_click":  return "walk: category → \(shortInfo(ev.info))"
+      case "click_failed":    return "walk: click failed (\(shortInfo(ev.info)))"
+      case "auth_wall":       return "auth wall (\(shortInfo(ev.info)))"
+      case "load_failure":    return "load failed (\(shortInfo(ev.info)))"
+      case "cat_scan":        return "cat \(shortInfo(ev.info))"
+      case "scan":            return "scan \(shortInfo(ev.info))"
+      default: continue
+      }
+    }
+    return nil
+  }
+
+  private func shortInfo(_ s: String) -> String {
+    s.count > 60 ? String(s.prefix(60)) + "…" : s
   }
 
   private func hopChip(_ hop: Int) -> some View {
@@ -331,6 +364,7 @@ struct TraversalSessionDetailView: View {
     case "load_failure":    return "exclamationmark.triangle.fill"
     case "user_play":       return "play.circle.fill"
     case "auto_play":       return "play.fill"
+    case "stream_probed":   return "checkmark.shield"
     default: return "circle"
     }
   }
@@ -341,6 +375,7 @@ struct TraversalSessionDetailView: View {
     case "scan", "cat_scan": return .yellow
     case "iframe_drill": return .cyan
     case "auth_wall": return .orange
+    case "stream_probed": return .blue
     default: return .secondary
     }
   }
