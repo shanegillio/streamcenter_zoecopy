@@ -238,6 +238,15 @@ struct PlayerView: View {
         Text(sourceName)
           .font(.caption.weight(.semibold))
           .foregroundStyle(.white.opacity(0.85))
+        // v2.45: hop counter — makes multi-page traversal observable.
+        // Reads navigationHistory.count (each top-frame commit appends).
+        if navigationHistory.count >= 1 {
+          Text("Hop \(navigationHistory.count)")
+            .font(.system(size: 9, weight: .semibold).monospacedDigit())
+            .foregroundStyle(.cyan.opacity(0.95))
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Color.cyan.opacity(0.18), in: Capsule())
+        }
         Spacer()
         if currentAttemptIdx + 1 < attempts.count {
           Button {
@@ -342,7 +351,7 @@ struct PlayerView: View {
     case "clicked": return "hand.tap.fill"
     case "category_click": return "folder.fill"
     case "click_failed": return "xmark.octagon.fill"
-    case "scan", "no_match": return "magnifyingglass"
+    case "scan", "no_match", "cat_scan": return "magnifyingglass"
     default: return "circle"
     }
   }
@@ -350,7 +359,7 @@ struct PlayerView: View {
     switch kind {
     case "clicked", "category_click": return .green
     case "click_failed": return .red
-    case "scan", "no_match": return .yellow
+    case "scan", "no_match", "cat_scan": return .yellow
     default: return .white.opacity(0.6)
     }
   }
@@ -360,6 +369,7 @@ struct PlayerView: View {
     case "category_click": return "Walk → category: \(event.info)"
     case "click_failed": return "Walk click error: \(event.info)"
     case "scan": return "Walk: \(event.info)"
+    case "cat_scan": return "CategoryLink: \(event.info)"
     case "no_match": return "Walk: no matching card yet (\(event.info))"
     default: return "Walk: \(event.kind) — \(event.info)"
     }
@@ -699,6 +709,30 @@ final class StreamWebViewBridge: ObservableObject {
         }
         return el;
       }
+      // v2.45: dispatch full pointer+mouse sequence — frameworks listening
+      // via addEventListener catch these where .click() alone misses.
+      function robustClick(el) {
+        if (!el) return;
+        try { el.click(); } catch(e) {}
+        try {
+          var rect = el.getBoundingClientRect();
+          var x = rect.left + Math.max(1, rect.width / 2);
+          var y = rect.top + Math.max(1, rect.height / 2);
+          var seq = ['pointerdown','mousedown','pointerup','mouseup','click'];
+          for (var i = 0; i < seq.length; i++) {
+            var type = seq[i];
+            try {
+              var ev;
+              if (type.indexOf('pointer') === 0 && typeof PointerEvent === 'function') {
+                ev = new PointerEvent(type, {bubbles:true, cancelable:true, clientX:x, clientY:y, pointerType:'mouse'});
+              } else if (type.indexOf('pointer') !== 0) {
+                ev = new MouseEvent(type, {bubbles:true, cancelable:true, view:window, clientX:x, clientY:y});
+              }
+              if (ev) el.dispatchEvent(ev);
+            } catch(e){}
+          }
+        } catch(e){}
+      }
       var t = '\(escaped)'.toLowerCase();
       var sel = 'a[href],button,[onclick],[data-match],[data-event],[data-game],' +
                 '[role="button"],[class*="card" i],[class*="match" i],[class*="game" i]';
@@ -710,7 +744,7 @@ final class StreamWebViewBridge: ObservableObject {
                  (e.getAttribute && (e.getAttribute('title') || ''))).toLowerCase();
         if (b.indexOf(t) !== -1) {
           var target = findClickableAncestor(e);
-          try { target.click(); } catch(err) {}
+          robustClick(target);
           return true;
         }
       }
@@ -1284,6 +1318,42 @@ struct StreamWebView: UIViewRepresentable {
         }
       }
 
+      // v2.45: many modern JS frameworks (React, Vue, Svelte) attach
+      // their click handlers via addEventListener for pointer/mouse
+      // events rather than the inline onclick that .click() synthesizes.
+      // robustClick dispatches the full pointer+mouse sequence so
+      // framework-attached handlers receive the event. Wrapped in
+      // try/catch so older WebKit without PointerEvent doesn't break.
+      function robustClick(el) {
+        if (!el) return;
+        try { el.click(); } catch(e) {}
+        try {
+          var rect = el.getBoundingClientRect();
+          var x = rect.left + Math.max(1, rect.width / 2);
+          var y = rect.top + Math.max(1, rect.height / 2);
+          var seq = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+          for (var i = 0; i < seq.length; i++) {
+            var type = seq[i];
+            try {
+              var ev;
+              if (type.indexOf('pointer') === 0 && typeof PointerEvent === 'function') {
+                ev = new PointerEvent(type, {
+                  bubbles: true, cancelable: true,
+                  clientX: x, clientY: y,
+                  pointerType: 'mouse'
+                });
+              } else if (type.indexOf('pointer') !== 0) {
+                ev = new MouseEvent(type, {
+                  bubbles: true, cancelable: true, view: window,
+                  clientX: x, clientY: y
+                });
+              }
+              if (ev) el.dispatchEvent(ev);
+            } catch(e) {}
+          }
+        } catch(e) {}
+      }
+
       // v2.41: walk up from a text-matched element to the nearest
       // actually clickable ancestor. Many SPA frameworks wrap
       // clickable cards around an inner text node (e.g. bintv's
@@ -1433,7 +1503,15 @@ struct StreamWebView: UIViewRepresentable {
         iihf: ['hockey','ice-hockey','iihf']
       };
 
+      // v2.45: side-channel stats for the category-link branch so
+      // tryAdvance can post a cat_scan event mirroring the page-1
+      // scan event. Lets us see in real time whether findCategoryLink
+      // is matching a card (and which one) — diagnosing the
+      // "category landing never advances" failure mode.
+      var _catScanStats = { cands: 0, matched: 0, clicked: '', rejSample: '' };
+
       function findCategoryLink(leagueRawValue) {
+        _catScanStats = { cands: 0, matched: 0, clicked: '', rejSample: '' };
         var keys = _leagueHints[leagueRawValue] || [];
         if (!keys.length) return null;
         // v2.44: many category landing pages (crackstreams' "NBA Streams"
@@ -1446,7 +1524,9 @@ struct StreamWebView: UIViewRepresentable {
             '[class*="card" i], [class*="link" i]'
           );
         } catch(e) { return null; }
+        _catScanStats.cands = els.length;
         var cap = Math.min(els.length, 600);
+        var longestRej = 0;
         for (var i = 0; i < cap; i++) {
           var el = els[i];
           var href = '';
@@ -1454,13 +1534,23 @@ struct StreamWebView: UIViewRepresentable {
           var txt = (el.innerText || el.textContent || '');
           var blob = (txt + ' ' + href).toLowerCase();
           if (blob.length < 3 || blob.length > 200) continue;
+          var matched = false;
           for (var k = 0; k < keys.length; k++) {
             if (blob.indexOf(keys[k]) !== -1) {
-              // Walk up to the clickable ancestor (same fix as v2.41
-              // for selectTargetGameElement) — the matched element may
-              // be an inner text node whose parent has the onclick.
-              return findClickableAncestor(el);
+              matched = true;
+              break;
             }
+          }
+          if (matched) {
+            _catScanStats.matched = 1;
+            _catScanStats.clicked = (txt || href).slice(0, 80);
+            // Walk up to the clickable ancestor (same fix as v2.41
+            // for selectTargetGameElement) — the matched element may
+            // be an inner text node whose parent has the onclick.
+            return findClickableAncestor(el);
+          } else if (blob.length > longestRej) {
+            longestRej = blob.length;
+            _catScanStats.rejSample = blob.slice(0, 80);
           }
         }
         return null;
@@ -1484,7 +1574,7 @@ struct StreamWebView: UIViewRepresentable {
           _mirrorClickAt = Date.now();
           var blob = readableTextFromElement(node);
           postWalkEvent('clicked', 'card: ' + blob);
-          try { node.click(); } catch(e){
+          try { robustClick(node); } catch(e){
             postWalkEvent('click_failed', String(e));
           }
           return;
@@ -1492,6 +1582,19 @@ struct StreamWebView: UIViewRepresentable {
         // Step 4b: no game match — at depth 0 try a league-named category link.
         if (_walkClicks === 0 && window.__sc_target && window.__sc_target.league) {
           var catNode = findCategoryLink(window.__sc_target.league);
+          // v2.45: always emit cat_scan after the lookup so the user
+          // sees whether the category branch found anything, regardless
+          // of whether the click eventually fires. Mirrors the per-page
+          // scan event from v2.43.
+          var catInfo = 'cat_cands=' + _catScanStats.cands
+                      + ' cat_matched=' + _catScanStats.matched;
+          if (_catScanStats.matched === 1 && _catScanStats.clicked) {
+            catInfo += ' clk="' + _catScanStats.clicked + '"';
+          } else if (_catScanStats.rejSample) {
+            catInfo += ' rej="' + _catScanStats.rejSample + '"';
+          }
+          postWalkEvent('cat_scan', catInfo);
+
           if (catNode && _walkClickedEls.indexOf(catNode) === -1) {
             _walkClickedEls.push(catNode);
             _walkClicks++;
@@ -1499,7 +1602,7 @@ struct StreamWebView: UIViewRepresentable {
             _mirrorClickAt = Date.now();
             var catBlob = readableTextFromElement(catNode);
             postWalkEvent('category_click', catBlob);
-            try { catNode.click(); } catch(e){
+            try { robustClick(catNode); } catch(e){
               postWalkEvent('click_failed', String(e));
             }
             return;
