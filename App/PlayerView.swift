@@ -125,6 +125,16 @@ struct PlayerView: View {
                     }
                   }
                 },
+                onStreamProbed: { url, playable in
+                  Task { @MainActor in
+                    if let sid = traversalSessionID {
+                      TraversalLog.shared.recordEvent(
+                        sid, kind: "stream_probed",
+                        info: "\(playable ? "ok" : "fail"): \(url.absoluteString)"
+                      )
+                    }
+                  }
+                },
                 onNavigation: { navURL in
                   Task { @MainActor in
                     appendNavigation(navURL)
@@ -862,6 +872,11 @@ struct StreamWebView: UIViewRepresentable {
   let url: URL
   let ruleList: WKContentRuleList?
   var onStreamURLFound: ((URL, [HTTPCookie]) -> Void)? = nil
+  /// v2.48: fires for every captured stream URL after AVPlayer's
+  /// isPlayable probe finishes, regardless of outcome. PlayerView
+  /// records this in the TraversalLog so probe failures are visible
+  /// in Settings → Traversal Log during iterative testing.
+  var onStreamProbed: ((URL, Bool) -> Void)? = nil
   /// v2.38: fired on every top-frame navigation commit (initial load,
   /// iframe-drill navigations, redirect chains). Used by PlayerView to
   /// build the breadcrumb the user sees in verification mode.
@@ -922,6 +937,7 @@ struct StreamWebView: UIViewRepresentable {
   func makeCoordinator() -> Coordinator {
     Coordinator(
       onStreamURLFound: onStreamURLFound,
+      onStreamProbed: onStreamProbed,
       onNavigation: onNavigation,
       onWalkEvent: onWalkEvent,
       onLoadFailed: onLoadFailed,
@@ -1867,6 +1883,9 @@ struct StreamWebView: UIViewRepresentable {
 
   final class Coordinator: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     let onStreamURLFound: ((URL, [HTTPCookie]) -> Void)?
+    /// v2.48: fires after each probePlayability finishes so PlayerView
+    /// can log the result to the TraversalLog.
+    let onStreamProbed: ((URL, Bool) -> Void)?
     /// v2.38: invoked from `webView(_:didCommit:)` so PlayerView can
     /// render the navigation breadcrumb.
     let onNavigation: ((URL) -> Void)?
@@ -1902,12 +1921,14 @@ struct StreamWebView: UIViewRepresentable {
     private var iframeCommitTask: Task<Void, Never>?
 
     init(onStreamURLFound: ((URL, [HTTPCookie]) -> Void)?,
+         onStreamProbed: ((URL, Bool) -> Void)? = nil,
          onNavigation: ((URL) -> Void)? = nil,
          onWalkEvent: ((StreamWebView.WalkEvent) -> Void)? = nil,
          onLoadFailed: ((URL, String) -> Void)? = nil,
          onPageChanged: ((URL) -> Void)? = nil,
          browseMode: Bool) {
       self.onStreamURLFound = onStreamURLFound
+      self.onStreamProbed = onStreamProbed
       self.onNavigation = onNavigation
       self.onWalkEvent = onWalkEvent
       self.onLoadFailed = onLoadFailed
@@ -2144,9 +2165,26 @@ struct StreamWebView: UIViewRepresentable {
           await MainActor.run { self?.commitFallbackIfNeeded() }
         }
       }
+      // v2.48: capture referer + cookies up-front on the main thread,
+      // hand them to probePlayability so the probe runs under the same
+      // request conditions PlayerView's AVPlayer will use. Without this,
+      // embed-host manifests that require Referer/cookies get falsely
+      // rejected as unplayable, delaying playback to the 6 s fallback.
+      let referer = webView?.url
+      let cookieStore = webView?.configuration.websiteDataStore.httpCookieStore
+      let onProbed = self.onStreamProbed
       Task { [weak self] in
-        let playable = await Self.probePlayability(url)
+        let cookies: [HTTPCookie] = await {
+          guard let cookieStore else { return [] }
+          return await withCheckedContinuation { (cont: CheckedContinuation<[HTTPCookie], Never>) in
+            DispatchQueue.main.async {
+              cookieStore.getAllCookies { cont.resume(returning: $0) }
+            }
+          }
+        }()
+        let playable = await Self.probePlayability(url, referer: referer, cookies: cookies)
         await MainActor.run {
+          onProbed?(url, playable)
           guard let self, !self.found, playable else { return }
           self.commitURL(url)
         }
@@ -2169,12 +2207,20 @@ struct StreamWebView: UIViewRepresentable {
       }
     }
 
-    private static func probePlayability(_ url: URL) async -> Bool {
+    private static func probePlayability(_ url: URL,
+                                         referer: URL? = nil,
+                                         cookies: [HTTPCookie] = []) async -> Bool {
       let lower = url.absoluteString.lowercased()
       let isManifest = lower.contains(".m3u8") || lower.contains(".mpd")
       guard isManifest else { return true }
-      var headers: [String: String] = [:]
+      // v2.48: match the headers PlayerView.makePlayer sets on real
+      // playback so the probe accurately predicts AVPlayer success.
+      var headers = HTTPCookie.requestHeaderFields(with: cookies)
       headers["User-Agent"] = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+      if let referer {
+        headers["Referer"] = referer.absoluteString
+        headers["Origin"]  = (referer.scheme ?? "https") + "://" + (referer.host ?? "")
+      }
       let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
       return await withTaskGroup(of: Bool.self) { group in
         group.addTask { (try? await asset.load(.isPlayable)) ?? false }
