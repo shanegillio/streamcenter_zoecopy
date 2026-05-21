@@ -1606,6 +1606,88 @@ struct StreamWebView: UIViewRepresentable {
         return findClickableAncestor(smallest);
       }
 
+      // v2.51: tree-walk fallback for sites whose game cards have
+      // textContent that contains both team names but whose wrapper
+      // element doesn't match any of selectTargetGameElement's class
+      // selectors ([class*="card"], [class*="match"], etc). Streameast
+      // and CrackStreams hit this — harvestDetectedCards found the pair
+      // via _gameLinePattern but the selector-based matcher missed it.
+      // Walks visible text nodes, finds those containing any home/away
+      // token, and walks up ancestors to find the smallest enclosing
+      // element that contains tokens from BOTH teams. Capped on text
+      // node count and ancestor depth so it's bounded on large pages.
+      function findTargetByTreeWalk() {
+        _scanStats = { candidates: 0, matched: 0, sample: '', rejSample: '' };
+        if (!window.__sc_target) return null;
+        var home = (window.__sc_target.home || '').toLowerCase();
+        var away = (window.__sc_target.away || '').toLowerCase();
+        if (!home || !away) return null;
+        function tokens(slug) {
+          var t = [];
+          if (slug.length >= 4) t.push(slug);
+          slug.split('-').forEach(function(w){ if (w.length >= 4) t.push(w); });
+          return t;
+        }
+        var ht = tokens(home), at = tokens(away);
+        if (!ht.length || !at.length) return null;
+        var walker;
+        try {
+          walker = document.createTreeWalker(
+            document.body || document.documentElement,
+            NodeFilter.SHOW_TEXT, null
+          );
+        } catch(e) { return null; }
+        var nodes = [];
+        var node, count = 0;
+        // Cap at 5000 text nodes — generous but bounded.
+        while ((node = walker.nextNode()) && count < 5000) {
+          count++;
+          var t = (node.textContent || '').toLowerCase();
+          if (t.length < 3) continue;
+          var hasHome = false, hasAway = false;
+          for (var hi = 0; hi < ht.length; hi++) {
+            if (t.indexOf(ht[hi]) !== -1) { hasHome = true; break; }
+          }
+          for (var ai = 0; ai < at.length && !hasAway; ai++) {
+            if (t.indexOf(at[ai]) !== -1) hasAway = true;
+          }
+          if (hasHome || hasAway) {
+            nodes.push(node);
+          }
+        }
+        _scanStats.candidates = nodes.length;
+        var bestEl = null, bestSize = Infinity;
+        for (var i = 0; i < nodes.length; i++) {
+          var p = nodes[i].parentElement;
+          for (var d = 0; d < 10 && p; d++) {
+            var all = '';
+            try { all = (p.textContent || '').toLowerCase(); } catch(e){}
+            if (all.length < 6 || all.length > 1200) {
+              p = p.parentElement;
+              continue;
+            }
+            var hh = false, aa = false;
+            for (var k = 0; k < ht.length && !hh; k++) {
+              if (all.indexOf(ht[k]) !== -1) hh = true;
+            }
+            for (var m = 0; m < at.length && !aa; m++) {
+              if (all.indexOf(at[m]) !== -1) aa = true;
+            }
+            if (hh && aa) {
+              _scanStats.matched++;
+              if (all.length < bestSize) {
+                bestSize = all.length;
+                bestEl = p;
+                _scanStats.sample = all.slice(0, 80);
+              }
+              break;
+            }
+            p = p.parentElement;
+          }
+        }
+        return findClickableAncestor(bestEl);
+      }
+
       // League raw-value → URL/text hints for category-link traversal.
       // Used when no game match is found and we're still at depth 0.
       var _leagueHints = {
@@ -1696,6 +1778,13 @@ struct StreamWebView: UIViewRepresentable {
         if (_walkClicks >= _maxWalkClicks) return;
         // Step 3: element matching target game.
         var node = selectTargetGameElement();
+        // v2.51: selector-based matcher missed — try tree-walk fallback
+        // that finds the smallest element whose textContent contains
+        // tokens from BOTH teams, regardless of class. Catches wrappers
+        // the class selector doesn't enumerate.
+        if (!node) {
+          try { node = findTargetByTreeWalk(); } catch(e){}
+        }
         if (node) {
           if (_walkClickedEls.indexOf(node) !== -1) return;
           _walkClickedEls.push(node);
