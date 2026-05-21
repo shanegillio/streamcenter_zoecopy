@@ -1606,16 +1606,16 @@ struct StreamWebView: UIViewRepresentable {
         return findClickableAncestor(smallest);
       }
 
-      // v2.51: tree-walk fallback for sites whose game cards have
-      // textContent that contains both team names but whose wrapper
-      // element doesn't match any of selectTargetGameElement's class
-      // selectors ([class*="card"], [class*="match"], etc). Streameast
-      // and CrackStreams hit this — harvestDetectedCards found the pair
-      // via _gameLinePattern but the selector-based matcher missed it.
-      // Walks visible text nodes, finds those containing any home/away
-      // token, and walks up ancestors to find the smallest enclosing
-      // element that contains tokens from BOTH teams. Capped on text
-      // node count and ancestor depth so it's bounded on large pages.
+      // v2.52: element-walk fallback for sites whose card text lives in
+      // attributes (aria-label, img alt, title, data-match) rather than
+      // textContent. Earlier v2.51's text-node tree-walk reported
+      // cands=0 across Streameast/CrackStreams/bintv — proof the team
+      // names weren't in text nodes at all. This walker visits every
+      // element (capped) and uses the same `readableTextFromElement`
+      // blob harvestDetectedCards uses, so anything visible to the
+      // user-facing "Found on this page" detector is also visible here.
+      // Smallest matching blob wins; findClickableAncestor handles the
+      // common wrapping-onclick case.
       function findTargetByTreeWalk() {
         _scanStats = { candidates: 0, matched: 0, sample: '', rejSample: '' };
         if (!window.__sc_target) return null;
@@ -1630,59 +1630,38 @@ struct StreamWebView: UIViewRepresentable {
         }
         var ht = tokens(home), at = tokens(away);
         if (!ht.length || !at.length) return null;
-        var walker;
-        try {
-          walker = document.createTreeWalker(
-            document.body || document.documentElement,
-            NodeFilter.SHOW_TEXT, null
-          );
-        } catch(e) { return null; }
-        var nodes = [];
-        var node, count = 0;
-        // Cap at 5000 text nodes — generous but bounded.
-        while ((node = walker.nextNode()) && count < 5000) {
-          count++;
-          var t = (node.textContent || '').toLowerCase();
-          if (t.length < 3) continue;
-          var hasHome = false, hasAway = false;
-          for (var hi = 0; hi < ht.length; hi++) {
-            if (t.indexOf(ht[hi]) !== -1) { hasHome = true; break; }
-          }
-          for (var ai = 0; ai < at.length && !hasAway; ai++) {
-            if (t.indexOf(at[ai]) !== -1) hasAway = true;
-          }
-          if (hasHome || hasAway) {
-            nodes.push(node);
-          }
-        }
-        _scanStats.candidates = nodes.length;
+        var allEls;
+        try { allEls = document.querySelectorAll('*'); } catch(e) { return null; }
+        var cap = Math.min(allEls.length, 5000);
+        _scanStats.candidates = cap;
         var bestEl = null, bestSize = Infinity;
-        for (var i = 0; i < nodes.length; i++) {
-          var p = nodes[i].parentElement;
-          for (var d = 0; d < 10 && p; d++) {
-            var all = '';
-            try { all = (p.textContent || '').toLowerCase(); } catch(e){}
-            if (all.length < 6 || all.length > 1200) {
-              p = p.parentElement;
-              continue;
+        var longestRej = 0;
+        for (var i = 0; i < cap; i++) {
+          var el = allEls[i];
+          // Skip elements that won't ever be clickable wrappers.
+          var tag = (el.tagName || '').toLowerCase();
+          if (tag === 'script' || tag === 'style' || tag === 'meta' ||
+              tag === 'link' || tag === 'head' || tag === 'html' ||
+              tag === 'body' || tag === 'svg' || tag === 'path') continue;
+          var blob = readableTextFromElement(el).toLowerCase();
+          if (blob.length < 6 || blob.length > 1200) continue;
+          var hh = false, aa = false;
+          for (var k = 0; k < ht.length && !hh; k++) {
+            if (blob.indexOf(ht[k]) !== -1) hh = true;
+          }
+          for (var m = 0; m < at.length && !aa; m++) {
+            if (blob.indexOf(at[m]) !== -1) aa = true;
+          }
+          if (hh && aa) {
+            _scanStats.matched++;
+            if (blob.length < bestSize) {
+              bestSize = blob.length;
+              bestEl = el;
+              _scanStats.sample = blob.slice(0, 80);
             }
-            var hh = false, aa = false;
-            for (var k = 0; k < ht.length && !hh; k++) {
-              if (all.indexOf(ht[k]) !== -1) hh = true;
-            }
-            for (var m = 0; m < at.length && !aa; m++) {
-              if (all.indexOf(at[m]) !== -1) aa = true;
-            }
-            if (hh && aa) {
-              _scanStats.matched++;
-              if (all.length < bestSize) {
-                bestSize = all.length;
-                bestEl = p;
-                _scanStats.sample = all.slice(0, 80);
-              }
-              break;
-            }
-            p = p.parentElement;
+          } else if (blob.length > longestRej) {
+            longestRej = blob.length;
+            _scanStats.rejSample = blob.slice(0, 80);
           }
         }
         return findClickableAncestor(bestEl);
