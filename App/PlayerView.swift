@@ -1512,6 +1512,17 @@ struct StreamWebView: UIViewRepresentable {
           if (title) parts.push(title);
           var dm = el.getAttribute('data-match');
           if (dm) parts.push(dm);
+          // v2.50: include href (and common JS-card equivalents) so team
+          // names that live ONLY in the URL slug (e.g. <a href="/mlb/
+          // milwaukee-brewers-vs-chicago-cubs/">MIL @ CHC</a>) get matched.
+          // Sites that render with abbreviations but route via team-slug
+          // URLs were stuck at Hop 1 because the shim's text-only blob
+          // couldn't see "milwaukee-brewers"/"chicago-cubs" in the href.
+          var hrefAttrs = ['href', 'data-href', 'data-url', 'data-link'];
+          for (var hi = 0; hi < hrefAttrs.length; hi++) {
+            var hv = el.getAttribute(hrefAttrs[hi]);
+            if (hv) parts.push(hv);
+          }
         }
         // v2.44: many sites render score cards with team LOGOS only —
         // full team names live in <img alt="…">. Without this we'd
