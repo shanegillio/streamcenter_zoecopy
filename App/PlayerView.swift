@@ -1546,10 +1546,13 @@ struct StreamWebView: UIViewRepresentable {
       // v2.43: side-channel stats so tryAdvance can post a scan event.
       // v2.44: rejSample is the longest blob the matcher rejected — shown
       // to the user when matched=0 so we can see what we're scanning.
-      var _scanStats = { candidates: 0, matched: 0, sample: '', rejSample: '' };
+      // v2.53: nHome/nAway count elements containing ONLY one team's
+      // tokens — distinguishes "team names not in DOM at all" from "both
+      // teams in DOM but never co-located in the same wrapper element".
+      var _scanStats = { candidates: 0, matched: 0, nHome: 0, nAway: 0, sample: '', rejSample: '' };
 
       function selectTargetGameElement() {
-        _scanStats = { candidates: 0, matched: 0, sample: '', rejSample: '' };
+        _scanStats = { candidates: 0, matched: 0, nHome: 0, nAway: 0, sample: '', rejSample: '' };
         if (!window.__sc_target) return null;
         var home = (window.__sc_target.home || '').toLowerCase();
         var away = (window.__sc_target.away || '').toLowerCase();
@@ -1617,7 +1620,7 @@ struct StreamWebView: UIViewRepresentable {
       // Smallest matching blob wins; findClickableAncestor handles the
       // common wrapping-onclick case.
       function findTargetByTreeWalk() {
-        _scanStats = { candidates: 0, matched: 0, sample: '', rejSample: '' };
+        _scanStats = { candidates: 0, matched: 0, nHome: 0, nAway: 0, sample: '', rejSample: '' };
         if (!window.__sc_target) return null;
         var home = (window.__sc_target.home || '').toLowerCase();
         var away = (window.__sc_target.away || '').toLowerCase();
@@ -1659,9 +1662,16 @@ struct StreamWebView: UIViewRepresentable {
               bestEl = el;
               _scanStats.sample = blob.slice(0, 80);
             }
-          } else if (blob.length > longestRej) {
-            longestRej = blob.length;
-            _scanStats.rejSample = blob.slice(0, 80);
+          } else {
+            // v2.53: track elements that mention exactly one team. Lets
+            // us distinguish "team names absent from DOM" (both = 0)
+            // from "teams present but never co-located" (one > 0, both = 0).
+            if (hh && !aa) _scanStats.nHome++;
+            if (aa && !hh) _scanStats.nAway++;
+            if (blob.length > longestRej) {
+              longestRej = blob.length;
+              _scanStats.rejSample = blob.slice(0, 80);
+            }
           }
         }
         return findClickableAncestor(bestEl);
@@ -1819,6 +1829,12 @@ struct StreamWebView: UIViewRepresentable {
                  + ' cands=' + _scanStats.candidates
                  + ' matched=' + _scanStats.matched
                  + ' main=' + (window.top === window ? '1' : '0');
+        // v2.53: surface single-team counts so we can tell apart
+        // "team names absent from DOM" from "teams present but split
+        // across different wrapper elements".
+        if (_scanStats.nHome || _scanStats.nAway) {
+          info += ' h=' + _scanStats.nHome + ' a=' + _scanStats.nAway;
+        }
         if (_scanStats.matched > 0 && _scanStats.sample) {
           info += ' sample="' + _scanStats.sample + '"';
         }
@@ -1923,7 +1939,13 @@ struct StreamWebView: UIViewRepresentable {
         });
       }).observe(document.documentElement || document, {childList: true, subtree: true, attributes: true});
 
-      [100, 500, 1000, 2000, 3000, 5000, 8000, 12000, 18000].forEach(function(t) {
+      // v2.53: late scans cover SPA hydration that lands after the
+      // existing 18 s schedule and doesn't trigger a MutationObserver
+      // event the shim catches (Shadow DOM, framework batched commits,
+      // route-change-only renders). Cheap insurance since each scan is
+      // bounded.
+      [100, 500, 1000, 2000, 3000, 5000, 8000, 12000, 18000,
+       25000, 40000, 60000].forEach(function(t) {
         setTimeout(scan, t);
       });
     })();
