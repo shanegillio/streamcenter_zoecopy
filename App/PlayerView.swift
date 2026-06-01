@@ -1677,6 +1677,73 @@ struct StreamWebView: UIViewRepresentable {
         return findClickableAncestor(bestEl);
       }
 
+      // v2.54: unify the click path with the detector. harvestDetectedCards
+      // (the "Found on this page" strip) reliably surfaces real game-pair
+      // cards via _gameLinePattern, yet selectTargetGameElement /
+      // findTargetByTreeWalk kept reporting matched=0 on the same DOM — the
+      // detector and the clicker disagreed. This walks the SAME candidate
+      // set harvest uses, applies the SAME regex to confirm a real "X vs Y"
+      // card, then checks whether that pair matches the tapped game's
+      // tokens (order-independent). Returns the clickable ancestor of the
+      // first matching card. If harvest can see the game, this can click it.
+      var _pairScanStats = { cands: 0, pairs: 0, matched: 0, sample: '', rejSample: '' };
+      function findTargetByPairScan() {
+        _pairScanStats = { cands: 0, pairs: 0, matched: 0, sample: '', rejSample: '' };
+        if (!window.__sc_target) return null;
+        var home = (window.__sc_target.home || '').toLowerCase();
+        var away = (window.__sc_target.away || '').toLowerCase();
+        if (!home || !away) return null;
+        function tokens(slug) {
+          var t = [];
+          if (slug.length >= 4) t.push(slug);
+          slug.split('-').forEach(function(w){ if (w.length >= 4) t.push(w); });
+          return t;
+        }
+        var ht = tokens(home), at = tokens(away);
+        if (!ht.length || !at.length) return null;
+        function hasTok(text, toks) {
+          for (var k = 0; k < toks.length; k++) {
+            if (text.indexOf(toks[k]) !== -1) return true;
+          }
+          return false;
+        }
+        var candidates;
+        try {
+          candidates = document.querySelectorAll(
+            'a[href], button, [onclick], [data-match], [data-event], [data-game], ' +
+            '[role="button"], ' +
+            '[class*="match" i],[class*="game" i],[class*="card" i],[class*="event" i],' +
+            '[class*="fixture" i]'
+          );
+        } catch(e) { return null; }
+        _pairScanStats.cands = candidates.length;
+        var cap = Math.min(candidates.length, 1200);
+        var best = null, bestSize = Infinity;
+        for (var i = 0; i < cap; i++) {
+          var el = candidates[i];
+          var blob = readableTextFromElement(el);
+          if (!blob || blob.length < 8 || blob.length > 600) continue;
+          var m = blob.match(_gameLinePattern);
+          if (!m) continue;
+          _pairScanStats.pairs++;
+          // The detected pair, lowercased and order-independent: a card
+          // matches if BOTH teams' tokens appear somewhere in the pair
+          // (the regex already proved it's an "X vs Y" card).
+          var pair = (m[1] + ' ' + m[2]).toLowerCase();
+          if (hasTok(pair, ht) && hasTok(pair, at)) {
+            _pairScanStats.matched++;
+            if (blob.length < bestSize) {
+              bestSize = blob.length;
+              best = el;
+              _pairScanStats.sample = (m[1] + ' vs ' + m[2]).slice(0, 80);
+            }
+          } else if (!_pairScanStats.rejSample) {
+            _pairScanStats.rejSample = (m[1] + ' vs ' + m[2]).slice(0, 80);
+          }
+        }
+        return best ? findClickableAncestor(best) : null;
+      }
+
       // League raw-value → URL/text hints for category-link traversal.
       // Used when no game match is found and we're still at depth 0.
       var _leagueHints = {
@@ -1766,7 +1833,12 @@ struct StreamWebView: UIViewRepresentable {
         if (window.top !== window) return;
         if (_walkClicks >= _maxWalkClicks) return;
         // Step 3: element matching target game.
-        var node = selectTargetGameElement();
+        // v2.54: pair-scan first — it mirrors the working "Found on this
+        // page" detector exactly (same candidates, same regex), so if the
+        // game is visible to the detector it is clickable here.
+        var node = null;
+        try { node = findTargetByPairScan(); } catch(e){}
+        if (!node) node = selectTargetGameElement();
         // v2.51: selector-based matcher missed — try tree-walk fallback
         // that finds the smallest element whose textContent contains
         // tokens from BOTH teams, regardless of class. Catches wrappers
@@ -1829,6 +1901,14 @@ struct StreamWebView: UIViewRepresentable {
                  + ' cands=' + _scanStats.candidates
                  + ' matched=' + _scanStats.matched
                  + ' main=' + (window.top === window ? '1' : '0');
+        // v2.54: pair-scan diagnostics — pairs = real "X vs Y" cards seen
+        // (same as the detector strip), pm = those matching the tapped
+        // game. If pairs>0 but pm=0 the page lists games but not this one;
+        // if pairs=0 the cards haven't rendered (or live in an iframe).
+        info += ' pairs=' + _pairScanStats.pairs + ' pm=' + _pairScanStats.matched;
+        if (_pairScanStats.matched === 0 && _pairScanStats.rejSample) {
+          info += ' pr="' + _pairScanStats.rejSample + '"';
+        }
         // v2.53: surface single-team counts so we can tell apart
         // "team names absent from DOM" from "teams present but split
         // across different wrapper elements".
