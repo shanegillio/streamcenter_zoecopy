@@ -1374,7 +1374,6 @@ struct StreamWebView: UIViewRepresentable {
         // main frame should harvest.
         if (window.top !== window) return;
         var now = Date.now();
-        if (now - _lastDetectedPostedAt < 2000) return;  // throttle
         var found = [];
         var seen = {};
         var candidates;
@@ -1386,22 +1385,66 @@ struct StreamWebView: UIViewRepresentable {
             '[class*="fixture" i]'
           );
         } catch(e) { return; }
+        // v2.54: target-token setup. The detector reliably finds real
+        // "X vs Y" cards; if one matches the tapped game we CLICK it in
+        // this same DOM pass — eliminating the stale-chip divergence
+        // where tryAdvance's separate live scan missed a card the
+        // (sticky) "Found on this page" strip still showed.
+        var ht = [], at = [];
+        var tgt = window.__sc_target;
+        if (tgt && tgt.home && tgt.away) {
+          var mkTok = function(slug) {
+            var t = []; slug = (slug || '').toLowerCase();
+            if (slug.length >= 4) t.push(slug);
+            slug.split('-').forEach(function(w){ if (w.length >= 4) t.push(w); });
+            return t;
+          };
+          ht = mkTok(tgt.home); at = mkTok(tgt.away);
+        }
+        function hasTok(text, toks) {
+          for (var k = 0; k < toks.length; k++) {
+            if (text.indexOf(toks[k]) !== -1) return true;
+          }
+          return false;
+        }
+        var targetEl = null, targetSize = Infinity, targetPair = '';
         var cap = Math.min(candidates.length, 1200);
-        for (var i = 0; i < cap && found.length < 12; i++) {
+        for (var i = 0; i < cap; i++) {
           var el = candidates[i];
           var blob = readableTextFromElement(el);
           if (!blob || blob.length < 8 || blob.length > 600) continue;
           var m = blob.match(_gameLinePattern);
           if (!m) continue;
           var pair = (m[1] + ' vs ' + m[2]).trim();
+          // Does this detected pair match the tapped game? (order-free)
+          if (ht.length && at.length && blob.length < targetSize) {
+            var pl = (m[1] + ' ' + m[2]).toLowerCase();
+            if (hasTok(pl, ht) && hasTok(pl, at)) {
+              targetEl = el; targetSize = blob.length; targetPair = pair;
+            }
+          }
           var key = pair.toLowerCase();
-          if (seen[key]) continue;
-          seen[key] = 1;
-          found.push({ text: pair, blob: blob.slice(0, 140) });
+          if (!seen[key] && found.length < 12) {
+            seen[key] = 1;
+            found.push({ text: pair, blob: blob.slice(0, 140) });
+          }
+        }
+        // Click the matching card immediately — same pass it was seen.
+        if (targetEl && _walkClicks < _maxWalkClicks) {
+          var node = findClickableAncestor(targetEl);
+          if (node && _walkClickedEls.indexOf(node) === -1) {
+            _walkClickedEls.push(node);
+            _walkClicks++;
+            _currentMirrorEl = node;
+            _mirrorClickAt = Date.now();
+            postWalkEvent('clicked', 'detected: ' + targetPair);
+            try { robustClick(node); } catch(e){ postWalkEvent('click_failed', String(e)); }
+          }
         }
         if (found.length === 0) return;
         var serialized = JSON.stringify(found);
         if (serialized === _lastDetectedSerialized) return;  // unchanged
+        if (now - _lastDetectedPostedAt < 2000) return;       // throttle posting
         _lastDetectedSerialized = serialized;
         _lastDetectedPostedAt = now;
         postWalkPayload('detected_cards', found);
@@ -1941,11 +1984,15 @@ struct StreamWebView: UIViewRepresentable {
           if (v.paused) v.play().catch(function(){});
         });
 
+        // v2.54: harvest first — it both surfaces page content for the
+        // verification strip AND clicks the target card the instant it's
+        // detected (same DOM pass), which is the most reliable advance.
+        // tryAdvance runs after as a fallback (category links, token /
+        // tree-walk matching) for sites whose cards aren't clean "X vs Y".
+        try { harvestDetectedCards(); } catch(e){}
         // v2.35: drive page navigation toward the target game / category.
         // Bounded by _maxWalkClicks; no-op once we've clicked enough.
         try { tryAdvance(); } catch(e){}
-        // v2.40: surface page content for the verification strip.
-        try { harvestDetectedCards(); } catch(e){}
         try { detectAuthWall(); } catch(e){}
 
         var mirrorSelectors = [
