@@ -1335,6 +1335,7 @@ struct StreamWebView: UIViewRepresentable {
       var _walkClicks = 0;
       var _maxWalkClicks = 4;
       var _walkClickedEls = [];
+      var _lastTargetPostedAt = 0;
 
       // v2.39: surface walk activity to native so PlayerView's verification
       // strip can show what's happening. Without this, walks are silent —
@@ -1408,6 +1409,7 @@ struct StreamWebView: UIViewRepresentable {
           return false;
         }
         var targetEl = null, targetSize = Infinity, targetPair = '';
+        var nPairs = 0, firstPair = '';
         var cap = Math.min(candidates.length, 1200);
         for (var i = 0; i < cap; i++) {
           var el = candidates[i];
@@ -1416,6 +1418,8 @@ struct StreamWebView: UIViewRepresentable {
           var m = blob.match(_gameLinePattern);
           if (!m) continue;
           var pair = (m[1] + ' vs ' + m[2]).trim();
+          nPairs++;
+          if (!firstPair) firstPair = pair;
           // Does this detected pair match the tapped game? (order-free)
           if (ht.length && at.length && blob.length < targetSize) {
             var pl = (m[1] + ' ' + m[2]).toLowerCase();
@@ -1427,6 +1431,27 @@ struct StreamWebView: UIViewRepresentable {
           if (!seen[key] && found.length < 12) {
             seen[key] = 1;
             found.push({ text: pair, blob: blob.slice(0, 140) });
+          }
+        }
+        // v2.55: one conclusive, short (won't-truncate) line every scan
+        // saying exactly what the detector-driven clicker decided. This
+        // is the ground truth we've been missing: whether a target card
+        // was found, whether we already clicked it (and the page didn't
+        // move), or whether the tokens simply don't match what's on page.
+        var now2 = Date.now();
+        if (now2 - _lastTargetPostedAt > 1500) {
+          _lastTargetPostedAt = now2;
+          var tgtStr = (tgt && tgt.home ? tgt.home : '?') + '|' + (tgt && tgt.away ? tgt.away : '?');
+          if (targetEl) {
+            var alreadyClicked = _walkClickedEls.indexOf(findClickableAncestor(targetEl)) !== -1;
+            postWalkEvent('target',
+              (alreadyClicked ? 'CLICKED-BUT-NO-NAV pair="' : 'MATCH pair="')
+              + targetPair + '"');
+          } else if (nPairs > 0) {
+            postWalkEvent('target',
+              'NO-MATCH tgt=' + tgtStr + ' pairs=' + nPairs + ' eg="' + firstPair + '"');
+          } else {
+            postWalkEvent('target', 'NO-PAIRS tgt=' + tgtStr + ' cands=' + candidates.length);
           }
         }
         // Click the matching card immediately — same pass it was seen.

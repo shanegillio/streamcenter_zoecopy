@@ -153,6 +153,7 @@ struct TraversalLogView: View {
     for ev in session.events.reversed() {
       switch ev.kind {
       case "clicked":         return "walk: clicked \(shortInfo(ev.info))"
+      case "target":          return "target: \(shortInfo(ev.info))"
       case "category_click":  return "walk: category → \(shortInfo(ev.info))"
       case "click_failed":    return "walk: click failed (\(shortInfo(ev.info)))"
       case "auth_wall":       return "auth wall (\(shortInfo(ev.info)))"
@@ -365,6 +366,7 @@ struct TraversalSessionDetailView: View {
     case "user_play":       return "play.circle.fill"
     case "auto_play":       return "play.fill"
     case "stream_probed":   return "checkmark.shield"
+    case "target":          return "scope"
     default: return "circle"
     }
   }
@@ -376,6 +378,7 @@ struct TraversalSessionDetailView: View {
     case "iframe_drill": return .cyan
     case "auth_wall": return .orange
     case "stream_probed": return .blue
+    case "target": return .purple
     default: return .secondary
     }
   }
