@@ -1454,7 +1454,9 @@ struct StreamWebView: UIViewRepresentable {
             postWalkEvent('target', 'NO-PAIRS tgt=' + tgtStr + ' cands=' + candidates.length);
           }
         }
-        // Click the matching card immediately — same pass it was seen.
+        // Click (or, better, navigate to) the matching card immediately —
+        // same pass it was seen. v2.56: prefer following the card's real
+        // href so the URL actually changes.
         if (targetEl && _walkClicks < _maxWalkClicks) {
           var node = findClickableAncestor(targetEl);
           if (node && _walkClickedEls.indexOf(node) === -1) {
@@ -1462,8 +1464,7 @@ struct StreamWebView: UIViewRepresentable {
             _walkClicks++;
             _currentMirrorEl = node;
             _mirrorClickAt = Date.now();
-            postWalkEvent('clicked', 'detected: ' + targetPair);
-            try { robustClick(node); } catch(e){ postWalkEvent('click_failed', String(e)); }
+            clickOrNavigate(node, 'clicked', 'detected: ' + targetPair);
           }
         }
         if (found.length === 0) return;
@@ -1565,6 +1566,56 @@ struct StreamWebView: UIViewRepresentable {
           n = n.parentElement;
         }
         return el;  // fallback — original match
+      }
+
+      // v2.56: the click-but-no-nav fix. The walk reliably matches the
+      // correct card, but robustClick on SPA cards / target="_blank"
+      // anchors / window.open handlers frequently does NOT change the
+      // URL — so we sit on Hop 1 forever. The cure: pull the real href
+      // out of the matched element (self → descendant <a> → ancestor
+      // <a>) and navigate straight to it with location.href, which
+      // ALWAYS produces a real navigation regardless of framework or
+      // popup-blocking. Only falls back to a synthetic click when there
+      // is no usable href to follow.
+      function _usableHref(h) {
+        if (!h) return false;
+        h = ('' + h).trim();
+        if (!h || h === '#' || h === '/') return false;
+        var low = h.toLowerCase();
+        if (low.indexOf('javascript:') === 0 || low.indexOf('mailto:') === 0 ||
+            low.indexOf('tel:') === 0 || low.indexOf('#') === 0) return false;
+        return true;
+      }
+      function _findNavHref(el) {
+        if (!el) return '';
+        try { if (el.tagName === 'A') { var h0 = el.getAttribute('href'); if (_usableHref(h0)) return h0; } } catch(e){}
+        try {
+          var as = el.querySelectorAll && el.querySelectorAll('a[href]');
+          if (as) for (var i = 0; i < as.length; i++) {
+            var h = as[i].getAttribute('href'); if (_usableHref(h)) return h;
+          }
+        } catch(e){}
+        var n = el.parentElement, lvl = 0;
+        while (n && lvl < 6) {
+          if (n.tagName === 'A') { var h2 = n.getAttribute('href'); if (_usableHref(h2)) return h2; }
+          n = n.parentElement; lvl++;
+        }
+        return '';
+      }
+      // Returns 'nav' when it forced a real URL change, else 'click'.
+      function clickOrNavigate(node, kind, label) {
+        var href = _findNavHref(node);
+        if (href) {
+          var abs = href;
+          try { abs = new URL(href, location.href).href; } catch(e){}
+          if (abs && abs.split('#')[0] !== location.href.split('#')[0]) {
+            postWalkEvent(kind, 'nav→ ' + abs);
+            try { location.href = abs; return 'nav'; } catch(e){}
+          }
+        }
+        postWalkEvent(kind, label);
+        try { robustClick(node); } catch(e){ postWalkEvent('click_failed', String(e)); }
+        return 'click';
       }
 
       function readableTextFromElement(el) {
@@ -1921,10 +1972,7 @@ struct StreamWebView: UIViewRepresentable {
           _currentMirrorEl = node;
           _mirrorClickAt = Date.now();
           var blob = readableTextFromElement(node);
-          postWalkEvent('clicked', 'card: ' + blob);
-          try { robustClick(node); } catch(e){
-            postWalkEvent('click_failed', String(e));
-          }
+          clickOrNavigate(node, 'clicked', 'card: ' + blob);
           return;
         }
         // Step 4b: no game match — at depth 0 try a league-named category link.
@@ -1949,10 +1997,7 @@ struct StreamWebView: UIViewRepresentable {
             _currentMirrorEl = catNode;
             _mirrorClickAt = Date.now();
             var catBlob = readableTextFromElement(catNode);
-            postWalkEvent('category_click', catBlob);
-            try { robustClick(catNode); } catch(e){
-              postWalkEvent('click_failed', String(e));
-            }
+            clickOrNavigate(catNode, 'category_click', catBlob);
             return;
           }
         }
