@@ -75,6 +75,10 @@ struct PlayerView: View {
   /// user advances to a different attempt. Used by all callbacks to
   /// route their events into the right TraversalSession.
   @State private var traversalSessionID: UUID? = nil
+  /// v2.61: pairs we've already auto-followed (via the gesture-carrying
+  /// clickFirstMatching path) on the current page. Reset on navigation so
+  /// each page gets one auto-follow attempt per matched pair.
+  @State private var autoFollowedPairs: Set<String> = []
 
   var body: some View {
     ZStack {
@@ -524,8 +528,32 @@ struct PlayerView: View {
     case "auth_wall":
       authWallReason = event.info
       lastWalkEvent = event
+    case "target":
+      lastWalkEvent = event
+      autoFollowTarget(event.info)
     default:
       lastWalkEvent = event
+    }
+  }
+
+  /// v2.61: the in-page walk reliably *identifies* the target card but its
+  /// synthetic click frequently fails to navigate (CLICKED-BUT-NO-NAV) —
+  /// the site's onclick needs WebKit user activation, which timer-driven
+  /// page script doesn't carry. Tapping the chip worked because it routes
+  /// through `evaluateJavaScript`, which DOES carry activation. So when the
+  /// shim posts a `target` event naming the matched pair, we fire that exact
+  /// same path automatically — reproducing the manual chip tap. Debounced to
+  /// once per pair per page (reset on navigation) so we never click-loop.
+  private func autoFollowTarget(_ info: String) {
+    guard let open = info.range(of: "pair=\"") else { return }
+    let rest = info[open.upperBound...]
+    guard let close = rest.range(of: "\"") else { return }
+    let pair = String(rest[..<close.lowerBound])
+    guard !pair.isEmpty, !autoFollowedPairs.contains(pair) else { return }
+    autoFollowedPairs.insert(pair)
+    webBridge.clickFirstMatching(pair)
+    if let sid = traversalSessionID {
+      TraversalLog.shared.recordEvent(sid, kind: "auto_follow", info: pair)
     }
   }
 
@@ -538,6 +566,7 @@ struct PlayerView: View {
   private func resetPerPageState() {
     detectedCards = []
     authWallReason = nil
+    autoFollowedPairs = []
     if let event = lastWalkEvent {
       let isFreshClick = (event.kind == "clicked" || event.kind == "category_click")
                        && Date().timeIntervalSince(event.at) < 1.5
