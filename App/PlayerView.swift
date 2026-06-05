@@ -531,6 +531,9 @@ struct PlayerView: View {
     case "target":
       lastWalkEvent = event
       autoFollowTarget(event.info)
+    case "cat_scan":
+      lastWalkEvent = event
+      autoFollowCategory(event.info)
     default:
       lastWalkEvent = event
     }
@@ -554,6 +557,25 @@ struct PlayerView: View {
     webBridge.clickFirstMatching(pair)
     if let sid = traversalSessionID {
       TraversalLog.shared.recordEvent(sid, kind: "auto_follow", info: pair)
+    }
+  }
+
+  /// v2.62: same gesture-carrying auto-tap as autoFollowTarget, but for the
+  /// league category card (e.g. "MLB Streams") the shim picked when the
+  /// exact game isn't listed on the landing page. The in-page click on that
+  /// card hits the same CLICKED-BUT-NO-NAV wall, so we re-fire it through
+  /// `clickFirstMatching` (carries WebKit user activation). The label comes
+  /// from the cat_scan event's `clk="..."`. Debounced via autoFollowedPairs.
+  private func autoFollowCategory(_ info: String) {
+    guard let open = info.range(of: "clk=\"") else { return }
+    let rest = info[open.upperBound...]
+    guard let close = rest.range(of: "\"") else { return }
+    let label = String(rest[..<close.lowerBound])
+    guard !label.isEmpty, !autoFollowedPairs.contains(label) else { return }
+    autoFollowedPairs.insert(label)
+    webBridge.clickFirstMatching(label)
+    if let sid = traversalSessionID {
+      TraversalLog.shared.recordEvent(sid, kind: "auto_follow", info: label)
     }
   }
 
@@ -2093,13 +2115,33 @@ struct StreamWebView: UIViewRepresentable {
       // "category landing never advances" failure mode.
       var _catScanStats = { cands: 0, matched: 0, clicked: '', rejSample: '' };
 
+      // v2.62: every league keyword we recognize, used to detect (and
+      // reject) multi-league nav/footer blobs. crackstreams' header text
+      // "NFL NBA MLB NHL MMA Boxing NCAA WWE MethStreams" contains "mlb"
+      // and is short — the old first-match category finder picked it and
+      // clicked a menu that goes nowhere, instead of the dedicated "MLB
+      // Streams" card. Counting distinct leagues lets us throw those out.
+      var _allLeagueWords = ['nfl','nba','wnba','mlb','nhl','ncaab','ncaaf','ncaa',
+        'ufc','mma','boxing','wwe','f1','formula','nascar','soccer','football',
+        'baseball','basketball','hockey','cricket','premier','laliga','bundesliga',
+        'ligue','eredivisie','mls','tennis','golf','rugby'];
+      function _countLeagueWords(blob) {
+        var c = 0;
+        for (var i = 0; i < _allLeagueWords.length; i++) {
+          if (blob.indexOf(_allLeagueWords[i]) !== -1) c++;
+        }
+        return c;
+      }
+
+      // v2.62: score-based category finder. Picks the single, specific
+      // league card (e.g. "MLB Streams") rather than the first element
+      // that merely contains the league name. Strongly prefers a usable
+      // href whose URL carries the league key, rejects blobs mentioning
+      // several leagues (nav bars / footers), and favors short labels.
       function findCategoryLink(leagueRawValue) {
         _catScanStats = { cands: 0, matched: 0, clicked: '', rejSample: '' };
         var keys = _leagueHints[leagueRawValue] || [];
         if (!keys.length) return null;
-        // v2.44: many category landing pages (crackstreams' "NBA Streams"
-        // card, etc.) wrap their category in a styled <div onclick=> or
-        // <button>, not a plain <a>. Broaden to all clickable shapes.
         var els;
         try {
           els = document.querySelectorAll(
@@ -2108,8 +2150,9 @@ struct StreamWebView: UIViewRepresentable {
           );
         } catch(e) { return null; }
         _catScanStats.cands = els.length;
-        var cap = Math.min(els.length, 600);
+        var cap = Math.min(els.length, 800);
         var longestRej = 0;
+        var best = null, bestScore = -1, bestText = '';
         for (var i = 0; i < cap; i++) {
           var el = els[i];
           var href = '';
@@ -2117,24 +2160,31 @@ struct StreamWebView: UIViewRepresentable {
           var txt = (el.innerText || el.textContent || '');
           var blob = (txt + ' ' + href).toLowerCase();
           if (blob.length < 3 || blob.length > 200) continue;
-          var matched = false;
+          var hit = false;
           for (var k = 0; k < keys.length; k++) {
-            if (blob.indexOf(keys[k]) !== -1) {
-              matched = true;
-              break;
-            }
+            if (blob.indexOf(keys[k]) !== -1) { hit = true; break; }
           }
-          if (matched) {
-            _catScanStats.matched = 1;
-            _catScanStats.clicked = (txt || href).slice(0, 80);
-            // Walk up to the clickable ancestor (same fix as v2.41
-            // for selectTargetGameElement) — the matched element may
-            // be an inner text node whose parent has the onclick.
-            return findClickableAncestor(el);
-          } else if (blob.length > longestRej) {
-            longestRej = blob.length;
-            _catScanStats.rejSample = blob.slice(0, 80);
+          if (!hit) {
+            if (blob.length > longestRej) { longestRej = blob.length; _catScanStats.rejSample = blob.slice(0, 80); }
+            continue;
           }
+          // Reject multi-league nav/footer blobs (lists many leagues).
+          if (_countLeagueWords(blob) >= 3) continue;
+          var hrefLow = href.toLowerCase();
+          var score = 0;
+          for (var k2 = 0; k2 < keys.length; k2++) {
+            if (hrefLow.indexOf(keys[k2]) !== -1) { score += 100; break; }
+          }
+          score += Math.max(0, 60 - txt.trim().length);  // prefer short labels
+          if (_usableHref(href)) score += 25;
+          if (score > bestScore) {
+            bestScore = score; best = el; bestText = (txt.trim() || href).slice(0, 80);
+          }
+        }
+        if (best) {
+          _catScanStats.matched = 1;
+          _catScanStats.clicked = bestText;
+          return findClickableAncestor(best);
         }
         return null;
       }
