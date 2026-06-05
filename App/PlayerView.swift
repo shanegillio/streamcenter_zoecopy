@@ -433,6 +433,7 @@ struct PlayerView: View {
     switch kind {
     case "clicked": return "hand.tap.fill"
     case "category_click": return "folder.fill"
+    case "auto_nav": return "arrow.uturn.right.circle.fill"
     case "click_failed": return "xmark.octagon.fill"
     case "scan", "no_match", "cat_scan": return "magnifyingglass"
     default: return "circle"
@@ -440,7 +441,7 @@ struct PlayerView: View {
   }
   private func walkColor(for kind: String) -> Color {
     switch kind {
-    case "clicked", "category_click": return .green
+    case "clicked", "category_click", "auto_nav": return .green
     case "click_failed": return .red
     case "scan", "no_match", "cat_scan": return .yellow
     default: return .white.opacity(0.6)
@@ -450,6 +451,7 @@ struct PlayerView: View {
     switch event.kind {
     case "clicked": return "Walk clicked: \(event.info.replacingOccurrences(of: "card: ", with: ""))"
     case "category_click": return "Walk → category: \(event.info)"
+    case "auto_nav": return "Auto-tap: \(event.info)"
     case "click_failed": return "Walk click error: \(event.info)"
     case "scan": return "Walk: \(event.info)"
     case "cat_scan": return "CategoryLink: \(event.info)"
@@ -844,18 +846,77 @@ final class StreamWebViewBridge: ObservableObject {
   weak var webView: WKWebView?
 
   /// Find a clickable element on the page whose readable text contains
-  /// `pair` and click it. Used when the user taps an alternative game
-  /// in the "Detected on this page" strip and our exact matcher missed.
+  /// `pair` and navigate to it. Used both when the user taps an alternative
+  /// game in the "Detected on this page" strip and (auto-follow) when the
+  /// shim names a matched card/category. This call runs via
+  /// evaluateJavaScript, so it carries WebKit user activation that the
+  /// in-page timer walk lacks.
+  ///
+  /// v2.63: this path used to ONLY synthesize a click and hope the site's
+  /// handler navigated. On sites whose card click is a same-page JS action
+  /// with no reachable <a href> (ntv.cx), that produced CLICKED-BUT-NO-NAV
+  /// forever. Now it mirrors the in-page `clickOrNavigate`: first dig out a
+  /// real destination URL (the element, a descendant <a>, a data-url/href
+  /// attribute, or a sibling <a> in the card container) and drive
+  /// `location.href` straight to it — a guaranteed navigation regardless of
+  /// framework or popup-blocking — and only fall back to a synthetic click
+  /// when no usable href exists anywhere near the match. Posts an
+  /// `auto_nav` diagnostic naming what it found so failures are visible in
+  /// the traversal log instead of silent.
   func clickFirstMatching(_ pair: String) {
     guard let webView else { return }
     let escaped = pair
       .replacingOccurrences(of: "\\", with: "\\\\")
       .replacingOccurrences(of: "'", with: "\\'")
-    // v2.41: walk up to clickable ancestor before .click(). Without
-    // this, tapping a detected-cards capsule often clicks the inner
-    // <h2> / <span> whose parent <div> holds the actual onclick.
     let js = """
     (function(){
+      function report(info){
+        try { window.webkit.messageHandlers.streamWalk.postMessage(JSON.stringify({
+          kind: 'auto_nav', info: ('' + info).slice(0,160), time: Date.now()
+        })); } catch(e){}
+      }
+      function usableHref(h){
+        if (!h) return false;
+        h = ('' + h).trim();
+        if (!h || h === '#' || h === '/') return false;
+        var low = h.toLowerCase();
+        if (low.indexOf('javascript:') === 0 || low.indexOf('mailto:') === 0 ||
+            low.indexOf('tel:') === 0 || low.indexOf('#') === 0) return false;
+        return true;
+      }
+      // Pull a navigable URL from common attributes on a single element.
+      function hrefAttr(el){
+        if (!el || !el.getAttribute) return '';
+        var keys = ['href','data-href','data-url','data-link'];
+        for (var i = 0; i < keys.length; i++){
+          var v = el.getAttribute(keys[i]);
+          if (usableHref(v)) return v;
+        }
+        return '';
+      }
+      function firstHrefIn(scope){
+        try {
+          var as = scope.querySelectorAll && scope.querySelectorAll(
+            'a[href],[data-href],[data-url],[data-link]');
+          if (as) for (var i = 0; i < as.length; i++){
+            var h = hrefAttr(as[i]); if (h) return h;
+          }
+        } catch(e){}
+        return '';
+      }
+      // Self → climb ancestors, searching each subtree (catches sibling
+      // "Watch" links inside the same card container).
+      function findNavHref(el){
+        if (!el) return '';
+        var h0 = hrefAttr(el); if (h0) return h0;
+        var n = el, lvl = 0;
+        while (n && lvl < 6){
+          var ha = hrefAttr(n); if (ha) return ha;
+          var hs = firstHrefIn(n); if (hs) return hs;
+          n = n.parentElement; lvl++;
+        }
+        return '';
+      }
       function findClickableAncestor(el) {
         if (!el) return null;
         var n = el;
@@ -906,12 +967,26 @@ final class StreamWebViewBridge: ObservableObject {
         var b = ((e.innerText || e.textContent || '') + ' ' +
                  (e.getAttribute && (e.getAttribute('aria-label') || '')) + ' ' +
                  (e.getAttribute && (e.getAttribute('title') || ''))).toLowerCase();
-        if (b.indexOf(t) !== -1) {
-          var target = findClickableAncestor(e);
-          robustClick(target);
-          return true;
+        if (b.indexOf(t) === -1) continue;
+        // Prefer a real destination URL — always navigates.
+        var href = findNavHref(e);
+        if (href) {
+          var abs = href;
+          try { abs = new URL(href, location.href).href; } catch(err){}
+          if (abs && abs.split('#')[0] !== location.href.split('#')[0]) {
+            report('nav→ ' + abs);
+            try { location.href = abs; return true; } catch(err){}
+          }
         }
+        // No reachable href — fall back to a synthetic click on the
+        // nearest clickable ancestor (handles pure-JS onclick cards).
+        var target = findClickableAncestor(e);
+        report('click ' + (target && target.tagName ? target.tagName : '?') +
+               ' no-href hrefAttr=' + (hrefAttr(target) ? 'Y' : 'N'));
+        robustClick(target);
+        return true;
       }
+      report('no-match "' + t.slice(0,60) + '"');
       return false;
     })();
     """

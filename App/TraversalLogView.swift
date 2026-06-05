@@ -153,6 +153,7 @@ struct TraversalLogView: View {
       case "page_state":      return "page: \(shortInfo(ev.info))"
       case "slug":            return "slug → \(shortInfo(ev.info))"
       case "auto_follow":     return "auto-tap → \(shortInfo(ev.info))"
+      case "auto_nav":        return "auto-nav \(shortInfo(ev.info))"
       case "category_click":  return "walk: category → \(shortInfo(ev.info))"
       case "click_failed":    return "walk: click failed (\(shortInfo(ev.info)))"
       case "auth_wall":       return "auth wall (\(shortInfo(ev.info)))"
@@ -370,6 +371,7 @@ struct TraversalSessionDetailView: View {
     case "page_state":      return "rectangle.dashed"
     case "slug":            return "link.circle.fill"
     case "auto_follow":     return "hand.tap.fill"
+    case "auto_nav":        return "arrow.uturn.right.circle.fill"
     default: return "circle"
     }
   }
@@ -386,6 +388,7 @@ struct TraversalSessionDetailView: View {
     case "page_state": return .teal
     case "slug": return .green
     case "auto_follow": return .green
+    case "auto_nav": return .green
     default: return .secondary
     }
   }
