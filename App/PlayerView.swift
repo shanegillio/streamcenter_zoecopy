@@ -1177,6 +1177,39 @@ struct StreamWebView: UIViewRepresentable {
         }
       }
 
+      // v2.59: structural ground truth for the "navigated to a near-empty
+      // page" case (e.g. buffstreams.plus/index18: dom=16, no cards). Tells
+      // us whether the player lives in an iframe to drill, behind a
+      // play/watch button to click, or simply hasn't rendered yet —
+      // instead of us guessing. Throttled; only fires once we've navigated
+      // or when the page is suspiciously empty.
+      var _lastPageStatePostedAt = 0;
+      function probePageState() {
+        if (window.top !== window) return;
+        var now = Date.now();
+        if (now - _lastPageStatePostedAt < 2500) return;
+        var dom = 0;
+        try { dom = document.querySelectorAll('*').length; } catch(e){}
+        if (_walkClicks === 0 && dom >= 40) return;  // normal homepage — skip
+        _lastPageStatePostedAt = now;
+        var ifh = [];
+        try {
+          var fs = document.querySelectorAll('iframe[src]');
+          for (var i = 0; i < fs.length && i < 6; i++) {
+            var h = '';
+            try { h = (new URL(fs[i].src || fs[i].getAttribute('src') || '', location.href)).host; } catch(e){}
+            if (h) ifh.push(h);
+          }
+        } catch(e){}
+        var vids = 0, btns = 0;
+        try { vids = document.querySelectorAll('video').length; } catch(e){}
+        try { btns = document.querySelectorAll('[class*="play" i],[class*="watch" i],[id*="play" i],[aria-label*="play" i]').length; } catch(e){}
+        var info = 'rs=' + document.readyState + ' dom=' + dom
+                 + ' iframes=' + ifh.length + ' vid=' + vids + ' playBtns=' + btns;
+        if (ifh.length) info += ' ifh=' + ifh.join(',');
+        postWalkEvent('page_state', info);
+      }
+
       // Network intercepts
       var xhrOpen = XMLHttpRequest.prototype.open;
       XMLHttpRequest.prototype.open = function(m, u) {
@@ -1455,10 +1488,18 @@ struct StreamWebView: UIViewRepresentable {
           _lastTargetPostedAt = now2;
           var tgtStr = (tgt && tgt.home ? tgt.home : '?') + '|' + (tgt && tgt.away ? tgt.away : '?');
           if (targetEl) {
-            var alreadyClicked = _walkClickedEls.indexOf(findClickableAncestor(targetEl)) !== -1;
-            postWalkEvent('target',
-              (alreadyClicked ? 'CLICKED-BUT-NO-NAV pair="' : 'MATCH pair="')
-              + targetPair + '"');
+            var clkEl = findClickableAncestor(targetEl);
+            if (!_isReallyClickable(clkEl)) {
+              // The match is page text (title/heading), not a card — we've
+              // likely ARRIVED at the game page. Don't click; look for the
+              // player. probePageState() tells us iframe/video/button state.
+              postWalkEvent('target', 'ON-PAGE-NO-CARD pair="' + targetPair + '"');
+            } else {
+              var alreadyClicked = _walkClickedEls.indexOf(clkEl) !== -1;
+              postWalkEvent('target',
+                (alreadyClicked ? 'CLICKED-BUT-NO-NAV pair="' : 'MATCH pair="')
+                + targetPair + '"');
+            }
           } else if (nPairs > 0) {
             postWalkEvent('target',
               'NO-MATCH tgt=' + tgtStr + ' pairs=' + nPairs + ' eg="' + firstPair + '"');
@@ -1471,7 +1512,7 @@ struct StreamWebView: UIViewRepresentable {
         // href so the URL actually changes.
         if (targetEl && _walkClicks < _maxWalkClicks) {
           var node = findClickableAncestor(targetEl);
-          if (node && _walkClickedEls.indexOf(node) === -1) {
+          if (node && _isReallyClickable(node) && _walkClickedEls.indexOf(node) === -1) {
             _walkClickedEls.push(node);
             _walkClicks++;
             _currentMirrorEl = node;
@@ -1652,6 +1693,20 @@ struct StreamWebView: UIViewRepresentable {
           if (hs.length) parts.push('a=' + hs.join('|'));
           postWalkEvent('card_dump', parts.join(' '));
         } catch(e){ postWalkEvent('card_dump', 'err ' + e); }
+      }
+      // v2.59: is this node something a click could actually act on? A
+      // page's <h1>/<title> can contain "Atlanta Braves vs Toronto Blue
+      // Jays" (because we're already ON the game page) — matching it as a
+      // "card" and clicking it does nothing forever (CLICKED-BUT-NO-NAV).
+      // Only treat a match as a clickable card if it's a real link/button
+      // or carries a usable href; otherwise we've ARRIVED and should look
+      // for the player instead of clicking text.
+      function _isReallyClickable(node) {
+        if (!node) return false;
+        if (node.tagName === 'A' || node.tagName === 'BUTTON') return true;
+        if (node.hasAttribute && (node.hasAttribute('onclick') || node.getAttribute('role') === 'button')) return true;
+        if (_findNavHref(node)) return true;
+        return false;
       }
       // Returns 'nav' when it forced a real URL change, else 'click'.
       function clickOrNavigate(node, kind, label) {
@@ -2102,6 +2157,7 @@ struct StreamWebView: UIViewRepresentable {
         scanScripts();
         // v2.37: harvest cross-origin iframes for drill-down.
         try { harvestIframes(); } catch(e){}
+        try { probePageState(); } catch(e){}
         document.querySelectorAll('video').forEach(function(v) {
           if (v.paused) v.play().catch(function(){});
         });

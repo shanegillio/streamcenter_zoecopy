@@ -150,6 +150,7 @@ struct TraversalLogView: View {
       case "clicked":         return "walk: clicked \(shortInfo(ev.info))"
       case "target":          return "target: \(shortInfo(ev.info))"
       case "card_dump":       return "card: \(shortInfo(ev.info))"
+      case "page_state":      return "page: \(shortInfo(ev.info))"
       case "category_click":  return "walk: category → \(shortInfo(ev.info))"
       case "click_failed":    return "walk: click failed (\(shortInfo(ev.info)))"
       case "auth_wall":       return "auth wall (\(shortInfo(ev.info)))"
@@ -364,6 +365,7 @@ struct TraversalSessionDetailView: View {
     case "stream_probed":   return "checkmark.shield"
     case "target":          return "scope"
     case "card_dump":       return "doc.text.magnifyingglass"
+    case "page_state":      return "rectangle.dashed"
     default: return "circle"
     }
   }
@@ -377,6 +379,7 @@ struct TraversalSessionDetailView: View {
     case "stream_probed": return .blue
     case "target": return .purple
     case "card_dump": return .indigo
+    case "page_state": return .teal
     default: return .secondary
     }
   }
