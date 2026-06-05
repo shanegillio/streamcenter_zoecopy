@@ -875,6 +875,25 @@ final class StreamWebViewBridge: ObservableObject {
           kind: 'auto_nav', info: ('' + info).slice(0,160), time: Date.now()
         })); } catch(e){}
       }
+      // Team tokens from the pair we're following, used to validate
+      // cross-origin deep links (real game URLs carry the slug).
+      var toks = [];
+      t.replace(/\\bvs\\b|@|—|–/g, ' ').split(/\\s+/).forEach(function(w){
+        if (w.length >= 4) toks.push(w);
+      });
+      // A homepage card link is only worth following if it stays on the
+      // same site (the site's own watch/game page) OR it's a cross-origin
+      // URL that carries a team token (a genuine deep link). Cross-origin,
+      // token-less links are betting/affiliate ads (playonrain → rainbet)
+      // that derail the walk into a casino. Reject those.
+      function navHrefOK(href){
+        if (!href) return false;
+        var u; try { u = new URL(href, location.href); } catch(e){ return true; }
+        if (u.host === location.host) return true;
+        var low = u.href.toLowerCase();
+        for (var i = 0; i < toks.length; i++){ if (low.indexOf(toks[i]) !== -1) return true; }
+        return false;
+      }
       function usableHref(h){
         if (!h) return false;
         h = ('' + h).trim();
@@ -882,7 +901,7 @@ final class StreamWebViewBridge: ObservableObject {
         var low = h.toLowerCase();
         if (low.indexOf('javascript:') === 0 || low.indexOf('mailto:') === 0 ||
             low.indexOf('tel:') === 0 || low.indexOf('#') === 0) return false;
-        return true;
+        return navHrefOK(h);
       }
       // Pull a navigable URL from common attributes on a single element.
       function hrefAttr(el){
@@ -979,10 +998,19 @@ final class StreamWebViewBridge: ObservableObject {
           }
         }
         // No reachable href — fall back to a synthetic click on the
-        // nearest clickable ancestor (handles pure-JS onclick cards).
+        // nearest clickable ancestor (handles pure-JS onclick cards). But
+        // if that ancestor is an <a> pointing off-site to an ad (its href
+        // failed navHrefOK), clicking it would just open the ad — skip it.
         var target = findClickableAncestor(e);
+        if (target && target.tagName === 'A') {
+          var rawHref = target.getAttribute('href');
+          if (rawHref && !navHrefOK(rawHref)) {
+            report('skip-ad ' + ('' + rawHref).slice(0,60));
+            return false;
+          }
+        }
         report('click ' + (target && target.tagName ? target.tagName : '?') +
-               ' no-href hrefAttr=' + (hrefAttr(target) ? 'Y' : 'N'));
+               ' no-href');
         robustClick(target);
         return true;
       }
@@ -1780,11 +1808,34 @@ struct StreamWebView: UIViewRepresentable {
             low.indexOf('tel:') === 0 || low.indexOf('#') === 0) return false;
         return true;
       }
+      // v2.63: team tokens from the tapped game, used to validate
+      // cross-origin links so we follow real deep links but not ads.
+      function _hrefTokens() {
+        var t = [], tg = window.__sc_target;
+        if (tg) [tg.home, tg.away].forEach(function(s){
+          s = (s || '').toLowerCase();
+          s.split('-').forEach(function(w){ if (w.length >= 4) t.push(w); });
+        });
+        return t;
+      }
+      // v2.63: a card href is only worth following if it stays on the same
+      // site (the site's own watch/game page) OR is a cross-origin URL
+      // carrying a team token (a genuine deep link). Cross-origin token-less
+      // hrefs are betting/affiliate ads (ntv.cx cards wrap a playonrain →
+      // rainbet link) that send the walk into a casino dead-end. Reject them.
+      function _navHrefOK(href) {
+        if (!href) return false;
+        var u; try { u = new URL(href, location.href); } catch(e){ return true; }
+        if (u.host === location.host) return true;
+        var low = u.href.toLowerCase(), toks = _hrefTokens();
+        for (var i = 0; i < toks.length; i++){ if (low.indexOf(toks[i]) !== -1) return true; }
+        return false;
+      }
       function _firstUsableAnchorHref(scope) {
         try {
           var as = scope.querySelectorAll && scope.querySelectorAll('a[href]');
           if (as) for (var i = 0; i < as.length; i++) {
-            var h = as[i].getAttribute('href'); if (_usableHref(h)) return h;
+            var h = as[i].getAttribute('href'); if (_usableHref(h) && _navHrefOK(h)) return h;
           }
         } catch(e){}
         return '';
@@ -1797,10 +1848,10 @@ struct StreamWebView: UIViewRepresentable {
       // returned '' → CLICKED-BUT-NO-NAV).
       function _findNavHref(el) {
         if (!el) return '';
-        try { if (el.tagName === 'A') { var h0 = el.getAttribute('href'); if (_usableHref(h0)) return h0; } } catch(e){}
+        try { if (el.tagName === 'A') { var h0 = el.getAttribute('href'); if (_usableHref(h0) && _navHrefOK(h0)) return h0; } } catch(e){}
         var n = el, lvl = 0;
         while (n && lvl < 6) {
-          if (n.tagName === 'A') { var h2 = n.getAttribute('href'); if (_usableHref(h2)) return h2; }
+          if (n.tagName === 'A') { var h2 = n.getAttribute('href'); if (_usableHref(h2) && _navHrefOK(h2)) return h2; }
           var h3 = _firstUsableAnchorHref(n);
           if (h3) return h3;
           n = n.parentElement; lvl++;
