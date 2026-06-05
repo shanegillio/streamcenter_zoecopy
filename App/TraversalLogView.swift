@@ -23,7 +23,9 @@ struct TraversalLogView: View {
             .padding(.vertical, 8)
         } else {
           ForEach(log.sessions) { session in
-            NavigationLink(value: session.id) {
+            NavigationLink {
+              TraversalSessionDetailView(session: session)
+            } label: {
               row(for: session)
             }
           }
@@ -32,13 +34,6 @@ struct TraversalLogView: View {
     }
     .navigationTitle("Traversal Log")
     .navigationBarTitleDisplayMode(.inline)
-    .navigationDestination(for: UUID.self) { id in
-      if let session = log.sessions.first(where: { $0.id == id }) {
-        TraversalSessionDetailView(session: session)
-      } else {
-        Text("Session not found").foregroundStyle(.secondary)
-      }
-    }
     .toolbar {
       if !log.sessions.isEmpty {
         ToolbarItem(placement: .topBarTrailing) {
