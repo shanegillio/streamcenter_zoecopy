@@ -1510,7 +1510,21 @@ struct StreamWebView: UIViewRepresentable {
         // Click (or, better, navigate to) the matching card immediately —
         // same pass it was seen. v2.56: prefer following the card's real
         // href so the URL actually changes.
-        if (targetEl && _walkClicks < _maxWalkClicks) {
+        // v2.59: prefer following the slug-href anchor — it carries both
+        // team names in its URL and is a guaranteed real navigation. Only
+        // fall back to clicking matched card text if there's no slug link.
+        var slugAnchor = null;
+        try { slugAnchor = findTargetByHrefSlug(); } catch(e){}
+        if (slugAnchor && _walkClicks < _maxWalkClicks &&
+            _walkClickedEls.indexOf(slugAnchor) === -1) {
+          _walkClickedEls.push(slugAnchor);
+          _walkClicks++;
+          _currentMirrorEl = slugAnchor;
+          _mirrorClickAt = Date.now();
+          postWalkEvent('slug', 'href="' + _slugScanStats.href + '"');
+          dumpCard(slugAnchor);
+          clickOrNavigate(slugAnchor, 'clicked', 'slug: ' + _slugScanStats.href);
+        } else if (targetEl && _walkClicks < _maxWalkClicks) {
           var node = findClickableAncestor(targetEl);
           if (node && _isReallyClickable(node) && _walkClickedEls.indexOf(node) === -1) {
             _walkClickedEls.push(node);
@@ -1902,6 +1916,53 @@ struct StreamWebView: UIViewRepresentable {
         return findClickableAncestor(bestEl);
       }
 
+      // v2.59: slug-href matcher — the strongest, most reliable signal.
+      // These sites route by team slug: the real game page is
+      // /mlb/atlanta-braves-toronto-blue-jays/1310742, i.e. BOTH teams are
+      // encoded in the URL. The text detector only matches visible "X vs Y"
+      // strings, so on an interstitial (buffstreams' /index18) it latches
+      // onto the page TITLE — a no-op link — and never follows the actual
+      // anchor whose href carries the slug. This scans every <a href> and
+      // returns the one whose URL contains tokens from BOTH teams. Because
+      // it returns a real anchor, clickOrNavigate forces location.href = it,
+      // which always produces a true navigation.
+      var _slugScanStats = { anchors: 0, matched: 0, href: '' };
+      function findTargetByHrefSlug() {
+        _slugScanStats = { anchors: 0, matched: 0, href: '' };
+        var tgt = window.__sc_target;
+        if (!tgt || !tgt.home || !tgt.away) return null;
+        var mk = function(slug) {
+          var t = [];
+          (slug || '').toLowerCase().split('-').forEach(function(w){ if (w.length >= 4) t.push(w); });
+          return t;
+        };
+        var ht = mk(tgt.home), at = mk(tgt.away);
+        if (!ht.length || !at.length) return null;
+        var as;
+        try { as = document.querySelectorAll('a[href]'); } catch(e) { return null; }
+        _slugScanStats.anchors = as.length;
+        var best = null, bestScore = 0;
+        var cap = Math.min(as.length, 2000);
+        for (var i = 0; i < cap; i++) {
+          var href = '';
+          try { href = as[i].getAttribute('href') || ''; } catch(e){}
+          if (!_usableHref(href)) continue;
+          var low = href.toLowerCase();
+          var hh = 0, aa = 0;
+          for (var k = 0; k < ht.length; k++) if (low.indexOf(ht[k]) !== -1) hh++;
+          for (var j = 0; j < at.length; j++) if (low.indexOf(at[j]) !== -1) aa++;
+          if (hh > 0 && aa > 0) {
+            var score = hh + aa;
+            if (score > bestScore) { bestScore = score; best = as[i]; }
+          }
+        }
+        if (best) {
+          _slugScanStats.matched = 1;
+          try { _slugScanStats.href = (best.getAttribute('href') || '').slice(0, 80); } catch(e){}
+        }
+        return best;
+      }
+
       // v2.54: unify the click path with the detector. harvestDetectedCards
       // (the "Found on this page" strip) reliably surfaces real game-pair
       // cards via _gameLinePattern, yet selectTargetGameElement /
@@ -2062,6 +2123,18 @@ struct StreamWebView: UIViewRepresentable {
         // page" detector exactly (same candidates, same regex), so if the
         // game is visible to the detector it is clickable here.
         var node = null;
+        try { node = findTargetByHrefSlug(); } catch(e){}
+        if (node) {
+          if (_walkClickedEls.indexOf(node) !== -1) return;
+          _walkClickedEls.push(node);
+          _walkClicks++;
+          _currentMirrorEl = node;
+          _mirrorClickAt = Date.now();
+          postWalkEvent('slug', 'href="' + _slugScanStats.href + '"');
+          dumpCard(node);
+          clickOrNavigate(node, 'clicked', 'slug: ' + _slugScanStats.href);
+          return;
+        }
         try { node = findTargetByPairScan(); } catch(e){}
         if (!node) node = selectTargetGameElement();
         // v2.51: selector-based matcher missed — try tree-walk fallback
