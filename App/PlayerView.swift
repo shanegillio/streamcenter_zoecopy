@@ -963,7 +963,14 @@ struct StreamWebView: UIViewRepresentable {
     let walkProxy = WeakScriptProxy(delegate: context.coordinator)
     config.userContentController.add(walkProxy, name: "streamWalk")
 
-    let popupJS = browseMode ? Self.popupRedirectJS : Self.popupSuppressJS
+    // v2.57: the walk also needs popups REDIRECTED, not suppressed. Many
+    // stream-site game cards have no <a href> — their onclick calls
+    // window.open(gameURL). popupSuppressJS turned that into a no-op, so
+    // we clicked the right card and went nowhere (CLICKED-BUT-NO-NAV).
+    // Redirecting window.open into a same-frame navigation lets the walk
+    // follow those cards. (The risk is an ad popup hijacking the frame,
+    // but a dropped navigation guarantees failure, so redirect wins.)
+    let popupJS = Self.popupRedirectJS
     config.userContentController.addUserScript(WKUserScript(
       source: popupJS, injectionTime: .atDocumentStart, forMainFrameOnly: false
     ))
@@ -1022,8 +1029,13 @@ struct StreamWebView: UIViewRepresentable {
     window.confirm = function(){return false;};
     window.prompt = function(){return '';};
     window.open = function(url){
-      if (url && typeof url === 'string' && url.indexOf('http') === 0) {
-        window.location.href = url;
+      if (url && typeof url === 'string') {
+        try {
+          var abs = new URL(url, window.location.href).href;
+          if (abs.indexOf('http') === 0) { window.location.href = abs; }
+        } catch(e) {
+          if (url.indexOf('http') === 0) { window.location.href = url; }
+        }
       }
       return null;
     };
@@ -2341,7 +2353,10 @@ struct StreamWebView: UIViewRepresentable {
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-      if browseMode, let url = navigationAction.request.url {
+      // v2.57: always follow new-window / target="_blank" requests in the
+      // same web view. Previously gated on browseMode, which meant the
+      // auto-walk dropped every popup-style game link (CLICKED-BUT-NO-NAV).
+      if let url = navigationAction.request.url {
         webView.load(URLRequest(url: url))
       }
       return nil
