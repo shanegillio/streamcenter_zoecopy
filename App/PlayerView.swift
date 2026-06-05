@@ -1476,6 +1476,7 @@ struct StreamWebView: UIViewRepresentable {
             _walkClicks++;
             _currentMirrorEl = node;
             _mirrorClickAt = Date.now();
+            dumpCard(node);
             clickOrNavigate(node, 'clicked', 'detected: ' + targetPair);
           }
         }
@@ -1598,21 +1599,59 @@ struct StreamWebView: UIViewRepresentable {
             low.indexOf('tel:') === 0 || low.indexOf('#') === 0) return false;
         return true;
       }
-      function _findNavHref(el) {
-        if (!el) return '';
-        try { if (el.tagName === 'A') { var h0 = el.getAttribute('href'); if (_usableHref(h0)) return h0; } } catch(e){}
+      function _firstUsableAnchorHref(scope) {
         try {
-          var as = el.querySelectorAll && el.querySelectorAll('a[href]');
+          var as = scope.querySelectorAll && scope.querySelectorAll('a[href]');
           if (as) for (var i = 0; i < as.length; i++) {
             var h = as[i].getAttribute('href'); if (_usableHref(h)) return h;
           }
         } catch(e){}
-        var n = el.parentElement, lvl = 0;
+        return '';
+      }
+      // v2.58: search the matched element, then climb its ancestors and at
+      // EACH level search that ancestor's whole subtree for a usable <a>.
+      // This catches the common card layout where the "X vs Y" text and the
+      // real "Watch" link are SIBLINGS inside a card container (the old
+      // version only saw self / descendant / direct-ancestor anchors and so
+      // returned '' → CLICKED-BUT-NO-NAV).
+      function _findNavHref(el) {
+        if (!el) return '';
+        try { if (el.tagName === 'A') { var h0 = el.getAttribute('href'); if (_usableHref(h0)) return h0; } } catch(e){}
+        var n = el, lvl = 0;
         while (n && lvl < 6) {
           if (n.tagName === 'A') { var h2 = n.getAttribute('href'); if (_usableHref(h2)) return h2; }
+          var h3 = _firstUsableAnchorHref(n);
+          if (h3) return h3;
           n = n.parentElement; lvl++;
         }
         return '';
+      }
+      // v2.58: one-time structural ground-truth dump of a card we're about
+      // to act on, so we can SEE on-device what these sites actually use
+      // (anchor? onclick? sibling link? nothing?) instead of guessing.
+      var _dumpedCards = [];
+      function dumpCard(node) {
+        try {
+          if (!node || _dumpedCards.indexOf(node) !== -1) return;
+          _dumpedCards.push(node);
+          var parts = [];
+          parts.push('tag=' + node.tagName);
+          var href = node.getAttribute && node.getAttribute('href');
+          parts.push('href=' + (href ? ('' + href).slice(0, 40) : '-'));
+          parts.push('onclick=' + (node.hasAttribute && node.hasAttribute('onclick') ? 'Y' : 'N'));
+          parts.push('role=' + ((node.getAttribute && node.getAttribute('role')) || '-'));
+          var box = node;
+          for (var u = 0; u < 3 && box.parentElement; u++) box = box.parentElement;
+          var as = (box.querySelectorAll ? box.querySelectorAll('a[href]') : []);
+          parts.push('aIn=' + as.length);
+          var hs = [];
+          for (var i = 0; i < as.length && i < 2; i++) {
+            var hh = as[i].getAttribute('href');
+            hs.push((hh || '').slice(0, 30));
+          }
+          if (hs.length) parts.push('a=' + hs.join('|'));
+          postWalkEvent('card_dump', parts.join(' '));
+        } catch(e){ postWalkEvent('card_dump', 'err ' + e); }
       }
       // Returns 'nav' when it forced a real URL change, else 'click'.
       function clickOrNavigate(node, kind, label) {
@@ -2009,6 +2048,7 @@ struct StreamWebView: UIViewRepresentable {
             _currentMirrorEl = catNode;
             _mirrorClickAt = Date.now();
             var catBlob = readableTextFromElement(catNode);
+            dumpCard(catNode);
             clickOrNavigate(catNode, 'category_click', catBlob);
             return;
           }
