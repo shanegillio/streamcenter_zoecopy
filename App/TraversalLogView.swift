@@ -154,6 +154,7 @@ struct TraversalLogView: View {
       case "slug":            return "slug → \(shortInfo(ev.info))"
       case "auto_follow":     return "auto-tap → \(shortInfo(ev.info))"
       case "auto_nav":        return "auto-nav \(shortInfo(ev.info))"
+      case "resolved":        return "resolved → \(shortInfo(ev.info))"
       case "popup_blocked":   return "blocked pop-up \(shortInfo(ev.info))"
       case "category_click":  return "walk: category → \(shortInfo(ev.info))"
       case "click_failed":    return "walk: click failed (\(shortInfo(ev.info)))"
@@ -373,6 +374,7 @@ struct TraversalSessionDetailView: View {
     case "slug":            return "link.circle.fill"
     case "auto_follow":     return "hand.tap.fill"
     case "auto_nav":        return "arrow.uturn.right.circle.fill"
+    case "resolved":        return "scope"
     case "popup_blocked":   return "hand.raised.fill"
     default: return "circle"
     }
@@ -391,6 +393,7 @@ struct TraversalSessionDetailView: View {
     case "slug": return .green
     case "auto_follow": return .green
     case "auto_nav": return .green
+    case "resolved": return .mint
     default: return .secondary
     }
   }

@@ -79,7 +79,11 @@ final class SourceRegistry {
     if let saved = UserDefaults.standard.array(forKey: Self.customSourcesKey) as? [[String: String]] {
       for entry in saved {
         if let name = entry["name"], let urlStr = entry["url"], let url = URL(string: urlStr) {
-          all.append(AnyStreamSource(CustomStreamSource(name: name, baseURL: url), builtIn: false))
+          // A source is always the site root. Normalizing on load self-heals
+          // any entry a prior version persisted as a deep game link (which
+          // would make every fetch start from one stale game page).
+          let root = GameURLResolver.rootURL(url)
+          all.append(AnyStreamSource(CustomStreamSource(name: name, baseURL: root), builtIn: false))
         }
       }
     }
@@ -103,8 +107,11 @@ final class SourceRegistry {
   func replaceSourceURL(originalID: String, newURL: URL) {
     guard let idx = sources.firstIndex(where: { $0.id == originalID }) else { return }
     let old = sources[idx]
+    // Persist the site root only. Play-time host-fallback may hand us a deep
+    // game URL that just failed; saving that as the source's base would pin
+    // the whole source to one stale game page. Keep only the working host.
     let replacement = AnyStreamSource(
-      CustomStreamSource(name: old.name, baseURL: newURL),
+      CustomStreamSource(name: old.name, baseURL: GameURLResolver.rootURL(newURL)),
       builtIn: old.isBuiltIn
     )
     sources[idx] = replacement
@@ -139,7 +146,10 @@ final class SourceRegistry {
     if !cleaned.hasPrefix("http://") && !cleaned.hasPrefix("https://") {
       cleaned = "https://" + cleaned
     }
-    guard let url = URL(string: cleaned), url.host != nil else { return false }
+    guard let parsed = URL(string: cleaned), parsed.host != nil else { return false }
+    // Store the site root; the app derives game URLs from there by reading
+    // the site, so a pasted deep link shouldn't pin the source to one game.
+    let url = GameURLResolver.rootURL(parsed)
     guard !sources.contains(where: { $0.baseURL.host == url.host }) else { return false }
     let source = AnyStreamSource(CustomStreamSource(name: name, baseURL: url), builtIn: false)
     sources.append(source)

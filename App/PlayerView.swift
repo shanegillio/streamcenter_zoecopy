@@ -17,6 +17,10 @@ struct PlayerView: View {
   @State private var rulesReady = false
   @State private var attempts: [SourceAttempt] = []
   @State private var currentAttemptIdx: Int = 0
+  /// v2.64: true while we're reading the source site to find the exact
+  /// game-page URL before loading it. Shows the loading overlay so the
+  /// WebView never briefly loads (and walks) the homepage first.
+  @State private var resolving = false
   @State private var allFailed: Bool = false
   /// Per-source budget. v2.38: relaxed to 20 s because we no longer
   /// auto-advance — the user manually picks "Try next source" if they
@@ -30,7 +34,7 @@ struct PlayerView: View {
   struct SourceAttempt: Identifiable {
     let id = UUID()
     let sourceID: String
-    let pageURL: URL
+    var pageURL: URL
     var status: Status = .pending
     enum Status { case pending, trying, failed }
   }
@@ -89,6 +93,13 @@ struct PlayerView: View {
             noSourcesEnabledView
           } else if allFailed {
             retryUI
+          } else if resolving {
+            StreamLoadingOverlay(
+              attemptIndex: currentAttemptIdx,
+              totalAttempts: attempts.count,
+              sourceName: currentAttemptIdx < attempts.count
+                ? sourceName(for: attempts[currentAttemptIdx].sourceID) : ""
+            )
           } else if !attempts.isEmpty, currentAttemptIdx < attempts.count {
             let current = attempts[currentAttemptIdx]
             // v2.38: verification layout — top URL strip, visible
@@ -223,7 +234,7 @@ struct PlayerView: View {
         SourceHealth.shared.recordAttempt(
           sourceID: attempts[currentAttemptIdx].sourceID
         )
-        startTraversalSession()
+        await startCurrentAttempt()
       }
     }
     .onDisappear {
@@ -648,6 +659,40 @@ struct PlayerView: View {
     }
   }
 
+  /// v2.64: read the source site and find this game's exact page URL, then
+  /// point the current attempt at it so the WebView loads it directly —
+  /// instead of loading the homepage and relying on the synthetic-click
+  /// walk. No-op when the attempt already targets a deep link (a
+  /// listing-time match) or when reading the site finds no confident URL
+  /// (the walk then handles it as before).
+  @MainActor
+  private func resolveCurrentAttemptIfNeeded() async {
+    guard currentAttemptIdx < attempts.count else { return }
+    let url = attempts[currentAttemptIdx].pageURL
+    let path = url.path
+    guard path.isEmpty || path == "/" else { return }
+    resolving = true
+    defer { resolving = false }
+    guard let resolved = await GameURLResolver.resolve(game: game, sourceRoot: url),
+          resolved.absoluteString != url.absoluteString else { return }
+    guard currentAttemptIdx < attempts.count else { return }
+    attempts[currentAttemptIdx].pageURL = resolved
+  }
+
+  /// Resolve the current attempt's direct URL, then open its traversal
+  /// session. Used on first load and on every advance so the session's
+  /// recorded URL reflects what we actually load.
+  @MainActor
+  private func startCurrentAttempt() async {
+    await resolveCurrentAttemptIfNeeded()
+    startTraversalSession()
+    if let sid = traversalSessionID, currentAttemptIdx < attempts.count {
+      TraversalLog.shared.recordEvent(
+        sid, kind: "resolved", info: attempts[currentAttemptIdx].pageURL.absoluteString
+      )
+    }
+  }
+
   /// User-driven advance to next attempt. Resets per-attempt state.
   private func advanceAttempt() {
     guard currentAttemptIdx + 1 < attempts.count else { return }
@@ -665,7 +710,7 @@ struct PlayerView: View {
     detectedCards = []
     authWallReason = nil
     currentAttemptIdx += 1
-    startTraversalSession()
+    Task { await startCurrentAttempt() }
   }
 
   // v2.34: shown when the user has no sources toggled on AND the game
@@ -760,6 +805,7 @@ struct PlayerView: View {
             SourceHealth.shared.recordAttempt(
               sourceID: attempts[currentAttemptIdx].sourceID
             )
+            Task { await startCurrentAttempt() }
           }
         } label: {
           Label("Try Again", systemImage: "arrow.clockwise")
