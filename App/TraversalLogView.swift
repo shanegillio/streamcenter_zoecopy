@@ -154,6 +154,7 @@ struct TraversalLogView: View {
       case "slug":            return "slug → \(shortInfo(ev.info))"
       case "auto_follow":     return "auto-tap → \(shortInfo(ev.info))"
       case "auto_nav":        return "auto-nav \(shortInfo(ev.info))"
+      case "popup_blocked":   return "blocked pop-up \(shortInfo(ev.info))"
       case "category_click":  return "walk: category → \(shortInfo(ev.info))"
       case "click_failed":    return "walk: click failed (\(shortInfo(ev.info)))"
       case "auth_wall":       return "auth wall (\(shortInfo(ev.info)))"
@@ -372,6 +373,7 @@ struct TraversalSessionDetailView: View {
     case "slug":            return "link.circle.fill"
     case "auto_follow":     return "hand.tap.fill"
     case "auto_nav":        return "arrow.uturn.right.circle.fill"
+    case "popup_blocked":   return "hand.raised.fill"
     default: return "circle"
     }
   }
@@ -381,7 +383,7 @@ struct TraversalSessionDetailView: View {
     case "click_failed", "load_failure": return .red
     case "scan", "cat_scan": return .yellow
     case "iframe_drill": return .cyan
-    case "auth_wall": return .orange
+    case "auth_wall", "popup_blocked": return .orange
     case "stream_probed": return .blue
     case "target": return .purple
     case "card_dump": return .indigo

@@ -434,6 +434,7 @@ struct PlayerView: View {
     case "clicked": return "hand.tap.fill"
     case "category_click": return "folder.fill"
     case "auto_nav": return "arrow.uturn.right.circle.fill"
+    case "popup_blocked": return "hand.raised.fill"
     case "click_failed": return "xmark.octagon.fill"
     case "scan", "no_match", "cat_scan": return "magnifyingglass"
     default: return "circle"
@@ -442,6 +443,7 @@ struct PlayerView: View {
   private func walkColor(for kind: String) -> Color {
     switch kind {
     case "clicked", "category_click", "auto_nav": return .green
+    case "popup_blocked": return .orange
     case "click_failed": return .red
     case "scan", "no_match", "cat_scan": return .yellow
     default: return .white.opacity(0.6)
@@ -452,6 +454,7 @@ struct PlayerView: View {
     case "clicked": return "Walk clicked: \(event.info.replacingOccurrences(of: "card: ", with: ""))"
     case "category_click": return "Walk → category: \(event.info)"
     case "auto_nav": return "Auto-tap: \(event.info)"
+    case "popup_blocked": return "Blocked pop-up: \(event.info)"
     case "click_failed": return "Walk click error: \(event.info)"
     case "scan": return "Walk: \(event.info)"
     case "cat_scan": return "CategoryLink: \(event.info)"
@@ -1152,6 +1155,8 @@ struct StreamWebView: UIViewRepresentable {
     webView.backgroundColor = .black
     webView.isOpaque = false
     context.coordinator.webView = webView
+    context.coordinator.sourceHost = url.host
+    context.coordinator.targetTokens = Self.slugTokens(for: targetGame)
     // v2.40: expose the WebView to the bridge so PlayerView can
     // dispatch evaluateJavaScript commands (detected-card taps).
     bridge?.webView = webView
@@ -1178,19 +1183,37 @@ struct StreamWebView: UIViewRepresentable {
     window.prompt = function(){return '';};
   """
 
+  // v2.63: window.open is used two ways on these sites: (1) legit game
+  // cards whose onclick calls window.open(gameURL) — we WANT to follow
+  // those — and (2) ad/scam popups (buffstreams' game page opens
+  // therestgroup.com → awarnets.com "Hacker is tracking you"). The old
+  // version redirected the main frame to BOTH, so ads hijacked playback.
+  // Now we only redirect to a destination that stays on the same site OR
+  // carries a team token (a real deep link); cross-site, token-less
+  // popups are dropped, keeping us on the source page. alert/confirm/
+  // prompt are neutralized so scam dialogs can't block the walk.
   static let popupRedirectJS = """
     window.alert = function(){};
     window.confirm = function(){return false;};
     window.prompt = function(){return '';};
     window.open = function(url){
-      if (url && typeof url === 'string') {
-        try {
-          var abs = new URL(url, window.location.href).href;
-          if (abs.indexOf('http') === 0) { window.location.href = abs; }
-        } catch(e) {
-          if (url.indexOf('http') === 0) { window.location.href = url; }
+      if (!url || typeof url !== 'string') return null;
+      var abs;
+      try { abs = new URL(url, window.location.href).href; } catch(e){ abs = url; }
+      if (abs.indexOf('http') !== 0) return null;
+      var ok = false;
+      try {
+        var u = new URL(abs);
+        if (u.host === location.host) ok = true;
+        else {
+          var tg = window.__sc_target, toks = [], low = abs.toLowerCase();
+          if (tg) [tg.home, tg.away].forEach(function(s){
+            (s || '').toLowerCase().split('-').forEach(function(w){ if (w.length >= 4) toks.push(w); });
+          });
+          for (var i = 0; i < toks.length; i++){ if (low.indexOf(toks[i]) !== -1) { ok = true; break; } }
         }
-      }
+      } catch(e){ ok = false; }
+      if (ok) window.location.href = abs;
       return null;
     };
   """
@@ -1200,22 +1223,34 @@ struct StreamWebView: UIViewRepresentable {
   /// the right league-named category link when the user-target game
   /// isn't on the homepage. nil game → __sc_target=null → shim falls
   /// back to generic clicking.
-  static func slugConfigJS(for game: Game?) -> String {
-    func slug(_ s: String) -> String {
-      let folded = s.folding(options: [.diacriticInsensitive, .caseInsensitive],
-                             locale: .current)
-      let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789- ")
-      let scalars = folded.unicodeScalars.filter { allowed.contains($0) }
-      let stripped = String(String.UnicodeScalarView(scalars))
-      let collapsed = stripped.replacingOccurrences(of: "[ ]+", with: "-",
-                                                    options: .regularExpression)
-      return collapsed
-        .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        .replacingOccurrences(of: "'", with: "\\'")
+  static func teamSlug(_ s: String) -> String {
+    let folded = s.folding(options: [.diacriticInsensitive, .caseInsensitive],
+                           locale: .current)
+    let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789- ")
+    let scalars = folded.unicodeScalars.filter { allowed.contains($0) }
+    let stripped = String(String.UnicodeScalarView(scalars))
+    let collapsed = stripped.replacingOccurrences(of: "[ ]+", with: "-",
+                                                  options: .regularExpression)
+    return collapsed
+      .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+      .replacingOccurrences(of: "'", with: "\\'")
+  }
+
+  /// Team-name tokens (≥4 chars) used natively to recognize cross-site
+  /// deep links to the tapped game (vs. cross-site ad redirects).
+  static func slugTokens(for game: Game?) -> [String] {
+    guard let g = game else { return [] }
+    var toks: [String] = []
+    for name in [teamSlug(g.homeTeam), teamSlug(g.awayTeam)] {
+      for w in name.split(separator: "-") where w.count >= 4 { toks.append(String(w).lowercased()) }
     }
+    return toks
+  }
+
+  static func slugConfigJS(for game: Game?) -> String {
     guard let g = game else { return "window.__sc_target = null;" }
-    let h = slug(g.homeTeam)
-    let a = slug(g.awayTeam)
+    let h = teamSlug(g.homeTeam)
+    let a = teamSlug(g.awayTeam)
     let l = g.league.rawValue.replacingOccurrences(of: "'", with: "\\'")
     return "window.__sc_target = {home: '\(h)', away: '\(a)', league: '\(l)'};"
   }
@@ -2604,6 +2639,45 @@ struct StreamWebView: UIViewRepresentable {
     /// to feel laggy.
     private var iframeCommitTask: Task<Void, Never>?
 
+    // v2.63: navigation pinning. The streamer's own pages are the only
+    // place we expect to legitimately land (the stream is an iframe on a
+    // source-site game page). Page-initiated top-frame redirects/popups to
+    // OTHER sites are ads/scams (therestgroup.com → awarnets.com). We pin
+    // to `sourceHost`, allow cross-site loads only when WE initiate them
+    // (iframe drill, host fallback) or the URL carries a team token, and
+    // cancel everything else at the top frame.
+    var sourceHost: String?
+    var targetTokens: [String] = []
+    private var intendedLoadURLs = Set<String>()
+
+    func noteIntendedLoad(_ url: URL) { intendedLoadURLs.insert(url.absoluteString) }
+
+    private func registrableSuffix(_ host: String) -> String {
+      let parts = host.lowercased().split(separator: ".")
+      guard parts.count >= 2 else { return host.lowercased() }
+      return parts.suffix(2).joined(separator: ".")
+    }
+    private func sameSite(_ a: String?, _ b: String?) -> Bool {
+      guard let a, let b else { return false }
+      return registrableSuffix(a) == registrableSuffix(b)
+    }
+    private func carriesTargetToken(_ url: URL) -> Bool {
+      guard !targetTokens.isEmpty else { return false }
+      let low = url.absoluteString.lowercased()
+      return targetTokens.contains { low.contains($0) }
+    }
+    /// Should this top-frame destination be allowed? Same-site as the
+    /// source (or the page we're currently on), a deep link carrying a
+    /// team token, or a load we initiated ourselves.
+    private func isAllowedTopNav(_ url: URL, current: URL?) -> Bool {
+      if intendedLoadURLs.contains(url.absoluteString) { return true }
+      if sourceHost == nil { return true }  // not yet pinned
+      if sameSite(url.host, sourceHost) { return true }
+      if sameSite(url.host, current?.host) { return true }
+      if carriesTargetToken(url) { return true }
+      return false
+    }
+
     init(onStreamURLFound: ((URL, [HTTPCookie]) -> Void)?,
          onStreamProbed: ((URL, Bool) -> Void)? = nil,
          onNavigation: ((URL) -> Void)? = nil,
@@ -2722,18 +2796,49 @@ struct StreamWebView: UIViewRepresentable {
           request.setValue("\(scheme)://\(host)", forHTTPHeaderField: "Origin")
         }
       }
+      noteIntendedLoad(pick.url)  // cross-host embed drill is intentional
       webView.load(request)
     }
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-      // v2.57: always follow new-window / target="_blank" requests in the
-      // same web view. Previously gated on browseMode, which meant the
-      // auto-walk dropped every popup-style game link (CLICKED-BUT-NO-NAV).
-      if let url = navigationAction.request.url {
+      // v2.57: follow new-window / target="_blank" requests in the same
+      // web view (many game cards' onclick is window.open(gameURL)).
+      // v2.63: but ONLY when the destination stays on the source site or
+      // carries a team token — a cross-site, token-less new window is an
+      // ad/scam popup (buffstreams → therestgroup → awarnets), and loading
+      // it would yank us off the game page. Drop those and stay put.
+      if let url = navigationAction.request.url,
+         isAllowedTopNav(url, current: webView.url) {
+        noteIntendedLoad(url)
         webView.load(URLRequest(url: url))
+      } else if let url = navigationAction.request.url {
+        let event = StreamWebView.WalkEvent(
+          kind: "popup_blocked", info: url.host ?? url.absoluteString,
+          at: Date(), detectedCards: []
+        )
+        DispatchQueue.main.async { self.onWalkEvent?(event) }
       }
       return nil
+    }
+
+    // v2.63: auto-dismiss native JS dialogs. Scam ad frames spam
+    // alert()/confirm()/prompt() ("(17) System notification") to coerce
+    // taps; popupRedirectJS neutralizes the in-page ones, but anything
+    // that still reaches WebKit's native panel we silently dismiss
+    // (cancel/empty) so the user is never blocked or tricked.
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+      completionHandler()
+    }
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+      completionHandler(false)
+    }
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
+                 defaultText: String?, initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping (String?) -> Void) {
+      completionHandler(nil)
     }
 
     // v2.38: fire onNavigation on every top-frame commit so the
@@ -2799,6 +2904,8 @@ struct StreamWebView: UIViewRepresentable {
               break
             }
           }
+          self.sourceHost = fallback.host ?? self.sourceHost
+          self.noteIntendedLoad(fallback)
           webView.load(req)
         } else {
           self.onLoadFailed?(url, nsErr.localizedDescription)
@@ -2819,6 +2926,25 @@ struct StreamWebView: UIViewRepresentable {
          action.navigationType == .linkActivated,
          let host = action.request.url?.host,
          host != webView.url?.host {
+        decisionHandler(.cancel); return
+      }
+      // v2.63: pin the top frame to the source site. Page-initiated
+      // cross-site top-frame redirects (location.href, meta-refresh,
+      // <a target=_top> ads) arrive here as .other/.redirect — these
+      // are the popup/scam hijacks (therestgroup.com → awarnets.com).
+      // popupRedirectJS only covers window.open; this catches the rest.
+      // We never block self-initiated loads (intendedLoadURLs), same-site
+      // hops, or token-bearing deep links.
+      if !browseMode,
+         let url = action.request.url,
+         action.targetFrame?.isMainFrame == true,
+         action.navigationType != .linkActivated,
+         !isAllowedTopNav(url, current: webView.url) {
+        let event = StreamWebView.WalkEvent(
+          kind: "popup_blocked", info: url.host ?? url.absoluteString,
+          at: Date(), detectedCards: []
+        )
+        DispatchQueue.main.async { self.onWalkEvent?(event) }
         decisionHandler(.cancel); return
       }
       decisionHandler(.allow)
