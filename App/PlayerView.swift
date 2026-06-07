@@ -1189,8 +1189,21 @@ final class StreamWebViewBridge: ObservableObject {
             return false;
           }
         }
+        // v2.72: before a synthetic click (which JS-router cards ignore as
+        // untrusted), try executing an inline onclick handler directly so a
+        // runtime router call like goWatch('kobra', 2387854) actually fires.
+        var ocText = '';
+        var hn = target, hlvl = 0;
+        while (hn && hlvl < 6) {
+          var oc = hn.getAttribute && hn.getAttribute('onclick');
+          if (oc) { ocText = oc; break; }
+          hn = hn.parentElement; hlvl++;
+        }
         report('click ' + (target && target.tagName ? target.tagName : '?') +
-               ' no-href');
+               ' no-href' + (ocText ? ' oc="' + ocText.slice(0, 90) + '"' : ''));
+        if (ocText) {
+          try { (new Function(ocText)).call(hn); return true; } catch(e){}
+        }
         robustClick(target);
         return true;
       }
@@ -2201,6 +2214,28 @@ struct StreamWebView: UIViewRepresentable {
         if (_findNavHref(node)) return true;
         return false;
       }
+      // v2.72: run an inline onclick handler's code directly. Sites like
+      // ntv.cx route game cards through a JS handler — goWatch('kobra',
+      // 2387854) — that builds /watch/kobra/<slug>-<id> at runtime. A
+      // synthetic click is ignored (untrusted), and the URL is in no
+      // attribute we can read, so the only way through is to execute the
+      // handler itself. Walks up to the nearest element with an onclick
+      // ATTRIBUTE (handlers bound via addEventListener aren't reachable this
+      // way) and evaluates it with `this` bound to that element. Reports the
+      // handler text so a routing scheme we still can't fire is visible.
+      function _runInlineHandler(node) {
+        var n = node, lvl = 0;
+        while (n && lvl < 6) {
+          var oc = n.getAttribute && n.getAttribute('onclick');
+          if (oc) {
+            postWalkEvent('handler', oc.slice(0, 120));
+            try { (new Function(oc)).call(n); return true; }
+            catch(e) { postWalkEvent('click_failed', 'handler: ' + String(e).slice(0, 60)); return false; }
+          }
+          n = n.parentElement; lvl++;
+        }
+        return false;
+      }
       // Returns 'nav' when it forced a real URL change, else 'click'.
       function clickOrNavigate(node, kind, label) {
         var href = _findNavHref(node);
@@ -2213,7 +2248,13 @@ struct StreamWebView: UIViewRepresentable {
           }
         }
         postWalkEvent(kind, label);
-        try { robustClick(node); } catch(e){ postWalkEvent('click_failed', String(e)); }
+        // Try executing an inline handler first — for JS-router cards it's the
+        // only thing that fires; for everything else robustClick is the path.
+        var ran = false;
+        try { ran = _runInlineHandler(node); } catch(e){}
+        if (!ran) {
+          try { robustClick(node); } catch(e){ postWalkEvent('click_failed', String(e)); }
+        }
         return 'click';
       }
 
