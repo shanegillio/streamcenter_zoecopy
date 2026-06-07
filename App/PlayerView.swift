@@ -2289,21 +2289,28 @@ struct StreamWebView: UIViewRepresentable {
           if (_boundedHit(low, abbrs[j]) && hits.indexOf(abbrs[j]) === -1) hits.push(abbrs[j]);
         return hits;
       }
-      // v2.70: a true pair match requires home AND away to be identified by
-      // DIFFERENT tokens. Both LA teams (Dodgers, Angels) and an LA Sparks
-      // (WNBA) game all contain the shared city word "angeles", so the old
-      // "_sideHit(home) && _sideHit(away)" fired on a wrong-sport game where
-      // only the city matched. Demanding two distinct tokens means the city
-      // word alone can never satisfy both sides — a distinctive token
-      // (nickname/abbr) for each team must be present.
+      // v2.70: a token only identifies a side if it is EXCLUSIVE to that side
+      // — i.e. not also a token of the other team. Two same-city teams share
+      // the city words ("angeles", "los angeles"), so those can never
+      // disambiguate them.
+      function _tokExclusive(tok, otherSide) {
+        var ol = _longToks(otherSide), oa = _abbrToks(otherSide);
+        for (var i = 0; i < ol.length; i++) if (ol[i] === tok) return false;
+        for (var j = 0; j < oa.length; j++) if (oa[j] === tok) return false;
+        return true;
+      }
+      // v2.71: a true pair match requires home AND away to each be hit by a
+      // token EXCLUSIVE to that side. The earlier "two different tokens" rule
+      // was fooled by an LA-vs-LA game: it saw home-hit "angeles" ≠ away-hit
+      // "los angeles" and called the WNBA "Portland Fire vs Los Angeles
+      // Sparks" a match, since both are *different* shared city strings.
+      // Filtering to exclusive tokens means only a genuinely distinctive
+      // token (nickname/abbr — "dodgers" vs "angels") can satisfy a side.
       function _pairHit(blob) {
-        var hh = _collectHits(blob, 'home');
-        var aa = _collectHits(blob, 'away');
-        if (!hh.length || !aa.length) return false;
-        for (var i = 0; i < hh.length; i++)
-          for (var j = 0; j < aa.length; j++)
-            if (hh[i] !== aa[j]) return true;
-        return false;
+        var hh = _collectHits(blob, 'home').filter(function(t){ return _tokExclusive(t, 'away'); });
+        if (!hh.length) return false;
+        var aa = _collectHits(blob, 'away').filter(function(t){ return _tokExclusive(t, 'home'); });
+        return aa.length > 0;
       }
       // v2.70: does this URL name a DIFFERENT sport/league than the target's?
       // Streameast routes by league segment (/mlb/…, /wnba/…); an MLB game
