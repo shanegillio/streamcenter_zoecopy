@@ -2957,6 +2957,23 @@ struct StreamWebView: UIViewRepresentable {
          authPathFragments.contains(where: { path.contains($0) }) {
         return
       }
+      // v2.68: skip chat / comment / social embeds. Stream-site game pages
+      // routinely carry a cross-origin chat box (crackstreams embeds
+      // st.chatango.com) alongside the player iframe. Those are never the
+      // stream, but the drill-down would happily navigate the top frame into
+      // one — yanking us off the game page onto a chat widget (the
+      // st.chatango.com/h5/... jump seen in the traversal log). Reject them
+      // the same way auth/SSO frames are rejected.
+      let nonPlayerHostFragments = [
+        "chatango.com", "disqus.com", "disquscdn.com", "cbox.ws",
+        "minnit.chat", "tawk.to", "crisp.chat", "intercom.io",
+        "facebook.com", "facebook.net", "fbcdn.net", "twitter.com",
+        "x.com", "instagram.com", "discord.com", "discordapp.com",
+        "t.me", "telegram.org",
+      ]
+      if nonPlayerHostFragments.contains(where: { host == $0 || host.hasSuffix("." + $0) }) {
+        return
+      }
       let score = (json["score"] as? Int) ?? 500
       if visitedIframeURLs.contains(urlStr) { return }  // don't loop
       // Track best; if first candidate, schedule a commit after a
