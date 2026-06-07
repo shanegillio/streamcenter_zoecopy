@@ -97,6 +97,7 @@ final class SourceRegistry {
     } else {
       enabledSourceIDs = Set(all.map(\.id))
     }
+    probeSourcesMissingTemplates()
   }
 
   // MARK: - Mirror replacement (called when HostFallback finds a working TLD variant)
@@ -158,7 +159,39 @@ final class SourceRegistry {
     // the user explicitly toggles one off in Settings.
     enabledSourceIDs.insert(source.id)
     persistCustomSources()
+    // v2.65: learn this source's URL template in the background so on-tap
+    // resolution can jump straight to the right game page instead of
+    // walking the homepage. No-op (keeps the walk) if probing can't learn
+    // a confident shape.
+    Self.probe(root: url)
     return true
+  }
+
+  /// Probes a source root and stores any learned template. Fire-and-forget.
+  private static func probe(root: URL) {
+    let host = root.host
+    Task {
+      guard let template = await SourceProbe.probe(root: root) else { return }
+      await MainActor.run { SourceTemplateStore.shared.set(template, forHost: host) }
+    }
+  }
+
+  /// v2.65: probe custom sources that don't yet have a template (e.g. ones
+  /// added before templating existed). Deferred so it doesn't compete with
+  /// first-screen loading.
+  private func probeSourcesMissingTemplates() {
+    let roots = sources.filter { !$0.isBuiltIn }.map(\.baseURL)
+    Task {
+      try? await Task.sleep(nanoseconds: 8_000_000_000)
+      for root in roots {
+        let host = root.host
+        let existing = await MainActor.run { SourceTemplateStore.shared.template(forHost: host) }
+        guard existing == nil else { continue }
+        if let template = await SourceProbe.probe(root: root) {
+          await MainActor.run { SourceTemplateStore.shared.set(template, forHost: host) }
+        }
+      }
+    }
   }
 
   func removeSource(_ source: AnyStreamSource) {

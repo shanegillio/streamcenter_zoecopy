@@ -18,6 +18,17 @@ enum GameURLResolver {
   /// site didn't surface a confident match (caller falls back to the walk).
   static func resolve(game: Game, sourceRoot: URL, timeout: TimeInterval = 12) async -> URL? {
     let root = rootURL(sourceRoot)
+
+    // v2.65: a learned URL template (see SourceProbe) gives the exact game
+    // page with no homepage scrape and no DOM walk — the most reliable path,
+    // and immune to the wrong-game category misfire. Falls through to reading
+    // the site when there's no template or it can't fill every placeholder.
+    if let host = root.host,
+       let template = await MainActor.run(body: { SourceTemplateStore.shared.template(forHost: host) }),
+       let templated = template.url(for: game, root: root) {
+      return templated
+    }
+
     let rootLinks = await scrape(root, timeout: timeout)
     guard !rootLinks.isEmpty else { return nil }
 
@@ -35,25 +46,33 @@ enum GameURLResolver {
 
   // MARK: - Matching
 
-  /// A link is the game when both team names (or, for solo events, the one
-  /// team) appear in its href or text. The URL slug
+  /// A link is the game when both teams (or, for solo events, the one team)
+  /// appear in its href or text. The URL slug
   /// (`/mlb/san-francisco-giants-chicago-cubs/123`) is the strongest,
   /// least-spammy signal, so href is checked first.
+  ///
+  /// Each team is matched via its long tokens (full name + nickname words,
+  /// ≥4 chars, plain substring) OR its abbreviation (e.g. "wsh"/"ari", 2–3
+  /// chars, matched only as a whole word). The abbreviation path is what
+  /// lets abbreviation-routed sites — ppv.to's `/live/mlb/2026-06-07/wsh-ari`
+  /// — resolve directly instead of bouncing through the synthetic-click walk.
   private static func matchGame(in links: [ScrapedLink], game: Game, base: URL) -> URL? {
-    let home = HomeView.normalizeForMatch(game.homeTeam)
-    let away = HomeView.normalizeForMatch(game.awayTeam)
-    guard !home.isEmpty else { return nil }
+    let index = TeamAliasIndex.shared
+    guard index.hasTokens(forTeam: game.homeTeam) else { return nil }
+    let soloEvent = HomeView.normalizeForMatch(game.awayTeam).isEmpty
 
     for link in links {
-      let hrefKey = HomeView.normalizeForMatch(link.href)
-      if hrefKey.contains(home), away.isEmpty || hrefKey.contains(away),
+      let key = " " + HomeView.normalizeForMatch(link.href) + " "
+      if index.matches(team: game.homeTeam, inPadded: key),
+         soloEvent || index.matches(team: game.awayTeam, inPadded: key),
          let url = absolute(link.href, base: base) {
         return url
       }
     }
     for link in links {
-      let textKey = HomeView.normalizeForMatch(link.text)
-      if textKey.contains(home), away.isEmpty || textKey.contains(away),
+      let key = " " + HomeView.normalizeForMatch(link.text) + " "
+      if index.matches(team: game.homeTeam, inPadded: key),
+         soloEvent || index.matches(team: game.awayTeam, inPadded: key),
          let url = absolute(link.href, base: base) {
         return url
       }

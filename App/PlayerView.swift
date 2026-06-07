@@ -1321,22 +1321,51 @@ struct StreamWebView: UIViewRepresentable {
   }
 
   /// Team-name tokens (≥4 chars) used natively to recognize cross-site
-  /// deep links to the tapped game (vs. cross-site ad redirects).
+  /// deep links to the tapped game (vs. cross-site ad redirects). v2.65:
+  /// includes alias-derived long tokens (nicknames like "nationals") so
+  /// abbreviation/nickname-routed deep links count as the target too.
   static func slugTokens(for game: Game?) -> [String] {
     guard let g = game else { return [] }
-    var toks: [String] = []
+    var toks = Set<String>()
     for name in [teamSlug(g.homeTeam), teamSlug(g.awayTeam)] {
-      for w in name.split(separator: "-") where w.count >= 4 { toks.append(String(w).lowercased()) }
+      for w in name.split(separator: "-") where w.count >= 4 { toks.insert(String(w).lowercased()) }
     }
-    return toks
+    for team in [g.homeTeam, g.awayTeam] {
+      for t in TeamAliasIndex.shared.tokens(forTeam: team).long { toks.insert(t) }
+    }
+    return Array(toks)
   }
 
+  /// Renders a `[String]` as a JS array literal with single-quoted, escaped
+  /// elements: `["a","b'c"]` → `['a','b\'c']`.
+  private static func jsArray(_ items: [String]) -> String {
+    let inner = items
+      .map { "'" + $0.replacingOccurrences(of: "\\", with: "\\\\")
+                     .replacingOccurrences(of: "'", with: "\\'") + "'" }
+      .joined(separator: ",")
+    return "[\(inner)]"
+  }
+
+  /// v2.65: the shim's `__sc_target` now carries, per side, the canonical
+  /// slug PLUS alias-derived match tokens. `homeTok`/`awayTok` are long
+  /// (≥4) tokens matched as substrings (nicknames); `homeAbbr`/`awayAbbr`
+  /// are 2–3 char abbreviations (e.g. "wsh"/"ari") that abbreviation-routed
+  /// sites use in their URLs — these are matched only as bounded slug
+  /// segments. This is what lets the walk recognize `…/wsh-ari` as the
+  /// Nationals-vs-Diamondbacks game instead of falling back to a wrong-game
+  /// category guess.
   static func slugConfigJS(for game: Game?) -> String {
     guard let g = game else { return "window.__sc_target = null;" }
     let h = teamSlug(g.homeTeam)
     let a = teamSlug(g.awayTeam)
     let l = g.league.rawValue.replacingOccurrences(of: "'", with: "\\'")
-    return "window.__sc_target = {home: '\(h)', away: '\(a)', league: '\(l)'};"
+    let homeTokens = TeamAliasIndex.shared.tokens(forTeam: g.homeTeam)
+    let awayTokens = TeamAliasIndex.shared.tokens(forTeam: g.awayTeam)
+    return """
+    window.__sc_target = {home: '\(h)', away: '\(a)', league: '\(l)', \
+    homeTok: \(jsArray(homeTokens.long)), awayTok: \(jsArray(awayTokens.long)), \
+    homeAbbr: \(jsArray(homeTokens.abbr)), awayAbbr: \(jsArray(awayTokens.abbr))};
+    """
   }
 
   /// v2.32 shim: simple URL string posting (no structured payload),
@@ -1709,23 +1738,8 @@ struct StreamWebView: UIViewRepresentable {
         // this same DOM pass — eliminating the stale-chip divergence
         // where tryAdvance's separate live scan missed a card the
         // (sticky) "Found on this page" strip still showed.
-        var ht = [], at = [];
         var tgt = window.__sc_target;
-        if (tgt && tgt.home && tgt.away) {
-          var mkTok = function(slug) {
-            var t = []; slug = (slug || '').toLowerCase();
-            if (slug.length >= 4) t.push(slug);
-            slug.split('-').forEach(function(w){ if (w.length >= 4) t.push(w); });
-            return t;
-          };
-          ht = mkTok(tgt.home); at = mkTok(tgt.away);
-        }
-        function hasTok(text, toks) {
-          for (var k = 0; k < toks.length; k++) {
-            if (text.indexOf(toks[k]) !== -1) return true;
-          }
-          return false;
-        }
+        var haveToks = _hasAnyToks('home') && _hasAnyToks('away');
         var targetEl = null, targetSize = Infinity, targetPair = '';
         var nPairs = 0, firstPair = '';
         var cap = Math.min(candidates.length, 1200);
@@ -1739,9 +1753,9 @@ struct StreamWebView: UIViewRepresentable {
           nPairs++;
           if (!firstPair) firstPair = pair;
           // Does this detected pair match the tapped game? (order-free)
-          if (ht.length && at.length && blob.length < targetSize) {
+          if (haveToks && blob.length < targetSize) {
             var pl = (m[1] + ' ' + m[2]).toLowerCase();
-            if (hasTok(pl, ht) && hasTok(pl, at)) {
+            if (_sideHit(pl, 'home') && _sideHit(pl, 'away')) {
               targetEl = el; targetSize = blob.length; targetPair = pair;
             }
           }
@@ -1948,6 +1962,11 @@ struct StreamWebView: UIViewRepresentable {
         if (u.host === location.host) return true;
         var low = u.href.toLowerCase(), toks = _hrefTokens();
         for (var i = 0; i < toks.length; i++){ if (low.indexOf(toks[i]) !== -1) return true; }
+        // v2.65: also accept cross-origin deep links routed by team
+        // abbreviation (e.g. embedindia.st/embed/mlb/.../wsh-ari) — require
+        // BOTH sides so a lone 2-char abbr in an ad URL can't sneak through.
+        if (_hasAnyToks('home') && _hasAnyToks('away') &&
+            _sideHit(low, 'home') && _sideHit(low, 'away')) return true;
         return false;
       }
       function _firstUsableAnchorHref(scope) {
@@ -2084,26 +2103,72 @@ struct StreamWebView: UIViewRepresentable {
       // v2.53: nHome/nAway count elements containing ONLY one team's
       // tokens — distinguishes "team names not in DOM at all" from "both
       // teams in DOM but never co-located in the same wrapper element".
+      // v2.65: shared team-token model. __sc_target carries, per side, long
+      // tokens (homeTok/awayTok, ≥4 chars — full slug words + nicknames) and
+      // short abbreviations (homeAbbr/awayAbbr, e.g. "wsh"/"ari"). Long tokens
+      // match as plain substrings; abbreviations match ONLY as a bounded slug
+      // segment (delimited by non-alphanumerics) so "ari" can't fire inside
+      // "marina" or a date. This unifies what every matcher below considers a
+      // "team hit", and is what lets abbreviation-routed URLs (ppv.to's
+      // /live/mlb/2026-06-07/wsh-ari) resolve to the right game.
+      function _longToks(side) {
+        var tg = window.__sc_target; if (!tg) return [];
+        var explicit = tg[side + 'Tok'] || [];
+        var t = [];
+        for (var i = 0; i < explicit.length; i++) {
+          var e = ('' + explicit[i]).toLowerCase(); if (e.length >= 4) t.push(e);
+        }
+        // Fall back to slug-derived tokens so an older/empty Tok array still
+        // matches the canonical name.
+        var slug = (tg[side] || '').toLowerCase();
+        if (slug.length >= 4 && t.indexOf(slug) === -1) t.push(slug);
+        slug.split('-').forEach(function(w){ if (w.length >= 4 && t.indexOf(w) === -1) t.push(w); });
+        return t;
+      }
+      function _abbrToks(side) {
+        var tg = window.__sc_target; if (!tg) return [];
+        var ab = tg[side + 'Abbr'] || [];
+        var t = [];
+        for (var i = 0; i < ab.length; i++) {
+          var a = ('' + ab[i]).toLowerCase();
+          if (a.length >= 2 && a.length <= 3) t.push(a);
+        }
+        return t;
+      }
+      function _isWordChar(c) { return c >= 'a' && c <= 'z' || c >= '0' && c <= '9'; }
+      // Bounded substring search: true iff `needle` appears in `hay` delimited
+      // by a non-word char (or string edge) on both sides.
+      function _boundedHit(hay, needle) {
+        var idx = hay.indexOf(needle);
+        while (idx !== -1) {
+          var before = idx === 0 ? '' : hay.charAt(idx - 1);
+          var after = hay.charAt(idx + needle.length);
+          if ((!before || !_isWordChar(before)) && (!after || !_isWordChar(after))) return true;
+          idx = hay.indexOf(needle, idx + 1);
+        }
+        return false;
+      }
+      // Does `blob` (already lowercased or not) mention this side's team?
+      function _sideHit(blob, side) {
+        var low = ('' + blob).toLowerCase();
+        var longs = _longToks(side);
+        for (var i = 0; i < longs.length; i++) if (low.indexOf(longs[i]) !== -1) return true;
+        var abbrs = _abbrToks(side);
+        for (var j = 0; j < abbrs.length; j++) if (_boundedHit(low, abbrs[j])) return true;
+        return false;
+      }
+      function _hasAnyToks(side) {
+        return _longToks(side).length > 0 || _abbrToks(side).length > 0;
+      }
+
       var _scanStats = { candidates: 0, matched: 0, nHome: 0, nAway: 0, sample: '', rejSample: '' };
 
       function selectTargetGameElement() {
         _scanStats = { candidates: 0, matched: 0, nHome: 0, nAway: 0, sample: '', rejSample: '' };
         if (!window.__sc_target) return null;
-        var home = (window.__sc_target.home || '').toLowerCase();
-        var away = (window.__sc_target.away || '').toLowerCase();
-        if (!home || !away) return null;
-        function tokens(slug) {
-          var t = [];
-          if (slug.length >= 4) t.push(slug);
-          slug.split('-').forEach(function(w){ if (w.length >= 4) t.push(w); });
-          return t;
-        }
-        var ht = tokens(home), at = tokens(away);
-        if (!ht.length || !at.length) return null;
+        if (!_hasAnyToks('home') || !_hasAnyToks('away')) return null;
         function bothPresent(text) {
-          var lower = text.toLowerCase();
-          return ht.some(function(tok){ return lower.indexOf(tok) !== -1; })
-              && at.some(function(tok){ return lower.indexOf(tok) !== -1; });
+          return _sideHit(text, 'home') && _sideHit(text, 'away');
         }
         var candidates;
         try {
@@ -2157,17 +2222,7 @@ struct StreamWebView: UIViewRepresentable {
       function findTargetByTreeWalk() {
         _scanStats = { candidates: 0, matched: 0, nHome: 0, nAway: 0, sample: '', rejSample: '' };
         if (!window.__sc_target) return null;
-        var home = (window.__sc_target.home || '').toLowerCase();
-        var away = (window.__sc_target.away || '').toLowerCase();
-        if (!home || !away) return null;
-        function tokens(slug) {
-          var t = [];
-          if (slug.length >= 4) t.push(slug);
-          slug.split('-').forEach(function(w){ if (w.length >= 4) t.push(w); });
-          return t;
-        }
-        var ht = tokens(home), at = tokens(away);
-        if (!ht.length || !at.length) return null;
+        if (!_hasAnyToks('home') || !_hasAnyToks('away')) return null;
         var allEls;
         try { allEls = document.querySelectorAll('*'); } catch(e) { return null; }
         var cap = Math.min(allEls.length, 5000);
@@ -2183,13 +2238,7 @@ struct StreamWebView: UIViewRepresentable {
               tag === 'body' || tag === 'svg' || tag === 'path') continue;
           var blob = readableTextFromElement(el).toLowerCase();
           if (blob.length < 6 || blob.length > 1200) continue;
-          var hh = false, aa = false;
-          for (var k = 0; k < ht.length && !hh; k++) {
-            if (blob.indexOf(ht[k]) !== -1) hh = true;
-          }
-          for (var m = 0; m < at.length && !aa; m++) {
-            if (blob.indexOf(at[m]) !== -1) aa = true;
-          }
+          var hh = _sideHit(blob, 'home'), aa = _sideHit(blob, 'away');
           if (hh && aa) {
             _scanStats.matched++;
             if (blob.length < bestSize) {
@@ -2225,15 +2274,8 @@ struct StreamWebView: UIViewRepresentable {
       var _slugScanStats = { anchors: 0, matched: 0, href: '' };
       function findTargetByHrefSlug() {
         _slugScanStats = { anchors: 0, matched: 0, href: '' };
-        var tgt = window.__sc_target;
-        if (!tgt || !tgt.home || !tgt.away) return null;
-        var mk = function(slug) {
-          var t = [];
-          (slug || '').toLowerCase().split('-').forEach(function(w){ if (w.length >= 4) t.push(w); });
-          return t;
-        };
-        var ht = mk(tgt.home), at = mk(tgt.away);
-        if (!ht.length || !at.length) return null;
+        if (!window.__sc_target) return null;
+        if (!_hasAnyToks('home') || !_hasAnyToks('away')) return null;
         var as;
         try { as = document.querySelectorAll('a[href]'); } catch(e) { return null; }
         _slugScanStats.anchors = as.length;
@@ -2244,11 +2286,13 @@ struct StreamWebView: UIViewRepresentable {
           try { href = as[i].getAttribute('href') || ''; } catch(e){}
           if (!_usableHref(href)) continue;
           var low = href.toLowerCase();
-          var hh = 0, aa = 0;
-          for (var k = 0; k < ht.length; k++) if (low.indexOf(ht[k]) !== -1) hh++;
-          for (var j = 0; j < at.length; j++) if (low.indexOf(at[j]) !== -1) aa++;
-          if (hh > 0 && aa > 0) {
-            var score = hh + aa;
+          // v2.65: match home + away via long tokens (substring) or
+          // abbreviations (bounded). Score prefers abbreviation hits since a
+          // URL carrying both team abbreviations is an unambiguous deep link.
+          if (_sideHit(low, 'home') && _sideHit(low, 'away')) {
+            var score = 2;
+            if (_abbrToks('home').some(function(a){ return _boundedHit(low, a); })) score++;
+            if (_abbrToks('away').some(function(a){ return _boundedHit(low, a); })) score++;
             if (score > bestScore) { bestScore = score; best = as[i]; }
           }
         }
@@ -2272,23 +2316,7 @@ struct StreamWebView: UIViewRepresentable {
       function findTargetByPairScan() {
         _pairScanStats = { cands: 0, pairs: 0, matched: 0, sample: '', rejSample: '' };
         if (!window.__sc_target) return null;
-        var home = (window.__sc_target.home || '').toLowerCase();
-        var away = (window.__sc_target.away || '').toLowerCase();
-        if (!home || !away) return null;
-        function tokens(slug) {
-          var t = [];
-          if (slug.length >= 4) t.push(slug);
-          slug.split('-').forEach(function(w){ if (w.length >= 4) t.push(w); });
-          return t;
-        }
-        var ht = tokens(home), at = tokens(away);
-        if (!ht.length || !at.length) return null;
-        function hasTok(text, toks) {
-          for (var k = 0; k < toks.length; k++) {
-            if (text.indexOf(toks[k]) !== -1) return true;
-          }
-          return false;
-        }
+        if (!_hasAnyToks('home') || !_hasAnyToks('away')) return null;
         var candidates;
         try {
           candidates = document.querySelectorAll(
@@ -2312,7 +2340,7 @@ struct StreamWebView: UIViewRepresentable {
           // matches if BOTH teams' tokens appear somewhere in the pair
           // (the regex already proved it's an "X vs Y" card).
           var pair = (m[1] + ' ' + m[2]).toLowerCase();
-          if (hasTok(pair, ht) && hasTok(pair, at)) {
+          if (_sideHit(pair, 'home') && _sideHit(pair, 'away')) {
             _pairScanStats.matched++;
             if (blob.length < bestSize) {
               bestSize = blob.length;
@@ -2416,6 +2444,20 @@ struct StreamWebView: UIViewRepresentable {
           // Reject multi-league nav/footer blobs (lists many leagues).
           if (_countLeagueWords(blob) >= 3) continue;
           var hrefLow = href.toLowerCase();
+          // v2.65: reject INDIVIDUAL GAME links. On abbreviation-routed sites
+          // every game card's href carries the league key (/live/mlb/<date>/
+          // <teams>), so the old finder happily scored a specific game (the
+          // featured Red Sox–Yankees card) as the "MLB category" and followed
+          // the wrong game. A real category/listing link is not a single game:
+          // it has no "X vs Y" text and no date segment in its URL.
+          if (_gameLinePattern.test(txt)) {
+            _catScanStats.rejSample = 'game-text:' + txt.trim().slice(0, 60);
+            continue;
+          }
+          if (/\\d{4}-\\d{2}-\\d{2}/.test(hrefLow) || /\\/\\d{8}(\\/|$)/.test(hrefLow)) {
+            _catScanStats.rejSample = 'game-date:' + hrefLow.slice(0, 60);
+            continue;
+          }
           var score = 0;
           for (var k2 = 0; k2 < keys.length; k2++) {
             if (hrefLow.indexOf(keys[k2]) !== -1) { score += 100; break; }
