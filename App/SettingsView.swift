@@ -31,14 +31,6 @@ struct SettingsView: View {
           }
           .padding(.vertical, 2)
         }
-        NavigationLink(destination: SourceStatsView()) {
-          HStack(spacing: 12) {
-            settingsIcon(systemName: "chart.bar.fill", color: .teal)
-            Text("Source Stats")
-              .foregroundStyle(Color(.label))
-          }
-          .padding(.vertical, 2)
-        }
         NavigationLink(destination: TraversalLogView()) {
           HStack(spacing: 12) {
             settingsIcon(systemName: "list.bullet.rectangle.fill", color: .indigo)
