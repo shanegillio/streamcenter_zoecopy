@@ -1500,28 +1500,57 @@ struct StreamWebView: UIViewRepresentable {
         'fileone', 'streamlare', 'embedsito'
       ];
 
-      function _iframePriorityScore(el) {
-        // Lower = more eager. Heuristic order matches the plan.
-        var hostMatch = 9999;
-        try {
-          var host = (new URL(el.src || el.getAttribute('src') || '', location.href)).host.toLowerCase();
-          for (var i = 0; i < _knownEmbedHosts.length; i++) {
-            if (host.indexOf(_knownEmbedHosts[i]) !== -1) { hostMatch = 100; break; }
-          }
-        } catch(e){}
-        var ancestorBoost = 9999;
+      // v2.68: positively identify a video-player iframe instead of
+      // drilling into whatever cross-origin frame happens to score "best".
+      // Returns a priority score (lower = drill sooner) only when the iframe
+      // shows at least one affirmative player signal; returns -1 to skip it.
+      // The signals are structural and source-agnostic — landscape video
+      // geometry, the standards-based media-permission attributes a player
+      // advertises, a player/video/stream container, and (as a priority hint
+      // only) a known embed host. Chat boxes, comment widgets, and sidebars
+      // are portrait, carry no media perms, and live in non-player
+      // containers, so they fail to qualify without being named anywhere.
+      function _iframePlayerScore(el) {
+        if (!el) return -1;
+        var score = 500, hit = false;
+
+        // Geometry: a portrait frame is a chat box / sidebar, never a video
+        // player — disqualify outright. A wide, sizeable frame is a positive
+        // signal and sets drill priority by area.
+        var w = parseInt(el.getAttribute('width') || el.clientWidth || 0, 10) || 0;
+        var h = parseInt(el.getAttribute('height') || el.clientHeight || 0, 10) || 0;
+        if (w > 0 && h > 0) {
+          if (h > w * 1.2) return -1;                 // portrait → not a player
+          if (w >= 280) { hit = true; score = Math.min(score, Math.max(0, 1000 - w * h)); }
+        }
+
+        // Media-permission attributes: the standards-based way an embed marks
+        // itself a player (autoplay / fullscreen / encrypted-media).
+        var allow = (el.getAttribute('allow') || '').toLowerCase();
+        if (el.hasAttribute('allowfullscreen') || el.hasAttribute('webkitallowfullscreen') ||
+            allow.indexOf('autoplay') !== -1 || allow.indexOf('fullscreen') !== -1 ||
+            allow.indexOf('encrypted-media') !== -1) {
+          hit = true; score = Math.min(score, 80);
+        }
+
+        // Player-ish container: the iframe lives inside an element whose
+        // class/id names it a player / video / stream / embed surface.
         var anc = el.parentElement;
         for (var lvl = 0; lvl < 4 && anc; lvl++) {
           var sig = ((anc.className || '') + ' ' + (anc.id || '')).toLowerCase();
-          if (/player|video|stream|embed|frame/.test(sig)) { ancestorBoost = 50; break; }
+          if (/player|video|stream|embed/.test(sig)) { hit = true; score = Math.min(score, 120); break; }
           anc = anc.parentElement;
         }
-        // Larger iframes are more likely to be the actual player.
-        var sizePenalty = 9999;
-        var w = parseInt(el.getAttribute('width') || el.clientWidth || 0, 10) || 0;
-        var h = parseInt(el.getAttribute('height') || el.clientHeight || 0, 10) || 0;
-        if (w * h > 0) sizePenalty = Math.max(0, 1000 - (w * h));
-        return Math.min(hostMatch, ancestorBoost, sizePenalty, 500);
+
+        // Known embed/player host — a strong priority hint, not a requirement.
+        try {
+          var host = (new URL(el.src || el.getAttribute('src') || '', location.href)).host.toLowerCase();
+          for (var i = 0; i < _knownEmbedHosts.length; i++) {
+            if (host.indexOf(_knownEmbedHosts[i]) !== -1) { hit = true; score = Math.min(score, 100); break; }
+          }
+        } catch(e){}
+
+        return hit ? score : -1;
       }
 
       function reportIframe(srcRaw, el) {
@@ -1534,8 +1563,12 @@ struct StreamWebView: UIViewRepresentable {
           if (isAdHost(resolved)) return;
         } catch(e) { return; }
         if (_seenIframes[resolved]) return;
+        // v2.68: only surface iframes that positively look like a video
+        // player. Non-players (chat, comments, social) score -1 and are
+        // never drilled into — so we stay on the game page.
+        var score = _iframePlayerScore(el);
+        if (score < 0) return;
         _seenIframes[resolved] = 1;
-        var score = el ? _iframePriorityScore(el) : 500;
         try {
           window.webkit.messageHandlers.streamIframe.postMessage(
             JSON.stringify({ url: resolved, score: score })
@@ -2955,23 +2988,6 @@ struct StreamWebView: UIViewRepresentable {
                                "/log-in", "/auth", "/oauth"]
       if authHostPrefixes.contains(where: { host.hasPrefix($0) }) ||
          authPathFragments.contains(where: { path.contains($0) }) {
-        return
-      }
-      // v2.68: skip chat / comment / social embeds. Stream-site game pages
-      // routinely carry a cross-origin chat box (crackstreams embeds
-      // st.chatango.com) alongside the player iframe. Those are never the
-      // stream, but the drill-down would happily navigate the top frame into
-      // one — yanking us off the game page onto a chat widget (the
-      // st.chatango.com/h5/... jump seen in the traversal log). Reject them
-      // the same way auth/SSO frames are rejected.
-      let nonPlayerHostFragments = [
-        "chatango.com", "disqus.com", "disquscdn.com", "cbox.ws",
-        "minnit.chat", "tawk.to", "crisp.chat", "intercom.io",
-        "facebook.com", "facebook.net", "fbcdn.net", "twitter.com",
-        "x.com", "instagram.com", "discord.com", "discordapp.com",
-        "t.me", "telegram.org",
-      ]
-      if nonPlayerHostFragments.contains(where: { host == $0 || host.hasSuffix("." + $0) }) {
         return
       }
       let score = (json["score"] as? Int) ?? 500
