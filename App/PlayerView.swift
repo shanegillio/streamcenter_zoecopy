@@ -1089,12 +1089,17 @@ final class StreamWebViewBridge: ObservableObject {
         if (!el || !el.getAttribute) return '';
         var direct = el.getAttribute('href');
         if (usableHref(direct) && hrefNamesGame(direct)) return direct;
+        var keys = ['data-href','data-url','data-link','data-src','data-watch','data-play','data-stream'];
+        // data-* may be a plain URL → accept directly.
+        for (var k = 0; k < keys.length; k++){
+          var dv = el.getAttribute(keys[k]);
+          if (dv && usableHref(dv) && hrefNamesGame(dv)) return dv;
+        }
+        // onclick is JS code — only regex-extract a quoted URL from it.
         var srcs = [];
         var oc = el.getAttribute('onclick'); if (oc) srcs.push(oc);
-        var keys = ['data-href','data-url','data-link','data-src','data-watch','data-play','data-stream'];
-        for (var k = 0; k < keys.length; k++){ var v = el.getAttribute(keys[k]); if (v) srcs.push(v); }
+        for (var k2 = 0; k2 < keys.length; k2++){ var v = el.getAttribute(keys[k2]); if (v) srcs.push(v); }
         for (var s = 0; s < srcs.length; s++){
-          if (usableHref(srcs[s]) && hrefNamesGame(srcs[s])) return srcs[s];
           var re = /['"]((?:https?:\\/\\/|\\/)[^'"]+)['"]/g, m;
           while ((m = re.exec(srcs[s])) !== null){ if (usableHref(m[1]) && hrefNamesGame(m[1])) return m[1]; }
         }
@@ -2128,15 +2133,51 @@ struct StreamWebView: UIViewRepresentable {
       // URL in a handler is exactly the /matches/kobra trap.)
       function _gameHrefFromHandler(el) {
         if (!el || !el.getAttribute) return '';
+        var dataAttrs = ['data-href','data-url','data-link','data-src','data-watch','data-play','data-stream'];
+        // data-* attributes may hold a plain URL → accept directly.
+        for (var a = 0; a < dataAttrs.length; a++) {
+          var dv = el.getAttribute(dataAttrs[a]);
+          if (dv && _hrefNamesGame(dv)) return dv;
+        }
+        // onclick is JS code, not a URL — only regex-extract a quoted URL from
+        // it (the old code returned the raw "location.href='…'" string).
         var srcs = [];
         var oc = el.getAttribute('onclick'); if (oc) srcs.push(oc);
-        var attrs = ['data-href','data-url','data-link','data-src','data-watch','data-play','data-stream'];
-        for (var a = 0; a < attrs.length; a++) { var v = el.getAttribute(attrs[a]); if (v) srcs.push(v); }
+        for (var a2 = 0; a2 < dataAttrs.length; a2++) { var v = el.getAttribute(dataAttrs[a2]); if (v) srcs.push(v); }
         for (var s = 0; s < srcs.length; s++) {
-          var str = srcs[s];
-          if (_hrefNamesGame(str)) return str;
           var re = /['"]((?:https?:\\/\\/|\\/)[^'"]+)['"]/g, m;
-          while ((m = re.exec(str)) !== null) { if (_hrefNamesGame(m[1])) return m[1]; }
+          while ((m = re.exec(srcs[s])) !== null) { if (_hrefNamesGame(m[1])) return m[1]; }
+        }
+        return '';
+      }
+      // v2.74: scan the page for ANY URL that names the game — in an <a href>,
+      // an onclick handler (ntv.cx: <div class="match-card" onclick=
+      // "location.href='/watch/kobra/<teams>-<id>'">), or a data-* attribute.
+      // This is the most reliable advance on JS-rendered grids where the card
+      // is a <div> with no anchor and a synthetic click is ignored: we read
+      // the destination straight out of the markup and navigate to it.
+      function findGameUrl() {
+        if (!window.__sc_target) return '';
+        if (!_hasAnyToks('home') || !_hasAnyToks('away')) return '';
+        var els;
+        try {
+          els = document.querySelectorAll(
+            'a[href],[onclick],[data-href],[data-url],[data-link],[data-src],[data-watch],[data-play],[data-stream]');
+        } catch(e){ return ''; }
+        var cap = Math.min(els.length, 3000);
+        for (var i = 0; i < cap; i++) {
+          var el = els[i];
+          var cands = [];
+          var href = el.getAttribute && el.getAttribute('href');
+          if (href) cands.push(href);
+          var dataAttrs = ['data-href','data-url','data-link','data-src','data-watch','data-play','data-stream'];
+          for (var d = 0; d < dataAttrs.length; d++) { var dv = el.getAttribute && el.getAttribute(dataAttrs[d]); if (dv) cands.push(dv); }
+          var oc = el.getAttribute && el.getAttribute('onclick');
+          if (oc) { var re = /['"]((?:https?:\\/\\/|\\/)[^'"]+)['"]/g, m; while ((m = re.exec(oc)) !== null) cands.push(m[1]); }
+          for (var c = 0; c < cands.length; c++) {
+            var u = cands[c];
+            if (_usableHref(u) && _navHrefOK(u) && _pairHit(('' + u).toLowerCase())) return u;
+          }
         }
         return '';
       }
@@ -2747,6 +2788,22 @@ struct StreamWebView: UIViewRepresentable {
         // and shadow the real main-frame walk.
         if (window.top !== window) return;
         if (_walkClicks >= _maxWalkClicks) return;
+        // v2.74: strongest, most reliable advance — a URL anywhere on the page
+        // (anchor href, onclick handler, or data-* attr) that names the game.
+        // Handles JS-rendered grids (ntv.cx) whose cards are <div onclick=
+        // "location.href='/watch/…'"> with no anchor: read the destination out
+        // of the markup and navigate straight to it, no click required.
+        try {
+          var gurl = findGameUrl();
+          if (gurl) {
+            var gabs = gurl; try { gabs = new URL(gurl, location.href).href; } catch(e){}
+            if (gabs && gabs.split('#')[0] !== location.href.split('#')[0]) {
+              _walkClicks++;
+              postWalkEvent('slug', 'url="' + gabs.slice(0, 120) + '"');
+              try { location.href = gabs; return; } catch(e){}
+            }
+          }
+        } catch(e){}
         // Step 3: element matching target game.
         // v2.54: pair-scan first — it mirrors the working "Found on this
         // page" detector exactly (same candidates, same regex), so if the
