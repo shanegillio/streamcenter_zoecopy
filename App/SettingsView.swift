@@ -387,6 +387,14 @@ struct SourceTemplateEditorView: View {
         }
       }
 
+      if let status = store.status(forHost: host) {
+        Section("Last Probe") {
+          Text(status)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+
       Section {
         Button {
           save()
@@ -468,10 +476,11 @@ struct SourceTemplateEditorView: View {
   private func reprobe() {
     probing = true
     Task {
-      let learned = await SourceProbe.probe(root: root)
+      let result = await SourceProbe.probeWithStatus(root: root)
       await MainActor.run {
         probing = false
-        if let learned {
+        store.setStatus(result.status, forHost: host)
+        if let learned = result.template {
           store.set(learned, forHost: host)
           pattern = learned.pathPattern
           dateFormat = learned.dateFormat

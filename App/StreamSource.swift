@@ -171,8 +171,13 @@ final class SourceRegistry {
   private static func probe(root: URL) {
     let host = root.host
     Task {
-      guard let template = await SourceProbe.probe(root: root) else { return }
-      await MainActor.run { SourceTemplateStore.shared.set(template, forHost: host) }
+      let result = await SourceProbe.probeWithStatus(root: root)
+      await MainActor.run {
+        SourceTemplateStore.shared.setStatus(result.status, forHost: host)
+        if let template = result.template {
+          SourceTemplateStore.shared.set(template, forHost: host)
+        }
+      }
     }
   }
 
@@ -187,8 +192,12 @@ final class SourceRegistry {
         let host = root.host
         let existing = await MainActor.run { SourceTemplateStore.shared.template(forHost: host) }
         guard existing == nil else { continue }
-        if let template = await SourceProbe.probe(root: root) {
-          await MainActor.run { SourceTemplateStore.shared.set(template, forHost: host) }
+        let result = await SourceProbe.probeWithStatus(root: root)
+        await MainActor.run {
+          SourceTemplateStore.shared.setStatus(result.status, forHost: host)
+          if let template = result.template {
+            SourceTemplateStore.shared.set(template, forHost: host)
+          }
         }
       }
     }

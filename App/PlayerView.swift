@@ -86,6 +86,14 @@ struct PlayerView: View {
   /// clickFirstMatching path) on the current page. Reset on navigation so
   /// each page gets one auto-follow attempt per matched pair.
   @State private var autoFollowedPairs: Set<String> = []
+  /// v2.66: consecutive "found the card but clicking it goes nowhere"
+  /// (CLICKED-BUT-NO-NAV) reports on the current page. When the walk keeps
+  /// re-identifying the target but can never open it — a dead-end link, or a
+  /// game with no stream on this source — we stop after a few strikes and
+  /// move on instead of looping forever. Reset on any real navigation, stream
+  /// capture, or page change.
+  @State private var noNavStrikes = 0
+  private static let maxNoNavStrikes = 4
 
   var body: some View {
     ZStack {
@@ -483,6 +491,7 @@ struct PlayerView: View {
     case "auto_nav": return "arrow.uturn.right.circle.fill"
     case "popup_blocked": return "hand.raised.fill"
     case "click_failed": return "xmark.octagon.fill"
+    case "dead_end": return "nosign"
     case "scan", "no_match", "cat_scan": return "magnifyingglass"
     default: return "circle"
     }
@@ -491,7 +500,7 @@ struct PlayerView: View {
     switch kind {
     case "clicked", "category_click", "auto_nav": return .green
     case "popup_blocked": return .orange
-    case "click_failed": return .red
+    case "click_failed", "dead_end": return .red
     case "scan", "no_match", "cat_scan": return .yellow
     default: return .white.opacity(0.6)
     }
@@ -505,6 +514,7 @@ struct PlayerView: View {
     case "click_failed": return "Walk click error: \(event.info)"
     case "scan": return "Walk: \(event.info)"
     case "cat_scan": return "CategoryLink: \(event.info)"
+    case "dead_end": return "Couldn't open on this source — moving on"
     case "no_match": return "Walk: no matching card yet (\(event.info))"
     default: return "Walk: \(event.kind) — \(event.info)"
     }
@@ -567,6 +577,7 @@ struct PlayerView: View {
 
   private func appendCandidate(url: URL, cookies: [HTTPCookie], referer: URL) {
     if capturedStreams.contains(where: { $0.url == url }) { return }
+    noNavStrikes = 0  // we're capturing streams — making progress
     capturedStreams.append(StreamCandidate(url: url, cookies: cookies, referer: referer))
   }
 
@@ -583,6 +594,7 @@ struct PlayerView: View {
     case "target":
       lastWalkEvent = event
       autoFollowTarget(event.info)
+      trackTargetProgress(event.info)
     case "cat_scan":
       lastWalkEvent = event
       autoFollowCategory(event.info)
@@ -631,6 +643,44 @@ struct PlayerView: View {
     }
   }
 
+  /// v2.66: watch the shim's `target` verdicts to break the dead-end loop.
+  /// `CLICKED-BUT-NO-NAV` means we found the right card but clicking it didn't
+  /// move the page — a non-navigable card (e.g. a game with no stream on this
+  /// source). After a few in a row with no progress, give up on this source.
+  private func trackTargetProgress(_ info: String) {
+    if info.hasPrefix("CLICKED-BUT-NO-NAV") {
+      noNavStrikes += 1
+      if noNavStrikes >= Self.maxNoNavStrikes { handleDeadEnd() }
+    } else if info.hasPrefix("MATCH") || info.hasPrefix("ON-PAGE-NO-CARD") {
+      // A fresh match attempt or an arrival — not a dead end.
+      noNavStrikes = 0
+    }
+  }
+
+  /// The current source can identify the game but can't open it. Mark it
+  /// failed and move to the next source, or surface the retry UI when this
+  /// was the last one.
+  private func handleDeadEnd() {
+    guard currentAttemptIdx < attempts.count else { return }
+    noNavStrikes = 0
+    if let sid = traversalSessionID {
+      TraversalLog.shared.recordEvent(
+        sid, kind: "dead_end",
+        info: "card found but not openable on this source"
+      )
+    }
+    attempts[currentAttemptIdx].status = .failed
+    if currentAttemptIdx + 1 < attempts.count {
+      advanceAttempt()
+    } else {
+      if let sid = traversalSessionID {
+        TraversalLog.shared.endSession(sid)
+        traversalSessionID = nil
+      }
+      allFailed = true
+    }
+  }
+
   /// v2.41: clear per-page diagnostic state when the WebView commits
   /// a navigation to a different host or path. Prevents two pages'
   /// data from overlapping on screen (the v2.40 streameast case where
@@ -641,6 +691,7 @@ struct PlayerView: View {
     detectedCards = []
     authWallReason = nil
     autoFollowedPairs = []
+    noNavStrikes = 0
     if let event = lastWalkEvent {
       let isFreshClick = (event.kind == "clicked" || event.kind == "category_click")
                        && Date().timeIntervalSince(event.at) < 1.5
@@ -650,6 +701,7 @@ struct PlayerView: View {
 
   private func appendNavigation(_ url: URL) {
     if navigationHistory.last == url { return }
+    noNavStrikes = 0  // the page actually moved — not a dead end
     navigationHistory.append(url)
     if navigationHistory.count > 8 {
       navigationHistory.removeFirst(navigationHistory.count - 8)
@@ -709,6 +761,18 @@ struct PlayerView: View {
     guard path.isEmpty || path == "/" else { return }
     resolving = true
     defer { resolving = false }
+    // v2.66: if this source has never been initialized, learn its URL
+    // template now (bounded) so we can jump straight to the game instead of
+    // walking the homepage. Once learned it's cached, so this only blocks the
+    // very first tap on a new source. Failure leaves no template → the walk.
+    if let host = url.host, SourceTemplateStore.shared.template(forHost: host) == nil,
+       SourceTemplateStore.shared.status(forHost: host) == nil {
+      let result = await SourceProbe.probeWithStatus(root: url)
+      SourceTemplateStore.shared.setStatus(result.status, forHost: host)
+      if let template = result.template {
+        SourceTemplateStore.shared.set(template, forHost: host)
+      }
+    }
     guard let resolved = await GameURLResolver.resolve(game: game, sourceRoot: url),
           resolved.absoluteString != url.absoluteString else { return }
     guard currentAttemptIdx < attempts.count else { return }
@@ -745,6 +809,7 @@ struct PlayerView: View {
     loadFailure = nil
     detectedCards = []
     authWallReason = nil
+    noNavStrikes = 0
     currentAttemptIdx += 1
     Task { await startCurrentAttempt() }
   }
@@ -836,6 +901,7 @@ struct PlayerView: View {
           loadFailure = nil
           detectedCards = []
           authWallReason = nil
+          noNavStrikes = 0
           allFailed = false
           if !attempts.isEmpty {
             SourceHealth.shared.recordAttempt(

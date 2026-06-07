@@ -117,14 +117,29 @@ final class SourceTemplateStore {
   static let shared = SourceTemplateStore()
 
   private(set) var templates: [String: SourceTemplate] = [:]
+  /// Human-readable outcome of the most recent probe per host, shown in the
+  /// Debug Mode editor so it's clear whether initialization succeeded.
+  private(set) var probeStatus: [String: String] = [:]
 
   private static let storageKey = "SourceTemplates.v1"
+  private static let statusKey = "SourceTemplateStatus.v1"
 
   private init() { load() }
 
   func template(forHost host: String?) -> SourceTemplate? {
     guard let host else { return nil }
     return templates[host.lowercased()]
+  }
+
+  func status(forHost host: String?) -> String? {
+    guard let host else { return nil }
+    return probeStatus[host.lowercased()]
+  }
+
+  func setStatus(_ status: String, forHost host: String?) {
+    guard let host else { return }
+    probeStatus[host.lowercased()] = status
+    UserDefaults.standard.set(probeStatus, forKey: Self.statusKey)
   }
 
   func set(_ template: SourceTemplate?, forHost host: String?) {
@@ -141,10 +156,13 @@ final class SourceTemplateStore {
   // MARK: Persistence
 
   private func load() {
-    guard let data = UserDefaults.standard.data(forKey: Self.storageKey),
-          let decoded = try? JSONDecoder().decode([String: SourceTemplate].self, from: data)
-    else { return }
-    templates = decoded
+    if let data = UserDefaults.standard.data(forKey: Self.storageKey),
+       let decoded = try? JSONDecoder().decode([String: SourceTemplate].self, from: data) {
+      templates = decoded
+    }
+    if let status = UserDefaults.standard.dictionary(forKey: Self.statusKey) as? [String: String] {
+      probeStatus = status
+    }
   }
 
   private func save() {

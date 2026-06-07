@@ -16,12 +16,23 @@ enum SourceProbe {
   /// Candidate date encodings tried when recognizing a date path segment.
   private static let dateFormats = ["yyyy-MM-dd", "yyyyMMdd", "MM-dd-yyyy", "dd-MM-yyyy", "yyyy_MM_dd"]
 
+  /// Outcome of a probe: the learned template (nil → keep the walk) plus a
+  /// short human-readable status for the Debug Mode editor.
+  struct Result {
+    var template: SourceTemplate?
+    var status: String
+  }
+
   /// Probes `root` and returns a verified template, or nil to keep the walk.
   static func probe(root: URL) async -> SourceTemplate? {
+    await probeWithStatus(root: root).template
+  }
+
+  static func probeWithStatus(root: URL) async -> Result {
     let games = await ScheduleAggregator.shared.todaysGames()
-    guard !games.isEmpty else { return nil }
+    guard !games.isEmpty else { return Result(template: nil, status: "No schedule available to learn from") }
     let links = await scrape(root)
-    guard !links.isEmpty else { return nil }
+    guard !links.isEmpty else { return Result(template: nil, status: "Homepage returned no links") }
 
     let host = root.host?.lowercased()
     // Same-host deep-link paths, used both for matching and verification.
@@ -35,7 +46,9 @@ enum SourceProbe {
       linkPaths.insert(path.lowercased())
       pathByLink.append((path, " " + HomeView.normalizeForMatch(path) + " "))
     }
-    guard !pathByLink.isEmpty else { return nil }
+    guard !pathByLink.isEmpty else {
+      return Result(template: nil, status: "No internal links on the homepage (site may render games via JavaScript)")
+    }
 
     let index = TeamAliasIndex.shared
 
@@ -53,7 +66,9 @@ enum SourceProbe {
         break  // one game per link is enough
       }
     }
-    guard !derived.isEmpty else { return nil }
+    guard !derived.isEmpty else {
+      return Result(template: nil, status: "Found \(pathByLink.count) links but none matched a known game")
+    }
 
     // Most-supported pattern wins.
     var tally: [String: (template: SourceTemplate, count: Int)] = [:]
@@ -61,7 +76,9 @@ enum SourceProbe {
       let key = "\(t.pathPattern)|\(t.teamStyle.rawValue)|\(t.dateFormat)"
       tally[key, default: (t, 0)].count += 1
     }
-    guard var best = tally.values.max(by: { $0.count < $1.count })?.template else { return nil }
+    guard var best = tally.values.max(by: { $0.count < $1.count })?.template else {
+      return Result(template: nil, status: "Couldn't derive a consistent pattern")
+    }
 
     // Verify: the template must regenerate at least one real homepage link.
     var verifiedCount = 0
@@ -71,9 +88,11 @@ enum SourceProbe {
         verifiedCount += 1
       }
     }
-    guard verifiedCount >= 1 else { return nil }
+    guard verifiedCount >= 1 else {
+      return Result(template: nil, status: "Derived “\(best.pathPattern)” but it didn't reproduce the site's links")
+    }
     best.verified = true
-    return best
+    return Result(template: best, status: "Learned “\(best.pathPattern)” (verified on \(verifiedCount) game\(verifiedCount == 1 ? "" : "s"))")
   }
 
   // MARK: - Template derivation
