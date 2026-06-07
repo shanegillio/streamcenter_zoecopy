@@ -23,7 +23,9 @@ struct TraversalLogView: View {
             .padding(.vertical, 8)
         } else {
           ForEach(log.sessions) { session in
-            NavigationLink(value: session.id) {
+            NavigationLink {
+              TraversalSessionDetailView(session: session)
+            } label: {
               row(for: session)
             }
           }
@@ -32,13 +34,6 @@ struct TraversalLogView: View {
     }
     .navigationTitle("Traversal Log")
     .navigationBarTitleDisplayMode(.inline)
-    .navigationDestination(for: UUID.self) { id in
-      if let session = log.sessions.first(where: { $0.id == id }) {
-        TraversalSessionDetailView(session: session)
-      } else {
-        Text("Session not found").foregroundStyle(.secondary)
-      }
-    }
     .toolbar {
       if !log.sessions.isEmpty {
         ToolbarItem(placement: .topBarTrailing) {
@@ -132,8 +127,49 @@ struct TraversalLogView: View {
         streamChip(session)
         outcomeChip(session)
       }
+      // v2.49: surface why a session stalled at Hop 1 right in the row.
+      // Without this, diagnosing 5-of-6-sources-stuck-at-homepage means
+      // opening every session detail. Shows the most recent walk verdict.
+      if let summary = walkSummary(for: session) {
+        Text(summary)
+          .font(.caption2.monospaced())
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .truncationMode(.tail)
+      }
     }
     .padding(.vertical, 2)
+  }
+
+  /// v2.49: compact one-line summary of the walk's most recent verdict.
+  /// Reads the session's events in reverse — prefers "clicked"/"category_click"
+  /// (proof we navigated) over "scan"/"cat_scan" (proof we tried).
+  private func walkSummary(for session: TraversalSession) -> String? {
+    for ev in session.events.reversed() {
+      switch ev.kind {
+      case "clicked":         return "walk: clicked \(shortInfo(ev.info))"
+      case "target":          return "target: \(shortInfo(ev.info))"
+      case "card_dump":       return "card: \(shortInfo(ev.info))"
+      case "page_state":      return "page: \(shortInfo(ev.info))"
+      case "slug":            return "slug → \(shortInfo(ev.info))"
+      case "auto_follow":     return "auto-tap → \(shortInfo(ev.info))"
+      case "auto_nav":        return "auto-nav \(shortInfo(ev.info))"
+      case "resolved":        return "resolved → \(shortInfo(ev.info))"
+      case "popup_blocked":   return "blocked pop-up \(shortInfo(ev.info))"
+      case "category_click":  return "walk: category → \(shortInfo(ev.info))"
+      case "click_failed":    return "walk: click failed (\(shortInfo(ev.info)))"
+      case "auth_wall":       return "auth wall (\(shortInfo(ev.info)))"
+      case "load_failure":    return "load failed (\(shortInfo(ev.info)))"
+      case "cat_scan":        return "cat \(shortInfo(ev.info))"
+      case "scan":            return "scan \(shortInfo(ev.info))"
+      default: continue
+      }
+    }
+    return nil
+  }
+
+  private func shortInfo(_ s: String) -> String {
+    s.count > 60 ? String(s.prefix(60)) + "…" : s
   }
 
   private func hopChip(_ hop: Int) -> some View {
@@ -331,6 +367,15 @@ struct TraversalSessionDetailView: View {
     case "load_failure":    return "exclamationmark.triangle.fill"
     case "user_play":       return "play.circle.fill"
     case "auto_play":       return "play.fill"
+    case "stream_probed":   return "checkmark.shield"
+    case "target":          return "scope"
+    case "card_dump":       return "doc.text.magnifyingglass"
+    case "page_state":      return "rectangle.dashed"
+    case "slug":            return "link.circle.fill"
+    case "auto_follow":     return "hand.tap.fill"
+    case "auto_nav":        return "arrow.uturn.right.circle.fill"
+    case "resolved":        return "scope"
+    case "popup_blocked":   return "hand.raised.fill"
     default: return "circle"
     }
   }
@@ -340,7 +385,15 @@ struct TraversalSessionDetailView: View {
     case "click_failed", "load_failure": return .red
     case "scan", "cat_scan": return .yellow
     case "iframe_drill": return .cyan
-    case "auth_wall": return .orange
+    case "auth_wall", "popup_blocked": return .orange
+    case "stream_probed": return .blue
+    case "target": return .purple
+    case "card_dump": return .indigo
+    case "page_state": return .teal
+    case "slug": return .green
+    case "auto_follow": return .green
+    case "auto_nav": return .green
+    case "resolved": return .mint
     default: return .secondary
     }
   }

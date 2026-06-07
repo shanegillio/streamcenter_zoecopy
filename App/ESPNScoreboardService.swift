@@ -20,6 +20,18 @@ actor ESPNScoreboardService {
 
   private var cache: [SportLeague: (events: [ESPNEvent], expiry: Date)] = [:]
 
+  /// v2.49: per-league fallback for when a fresh fetch comes back empty
+  /// (transient network blip, ESPN 5xx, request timeout). Without this,
+  /// any blip during the 60 s auto-refresh wiped a whole league's games
+  /// from the UI for 60–90 s — the user reported it as "live games
+  /// disappeared while I was moving around the app." Held independently
+  /// of the regular `cache` entry: a fresh fetch that succeeds with N>0
+  /// events refreshes it; a fresh fetch that returns 0 events serves
+  /// from here instead. Bounded by `lastNonEmptyTTL` so a real ESPN
+  /// outage (or a league that's genuinely off-season) eventually clears.
+  private var lastNonEmpty: [SportLeague: (events: [ESPNEvent], at: Date)] = [:]
+  private static let lastNonEmptyTTL: TimeInterval = 30 * 60
+
   // ESPN sport/slug for each supported league
   static func apiPath(for league: SportLeague) -> (sport: String, slug: String)? {
     switch league {
@@ -126,10 +138,23 @@ actor ESPNScoreboardService {
       guard seen.insert(ev.id).inserted else { return nil }
       return ev
     }
+    // v2.49: if the fresh fetch came back empty, fall back to the
+    // last-known-good result for this league (within `lastNonEmptyTTL`)
+    // so a transient ESPN/network failure doesn't blank the UI for a
+    // full refresh cycle. Use a short cache TTL so we retry promptly.
+    if parsed.isEmpty,
+       let last = lastNonEmpty[league],
+       Date().timeIntervalSince(last.at) < Self.lastNonEmptyTTL {
+      cache[league] = (last.events, Date().addingTimeInterval(30))
+      return last.events
+    }
     let hasLive = parsed.contains { $0.isLive }
     // 60 s when live games exist (keeps score/period fresh), 90 s otherwise
     // (short enough to catch a game starting within two refresh cycles).
     cache[league] = (parsed, Date().addingTimeInterval(hasLive ? 60 : 90))
+    if !parsed.isEmpty {
+      lastNonEmpty[league] = (parsed, Date())
+    }
     return parsed
   }
 

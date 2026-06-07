@@ -17,6 +17,13 @@ struct PlayerView: View {
   @State private var rulesReady = false
   @State private var attempts: [SourceAttempt] = []
   @State private var currentAttemptIdx: Int = 0
+  /// When on, shows the live scraping WebView + diagnostics. When off
+  /// (default), the user sees only a loading screen until playback starts.
+  @AppStorage("debugScrapingView") private var debugScraping = false
+  /// v2.64: true while we're reading the source site to find the exact
+  /// game-page URL before loading it. Shows the loading overlay so the
+  /// WebView never briefly loads (and walks) the homepage first.
+  @State private var resolving = false
   @State private var allFailed: Bool = false
   /// Per-source budget. v2.38: relaxed to 20 s because we no longer
   /// auto-advance — the user manually picks "Try next source" if they
@@ -30,7 +37,7 @@ struct PlayerView: View {
   struct SourceAttempt: Identifiable {
     let id = UUID()
     let sourceID: String
-    let pageURL: URL
+    var pageURL: URL
     var status: Status = .pending
     enum Status { case pending, trying, failed }
   }
@@ -75,6 +82,10 @@ struct PlayerView: View {
   /// user advances to a different attempt. Used by all callbacks to
   /// route their events into the right TraversalSession.
   @State private var traversalSessionID: UUID? = nil
+  /// v2.61: pairs we've already auto-followed (via the gesture-carrying
+  /// clickFirstMatching path) on the current page. Reset on navigation so
+  /// each page gets one auto-follow attempt per matched pair.
+  @State private var autoFollowedPairs: Set<String> = []
 
   var body: some View {
     ZStack {
@@ -85,89 +96,41 @@ struct PlayerView: View {
             noSourcesEnabledView
           } else if allFailed {
             retryUI
+          } else if resolving {
+            StreamLoadingOverlay(
+              attemptIndex: currentAttemptIdx,
+              totalAttempts: attempts.count,
+              sourceName: currentAttemptIdx < attempts.count
+                ? sourceName(for: attempts[currentAttemptIdx].sourceID) : ""
+            )
           } else if !attempts.isEmpty, currentAttemptIdx < attempts.count {
             let current = attempts[currentAttemptIdx]
-            // v2.38: verification layout — top URL strip, visible
-            // WebView in the middle, captured-streams strip at bottom.
-            VStack(spacing: 0) {
-              navStrip(sourceName: sourceName(for: current.sourceID))
-              StreamWebView(
-                url: current.pageURL,
-                ruleList: ruleList,
-                onStreamURLFound: { streamURL, cookies in
-                  Task { @MainActor in
-                    appendCandidate(
-                      url: streamURL,
-                      cookies: cookies,
-                      referer: current.pageURL
-                    )
-                    if let sid = traversalSessionID {
-                      TraversalLog.shared.recordStream(sid, url: streamURL)
-                    }
-                    // v2.47: auto-play return, gated on meaningful Hop ≥ 2.
-                    // We only auto-commit when navigation actually
-                    // advanced past the source's homepage — protects
-                    // against committing a stream URL that surfaced from
-                    // an ad iframe before the user-targeted nav happened.
-                    // Stays off for the initial Hop 1 captures; user can
-                    // still tap the strip pill manually in that case.
-                    if avPlayer == nil {
-                      let hops = URLNormalization.meaningfulHopCount(
-                        navigationHistory.map { $0.absoluteString }
-                      )
-                      if hops >= 2 {
-                        autoPlayCapturedStream(
-                          url: streamURL,
-                          cookies: cookies,
-                          referer: current.pageURL
-                        )
-                      }
-                    }
-                  }
-                },
-                onNavigation: { navURL in
-                  Task { @MainActor in
-                    appendNavigation(navURL)
-                    if let sid = traversalSessionID {
-                      TraversalLog.shared.recordNavigation(sid, url: navURL)
-                    }
-                  }
-                },
-                onWalkEvent: { event in
-                  Task { @MainActor in
-                    handleWalkEvent(event)
-                    if let sid = traversalSessionID {
-                      TraversalLog.shared.recordEvent(
-                        sid, kind: event.kind, info: event.info
-                      )
-                    }
-                  }
-                },
-                onLoadFailed: { url, message in
-                  Task { @MainActor in
-                    loadFailure = message
-                    if let sid = traversalSessionID {
-                      TraversalLog.shared.recordEvent(
-                        sid, kind: "load_failure",
-                        info: "\(url.absoluteString): \(message)"
-                      )
-                    }
-                  }
-                },
-                onPageChanged: { _ in
-                  Task { @MainActor in
-                    resetPerPageState()
-                  }
-                },
-                bridge: webBridge,
-                targetGame: game
-              )
-              .id(current.id)
-              if !capturedStreams.isEmpty {
-                capturedStreamsStrip(referer: current.pageURL)
+            if debugScraping {
+              // Debug Mode: verification layout — top URL strip, visible
+              // WebView in the middle, captured-streams strip at bottom.
+              VStack(spacing: 0) {
+                navStrip(sourceName: sourceName(for: current.sourceID))
+                scrapeWebView(current)
+                if !capturedStreams.isEmpty {
+                  capturedStreamsStrip(referer: current.pageURL)
+                }
+              }
+              .ignoresSafeArea(edges: .bottom)
+            } else {
+              // Normal mode: keep the WebView alive (hidden) so scraping
+              // still runs, but show only a loading screen until the
+              // stream is captured and auto-plays.
+              ZStack {
+                scrapeWebView(current)
+                  .opacity(0)
+                  .allowsHitTesting(false)
+                StreamLoadingOverlay(
+                  attemptIndex: currentAttemptIdx,
+                  totalAttempts: attempts.count,
+                  sourceName: sourceName(for: current.sourceID)
+                )
               }
             }
-            .ignoresSafeArea(edges: .bottom)
           } else {
             StreamLoadingOverlay(attemptIndex: 0, totalAttempts: 0, sourceName: "")
           }
@@ -209,7 +172,7 @@ struct PlayerView: View {
         SourceHealth.shared.recordAttempt(
           sourceID: attempts[currentAttemptIdx].sourceID
         )
-        startTraversalSession()
+        await startCurrentAttempt()
       }
     }
     .onDisappear {
@@ -290,6 +253,104 @@ struct PlayerView: View {
   }
 
   // MARK: v2.38 verification UI
+
+  /// The scraping WebView for an attempt, wired to all of PlayerView's
+  /// callbacks. Shown directly in Debug Mode; rendered hidden (still
+  /// scraping) in normal mode behind the loading overlay.
+  @ViewBuilder
+  private func scrapeWebView(_ current: SourceAttempt) -> some View {
+    StreamWebView(
+      url: current.pageURL,
+      ruleList: ruleList,
+      onStreamURLFound: { streamURL, cookies in
+        Task { @MainActor in
+          appendCandidate(
+            url: streamURL,
+            cookies: cookies,
+            referer: current.pageURL
+          )
+          if let sid = traversalSessionID {
+            TraversalLog.shared.recordStream(sid, url: streamURL)
+          }
+          // v2.47: auto-play return, gated on meaningful Hop ≥ 2.
+          // We only auto-commit when navigation actually advanced past
+          // the source's homepage — protects against committing a stream
+          // URL that surfaced from an ad iframe before the user-targeted
+          // nav happened. Stays off for the initial Hop 1 captures; in
+          // Debug Mode the user can still tap the strip pill manually,
+          // and normal mode auto-commits via the playable probe below.
+          if avPlayer == nil {
+            let hops = URLNormalization.meaningfulHopCount(
+              navigationHistory.map { $0.absoluteString }
+            )
+            if hops >= 2 {
+              autoPlayCapturedStream(
+                url: streamURL,
+                cookies: cookies,
+                referer: current.pageURL
+              )
+            }
+          }
+        }
+      },
+      onStreamProbed: { url, playable in
+        Task { @MainActor in
+          if let sid = traversalSessionID {
+            TraversalLog.shared.recordEvent(
+              sid, kind: "stream_probed",
+              info: "\(playable ? "ok" : "fail"): \(url.absoluteString)"
+            )
+          }
+          // Normal mode has no visible strip to tap, so auto-commit the
+          // first stream that probes playable (the probe filters out junk
+          // ad-iframe captures that aren't real video).
+          if !debugScraping, playable, avPlayer == nil,
+             let cand = capturedStreams.first(where: { $0.url == url }) {
+            autoPlayCapturedStream(
+              url: cand.url, cookies: cand.cookies, referer: cand.referer
+            )
+          }
+        }
+      },
+      onNavigation: { navURL in
+        Task { @MainActor in
+          appendNavigation(navURL)
+          if let sid = traversalSessionID {
+            TraversalLog.shared.recordNavigation(sid, url: navURL)
+          }
+        }
+      },
+      onWalkEvent: { event in
+        Task { @MainActor in
+          handleWalkEvent(event)
+          if let sid = traversalSessionID {
+            TraversalLog.shared.recordEvent(
+              sid, kind: event.kind, info: event.info
+            )
+          }
+        }
+      },
+      onLoadFailed: { url, message in
+        Task { @MainActor in
+          loadFailure = message
+          if let sid = traversalSessionID {
+            TraversalLog.shared.recordEvent(
+              sid, kind: "load_failure",
+              info: "\(url.absoluteString): \(message)"
+            )
+          }
+        }
+      },
+      onPageChanged: { _ in
+        Task { @MainActor in
+          resetPerPageState()
+        }
+      },
+      bridge: webBridge,
+      targetGame: game
+    )
+    .id(current.id)
+  }
 
   /// Top strip: source name, current page URL, "via" breadcrumb of the
   /// path our walk/drill-down navigated through, and a "Try next source"
@@ -419,6 +480,8 @@ struct PlayerView: View {
     switch kind {
     case "clicked": return "hand.tap.fill"
     case "category_click": return "folder.fill"
+    case "auto_nav": return "arrow.uturn.right.circle.fill"
+    case "popup_blocked": return "hand.raised.fill"
     case "click_failed": return "xmark.octagon.fill"
     case "scan", "no_match", "cat_scan": return "magnifyingglass"
     default: return "circle"
@@ -426,7 +489,8 @@ struct PlayerView: View {
   }
   private func walkColor(for kind: String) -> Color {
     switch kind {
-    case "clicked", "category_click": return .green
+    case "clicked", "category_click", "auto_nav": return .green
+    case "popup_blocked": return .orange
     case "click_failed": return .red
     case "scan", "no_match", "cat_scan": return .yellow
     default: return .white.opacity(0.6)
@@ -436,6 +500,8 @@ struct PlayerView: View {
     switch event.kind {
     case "clicked": return "Walk clicked: \(event.info.replacingOccurrences(of: "card: ", with: ""))"
     case "category_click": return "Walk → category: \(event.info)"
+    case "auto_nav": return "Auto-tap: \(event.info)"
+    case "popup_blocked": return "Blocked pop-up: \(event.info)"
     case "click_failed": return "Walk click error: \(event.info)"
     case "scan": return "Walk: \(event.info)"
     case "cat_scan": return "CategoryLink: \(event.info)"
@@ -514,8 +580,54 @@ struct PlayerView: View {
     case "auth_wall":
       authWallReason = event.info
       lastWalkEvent = event
+    case "target":
+      lastWalkEvent = event
+      autoFollowTarget(event.info)
+    case "cat_scan":
+      lastWalkEvent = event
+      autoFollowCategory(event.info)
     default:
       lastWalkEvent = event
+    }
+  }
+
+  /// v2.61: the in-page walk reliably *identifies* the target card but its
+  /// synthetic click frequently fails to navigate (CLICKED-BUT-NO-NAV) —
+  /// the site's onclick needs WebKit user activation, which timer-driven
+  /// page script doesn't carry. Tapping the chip worked because it routes
+  /// through `evaluateJavaScript`, which DOES carry activation. So when the
+  /// shim posts a `target` event naming the matched pair, we fire that exact
+  /// same path automatically — reproducing the manual chip tap. Debounced to
+  /// once per pair per page (reset on navigation) so we never click-loop.
+  private func autoFollowTarget(_ info: String) {
+    guard let open = info.range(of: "pair=\"") else { return }
+    let rest = info[open.upperBound...]
+    guard let close = rest.range(of: "\"") else { return }
+    let pair = String(rest[..<close.lowerBound])
+    guard !pair.isEmpty, !autoFollowedPairs.contains(pair) else { return }
+    autoFollowedPairs.insert(pair)
+    webBridge.clickFirstMatching(pair)
+    if let sid = traversalSessionID {
+      TraversalLog.shared.recordEvent(sid, kind: "auto_follow", info: pair)
+    }
+  }
+
+  /// v2.62: same gesture-carrying auto-tap as autoFollowTarget, but for the
+  /// league category card (e.g. "MLB Streams") the shim picked when the
+  /// exact game isn't listed on the landing page. The in-page click on that
+  /// card hits the same CLICKED-BUT-NO-NAV wall, so we re-fire it through
+  /// `clickFirstMatching` (carries WebKit user activation). The label comes
+  /// from the cat_scan event's `clk="..."`. Debounced via autoFollowedPairs.
+  private func autoFollowCategory(_ info: String) {
+    guard let open = info.range(of: "clk=\"") else { return }
+    let rest = info[open.upperBound...]
+    guard let close = rest.range(of: "\"") else { return }
+    let label = String(rest[..<close.lowerBound])
+    guard !label.isEmpty, !autoFollowedPairs.contains(label) else { return }
+    autoFollowedPairs.insert(label)
+    webBridge.clickFirstMatching(label)
+    if let sid = traversalSessionID {
+      TraversalLog.shared.recordEvent(sid, kind: "auto_follow", info: label)
     }
   }
 
@@ -528,6 +640,7 @@ struct PlayerView: View {
   private func resetPerPageState() {
     detectedCards = []
     authWallReason = nil
+    autoFollowedPairs = []
     if let event = lastWalkEvent {
       let isFreshClick = (event.kind == "clicked" || event.kind == "category_click")
                        && Date().timeIntervalSince(event.at) < 1.5
@@ -582,6 +695,40 @@ struct PlayerView: View {
     }
   }
 
+  /// v2.64: read the source site and find this game's exact page URL, then
+  /// point the current attempt at it so the WebView loads it directly —
+  /// instead of loading the homepage and relying on the synthetic-click
+  /// walk. No-op when the attempt already targets a deep link (a
+  /// listing-time match) or when reading the site finds no confident URL
+  /// (the walk then handles it as before).
+  @MainActor
+  private func resolveCurrentAttemptIfNeeded() async {
+    guard currentAttemptIdx < attempts.count else { return }
+    let url = attempts[currentAttemptIdx].pageURL
+    let path = url.path
+    guard path.isEmpty || path == "/" else { return }
+    resolving = true
+    defer { resolving = false }
+    guard let resolved = await GameURLResolver.resolve(game: game, sourceRoot: url),
+          resolved.absoluteString != url.absoluteString else { return }
+    guard currentAttemptIdx < attempts.count else { return }
+    attempts[currentAttemptIdx].pageURL = resolved
+  }
+
+  /// Resolve the current attempt's direct URL, then open its traversal
+  /// session. Used on first load and on every advance so the session's
+  /// recorded URL reflects what we actually load.
+  @MainActor
+  private func startCurrentAttempt() async {
+    await resolveCurrentAttemptIfNeeded()
+    startTraversalSession()
+    if let sid = traversalSessionID, currentAttemptIdx < attempts.count {
+      TraversalLog.shared.recordEvent(
+        sid, kind: "resolved", info: attempts[currentAttemptIdx].pageURL.absoluteString
+      )
+    }
+  }
+
   /// User-driven advance to next attempt. Resets per-attempt state.
   private func advanceAttempt() {
     guard currentAttemptIdx + 1 < attempts.count else { return }
@@ -599,7 +746,7 @@ struct PlayerView: View {
     detectedCards = []
     authWallReason = nil
     currentAttemptIdx += 1
-    startTraversalSession()
+    Task { await startCurrentAttempt() }
   }
 
   // v2.34: shown when the user has no sources toggled on AND the game
@@ -694,6 +841,7 @@ struct PlayerView: View {
             SourceHealth.shared.recordAttempt(
               sourceID: attempts[currentAttemptIdx].sourceID
             )
+            Task { await startCurrentAttempt() }
           }
         } label: {
           Label("Try Again", systemImage: "arrow.clockwise")
@@ -783,18 +931,99 @@ final class StreamWebViewBridge: ObservableObject {
   weak var webView: WKWebView?
 
   /// Find a clickable element on the page whose readable text contains
-  /// `pair` and click it. Used when the user taps an alternative game
-  /// in the "Detected on this page" strip and our exact matcher missed.
+  /// `pair` and navigate to it. Used both when the user taps an alternative
+  /// game in the "Detected on this page" strip and (auto-follow) when the
+  /// shim names a matched card/category. This call runs via
+  /// evaluateJavaScript, so it carries WebKit user activation that the
+  /// in-page timer walk lacks.
+  ///
+  /// v2.63: this path used to ONLY synthesize a click and hope the site's
+  /// handler navigated. On sites whose card click is a same-page JS action
+  /// with no reachable <a href> (ntv.cx), that produced CLICKED-BUT-NO-NAV
+  /// forever. Now it mirrors the in-page `clickOrNavigate`: first dig out a
+  /// real destination URL (the element, a descendant <a>, a data-url/href
+  /// attribute, or a sibling <a> in the card container) and drive
+  /// `location.href` straight to it — a guaranteed navigation regardless of
+  /// framework or popup-blocking — and only fall back to a synthetic click
+  /// when no usable href exists anywhere near the match. Posts an
+  /// `auto_nav` diagnostic naming what it found so failures are visible in
+  /// the traversal log instead of silent.
   func clickFirstMatching(_ pair: String) {
     guard let webView else { return }
     let escaped = pair
       .replacingOccurrences(of: "\\", with: "\\\\")
       .replacingOccurrences(of: "'", with: "\\'")
-    // v2.41: walk up to clickable ancestor before .click(). Without
-    // this, tapping a detected-cards capsule often clicks the inner
-    // <h2> / <span> whose parent <div> holds the actual onclick.
     let js = """
     (function(){
+      function report(info){
+        try { window.webkit.messageHandlers.streamWalk.postMessage(JSON.stringify({
+          kind: 'auto_nav', info: ('' + info).slice(0,160), time: Date.now()
+        })); } catch(e){}
+      }
+      var t = '\(escaped)'.toLowerCase();
+      // Team tokens from the pair we're following, used to validate
+      // cross-origin deep links (real game URLs carry the slug). Must be
+      // built AFTER `t` is assigned — referencing it earlier hit the
+      // hoisted-but-undefined `t` and threw, aborting the whole click.
+      var toks = [];
+      t.replace(/\\bvs\\b|@|—|–/g, ' ').split(/\\s+/).forEach(function(w){
+        if (w.length >= 4) toks.push(w);
+      });
+      // A homepage card link is only worth following if it stays on the
+      // same site (the site's own watch/game page) OR it's a cross-origin
+      // URL that carries a team token (a genuine deep link). Cross-origin,
+      // token-less links are betting/affiliate ads (playonrain → rainbet)
+      // that derail the walk into a casino. Reject those.
+      function navHrefOK(href){
+        if (!href) return false;
+        var u; try { u = new URL(href, location.href); } catch(e){ return true; }
+        if (u.host === location.host) return true;
+        var low = u.href.toLowerCase();
+        for (var i = 0; i < toks.length; i++){ if (low.indexOf(toks[i]) !== -1) return true; }
+        return false;
+      }
+      function usableHref(h){
+        if (!h) return false;
+        h = ('' + h).trim();
+        if (!h || h === '#' || h === '/') return false;
+        var low = h.toLowerCase();
+        if (low.indexOf('javascript:') === 0 || low.indexOf('mailto:') === 0 ||
+            low.indexOf('tel:') === 0 || low.indexOf('#') === 0) return false;
+        return navHrefOK(h);
+      }
+      // Pull a navigable URL from common attributes on a single element.
+      function hrefAttr(el){
+        if (!el || !el.getAttribute) return '';
+        var keys = ['href','data-href','data-url','data-link'];
+        for (var i = 0; i < keys.length; i++){
+          var v = el.getAttribute(keys[i]);
+          if (usableHref(v)) return v;
+        }
+        return '';
+      }
+      function firstHrefIn(scope){
+        try {
+          var as = scope.querySelectorAll && scope.querySelectorAll(
+            'a[href],[data-href],[data-url],[data-link]');
+          if (as) for (var i = 0; i < as.length; i++){
+            var h = hrefAttr(as[i]); if (h) return h;
+          }
+        } catch(e){}
+        return '';
+      }
+      // Self → climb ancestors, searching each subtree (catches sibling
+      // "Watch" links inside the same card container).
+      function findNavHref(el){
+        if (!el) return '';
+        var h0 = hrefAttr(el); if (h0) return h0;
+        var n = el, lvl = 0;
+        while (n && lvl < 6){
+          var ha = hrefAttr(n); if (ha) return ha;
+          var hs = firstHrefIn(n); if (hs) return hs;
+          n = n.parentElement; lvl++;
+        }
+        return '';
+      }
       function findClickableAncestor(el) {
         if (!el) return null;
         var n = el;
@@ -836,7 +1065,6 @@ final class StreamWebViewBridge: ObservableObject {
           }
         } catch(e){}
       }
-      var t = '\(escaped)'.toLowerCase();
       var sel = 'a[href],button,[onclick],[data-match],[data-event],[data-game],' +
                 '[role="button"],[class*="card" i],[class*="match" i],[class*="game" i]';
       var els = document.querySelectorAll(sel);
@@ -845,12 +1073,35 @@ final class StreamWebViewBridge: ObservableObject {
         var b = ((e.innerText || e.textContent || '') + ' ' +
                  (e.getAttribute && (e.getAttribute('aria-label') || '')) + ' ' +
                  (e.getAttribute && (e.getAttribute('title') || ''))).toLowerCase();
-        if (b.indexOf(t) !== -1) {
-          var target = findClickableAncestor(e);
-          robustClick(target);
-          return true;
+        if (b.indexOf(t) === -1) continue;
+        // Prefer a real destination URL — always navigates.
+        var href = findNavHref(e);
+        if (href) {
+          var abs = href;
+          try { abs = new URL(href, location.href).href; } catch(err){}
+          if (abs && abs.split('#')[0] !== location.href.split('#')[0]) {
+            report('nav→ ' + abs);
+            try { location.href = abs; return true; } catch(err){}
+          }
         }
+        // No reachable href — fall back to a synthetic click on the
+        // nearest clickable ancestor (handles pure-JS onclick cards). But
+        // if that ancestor is an <a> pointing off-site to an ad (its href
+        // failed navHrefOK), clicking it would just open the ad — skip it.
+        var target = findClickableAncestor(e);
+        if (target && target.tagName === 'A') {
+          var rawHref = target.getAttribute('href');
+          if (rawHref && !navHrefOK(rawHref)) {
+            report('skip-ad ' + ('' + rawHref).slice(0,60));
+            return false;
+          }
+        }
+        report('click ' + (target && target.tagName ? target.tagName : '?') +
+               ' no-href');
+        robustClick(target);
+        return true;
       }
+      report('no-match "' + t.slice(0,60) + '"');
       return false;
     })();
     """
@@ -862,6 +1113,11 @@ struct StreamWebView: UIViewRepresentable {
   let url: URL
   let ruleList: WKContentRuleList?
   var onStreamURLFound: ((URL, [HTTPCookie]) -> Void)? = nil
+  /// v2.48: fires for every captured stream URL after AVPlayer's
+  /// isPlayable probe finishes, regardless of outcome. PlayerView
+  /// records this in the TraversalLog so probe failures are visible
+  /// in Settings → Traversal Log during iterative testing.
+  var onStreamProbed: ((URL, Bool) -> Void)? = nil
   /// v2.38: fired on every top-frame navigation commit (initial load,
   /// iframe-drill navigations, redirect chains). Used by PlayerView to
   /// build the breadcrumb the user sees in verification mode.
@@ -922,6 +1178,7 @@ struct StreamWebView: UIViewRepresentable {
   func makeCoordinator() -> Coordinator {
     Coordinator(
       onStreamURLFound: onStreamURLFound,
+      onStreamProbed: onStreamProbed,
       onNavigation: onNavigation,
       onWalkEvent: onWalkEvent,
       onLoadFailed: onLoadFailed,
@@ -947,7 +1204,14 @@ struct StreamWebView: UIViewRepresentable {
     let walkProxy = WeakScriptProxy(delegate: context.coordinator)
     config.userContentController.add(walkProxy, name: "streamWalk")
 
-    let popupJS = browseMode ? Self.popupRedirectJS : Self.popupSuppressJS
+    // v2.57: the walk also needs popups REDIRECTED, not suppressed. Many
+    // stream-site game cards have no <a href> — their onclick calls
+    // window.open(gameURL). popupSuppressJS turned that into a no-op, so
+    // we clicked the right card and went nowhere (CLICKED-BUT-NO-NAV).
+    // Redirecting window.open into a same-frame navigation lets the walk
+    // follow those cards. (The risk is an ad popup hijacking the frame,
+    // but a dropped navigation guarantees failure, so redirect wins.)
+    let popupJS = Self.popupRedirectJS
     config.userContentController.addUserScript(WKUserScript(
       source: popupJS, injectionTime: .atDocumentStart, forMainFrameOnly: false
     ))
@@ -975,6 +1239,8 @@ struct StreamWebView: UIViewRepresentable {
     webView.backgroundColor = .black
     webView.isOpaque = false
     context.coordinator.webView = webView
+    context.coordinator.sourceHost = url.host
+    context.coordinator.targetTokens = Self.slugTokens(for: targetGame)
     // v2.40: expose the WebView to the bridge so PlayerView can
     // dispatch evaluateJavaScript commands (detected-card taps).
     bridge?.webView = webView
@@ -1001,14 +1267,37 @@ struct StreamWebView: UIViewRepresentable {
     window.prompt = function(){return '';};
   """
 
+  // v2.63: window.open is used two ways on these sites: (1) legit game
+  // cards whose onclick calls window.open(gameURL) — we WANT to follow
+  // those — and (2) ad/scam popups (buffstreams' game page opens
+  // therestgroup.com → awarnets.com "Hacker is tracking you"). The old
+  // version redirected the main frame to BOTH, so ads hijacked playback.
+  // Now we only redirect to a destination that stays on the same site OR
+  // carries a team token (a real deep link); cross-site, token-less
+  // popups are dropped, keeping us on the source page. alert/confirm/
+  // prompt are neutralized so scam dialogs can't block the walk.
   static let popupRedirectJS = """
     window.alert = function(){};
     window.confirm = function(){return false;};
     window.prompt = function(){return '';};
     window.open = function(url){
-      if (url && typeof url === 'string' && url.indexOf('http') === 0) {
-        window.location.href = url;
-      }
+      if (!url || typeof url !== 'string') return null;
+      var abs;
+      try { abs = new URL(url, window.location.href).href; } catch(e){ abs = url; }
+      if (abs.indexOf('http') !== 0) return null;
+      var ok = false;
+      try {
+        var u = new URL(abs);
+        if (u.host === location.host) ok = true;
+        else {
+          var tg = window.__sc_target, toks = [], low = abs.toLowerCase();
+          if (tg) [tg.home, tg.away].forEach(function(s){
+            (s || '').toLowerCase().split('-').forEach(function(w){ if (w.length >= 4) toks.push(w); });
+          });
+          for (var i = 0; i < toks.length; i++){ if (low.indexOf(toks[i]) !== -1) { ok = true; break; } }
+        }
+      } catch(e){ ok = false; }
+      if (ok) window.location.href = abs;
       return null;
     };
   """
@@ -1018,22 +1307,34 @@ struct StreamWebView: UIViewRepresentable {
   /// the right league-named category link when the user-target game
   /// isn't on the homepage. nil game → __sc_target=null → shim falls
   /// back to generic clicking.
-  static func slugConfigJS(for game: Game?) -> String {
-    func slug(_ s: String) -> String {
-      let folded = s.folding(options: [.diacriticInsensitive, .caseInsensitive],
-                             locale: .current)
-      let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789- ")
-      let scalars = folded.unicodeScalars.filter { allowed.contains($0) }
-      let stripped = String(String.UnicodeScalarView(scalars))
-      let collapsed = stripped.replacingOccurrences(of: "[ ]+", with: "-",
-                                                    options: .regularExpression)
-      return collapsed
-        .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        .replacingOccurrences(of: "'", with: "\\'")
+  static func teamSlug(_ s: String) -> String {
+    let folded = s.folding(options: [.diacriticInsensitive, .caseInsensitive],
+                           locale: .current)
+    let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789- ")
+    let scalars = folded.unicodeScalars.filter { allowed.contains($0) }
+    let stripped = String(String.UnicodeScalarView(scalars))
+    let collapsed = stripped.replacingOccurrences(of: "[ ]+", with: "-",
+                                                  options: .regularExpression)
+    return collapsed
+      .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+      .replacingOccurrences(of: "'", with: "\\'")
+  }
+
+  /// Team-name tokens (≥4 chars) used natively to recognize cross-site
+  /// deep links to the tapped game (vs. cross-site ad redirects).
+  static func slugTokens(for game: Game?) -> [String] {
+    guard let g = game else { return [] }
+    var toks: [String] = []
+    for name in [teamSlug(g.homeTeam), teamSlug(g.awayTeam)] {
+      for w in name.split(separator: "-") where w.count >= 4 { toks.append(String(w).lowercased()) }
     }
+    return toks
+  }
+
+  static func slugConfigJS(for game: Game?) -> String {
     guard let g = game else { return "window.__sc_target = null;" }
-    let h = slug(g.homeTeam)
-    let a = slug(g.awayTeam)
+    let h = teamSlug(g.homeTeam)
+    let a = teamSlug(g.awayTeam)
     let l = g.league.rawValue.replacingOccurrences(of: "'", with: "\\'")
     return "window.__sc_target = {home: '\(h)', away: '\(a)', league: '\(l)'};"
   }
@@ -1147,6 +1448,39 @@ struct StreamWebView: UIViewRepresentable {
           var f = iframes[i];
           reportIframe(f.src || f.getAttribute('src'), f);
         }
+      }
+
+      // v2.59: structural ground truth for the "navigated to a near-empty
+      // page" case (e.g. buffstreams.plus/index18: dom=16, no cards). Tells
+      // us whether the player lives in an iframe to drill, behind a
+      // play/watch button to click, or simply hasn't rendered yet —
+      // instead of us guessing. Throttled; only fires once we've navigated
+      // or when the page is suspiciously empty.
+      var _lastPageStatePostedAt = 0;
+      function probePageState() {
+        if (window.top !== window) return;
+        var now = Date.now();
+        if (now - _lastPageStatePostedAt < 2500) return;
+        var dom = 0;
+        try { dom = document.querySelectorAll('*').length; } catch(e){}
+        if (_walkClicks === 0 && dom >= 40) return;  // normal homepage — skip
+        _lastPageStatePostedAt = now;
+        var ifh = [];
+        try {
+          var fs = document.querySelectorAll('iframe[src]');
+          for (var i = 0; i < fs.length && i < 6; i++) {
+            var h = '';
+            try { h = (new URL(fs[i].src || fs[i].getAttribute('src') || '', location.href)).host; } catch(e){}
+            if (h) ifh.push(h);
+          }
+        } catch(e){}
+        var vids = 0, btns = 0;
+        try { vids = document.querySelectorAll('video').length; } catch(e){}
+        try { btns = document.querySelectorAll('[class*="play" i],[class*="watch" i],[id*="play" i],[aria-label*="play" i]').length; } catch(e){}
+        var info = 'rs=' + document.readyState + ' dom=' + dom
+                 + ' iframes=' + ifh.length + ' vid=' + vids + ' playBtns=' + btns;
+        if (ifh.length) info += ' ifh=' + ifh.join(',');
+        postWalkEvent('page_state', info);
       }
 
       // Network intercepts
@@ -1319,6 +1653,7 @@ struct StreamWebView: UIViewRepresentable {
       var _walkClicks = 0;
       var _maxWalkClicks = 4;
       var _walkClickedEls = [];
+      var _lastTargetPostedAt = 0;
 
       // v2.39: surface walk activity to native so PlayerView's verification
       // strip can show what's happening. Without this, walks are silent —
@@ -1358,7 +1693,6 @@ struct StreamWebView: UIViewRepresentable {
         // main frame should harvest.
         if (window.top !== window) return;
         var now = Date.now();
-        if (now - _lastDetectedPostedAt < 2000) return;  // throttle
         var found = [];
         var seen = {};
         var candidates;
@@ -1370,22 +1704,114 @@ struct StreamWebView: UIViewRepresentable {
             '[class*="fixture" i]'
           );
         } catch(e) { return; }
+        // v2.54: target-token setup. The detector reliably finds real
+        // "X vs Y" cards; if one matches the tapped game we CLICK it in
+        // this same DOM pass — eliminating the stale-chip divergence
+        // where tryAdvance's separate live scan missed a card the
+        // (sticky) "Found on this page" strip still showed.
+        var ht = [], at = [];
+        var tgt = window.__sc_target;
+        if (tgt && tgt.home && tgt.away) {
+          var mkTok = function(slug) {
+            var t = []; slug = (slug || '').toLowerCase();
+            if (slug.length >= 4) t.push(slug);
+            slug.split('-').forEach(function(w){ if (w.length >= 4) t.push(w); });
+            return t;
+          };
+          ht = mkTok(tgt.home); at = mkTok(tgt.away);
+        }
+        function hasTok(text, toks) {
+          for (var k = 0; k < toks.length; k++) {
+            if (text.indexOf(toks[k]) !== -1) return true;
+          }
+          return false;
+        }
+        var targetEl = null, targetSize = Infinity, targetPair = '';
+        var nPairs = 0, firstPair = '';
         var cap = Math.min(candidates.length, 1200);
-        for (var i = 0; i < cap && found.length < 12; i++) {
+        for (var i = 0; i < cap; i++) {
           var el = candidates[i];
           var blob = readableTextFromElement(el);
           if (!blob || blob.length < 8 || blob.length > 600) continue;
           var m = blob.match(_gameLinePattern);
           if (!m) continue;
           var pair = (m[1] + ' vs ' + m[2]).trim();
+          nPairs++;
+          if (!firstPair) firstPair = pair;
+          // Does this detected pair match the tapped game? (order-free)
+          if (ht.length && at.length && blob.length < targetSize) {
+            var pl = (m[1] + ' ' + m[2]).toLowerCase();
+            if (hasTok(pl, ht) && hasTok(pl, at)) {
+              targetEl = el; targetSize = blob.length; targetPair = pair;
+            }
+          }
           var key = pair.toLowerCase();
-          if (seen[key]) continue;
-          seen[key] = 1;
-          found.push({ text: pair, blob: blob.slice(0, 140) });
+          if (!seen[key] && found.length < 12) {
+            seen[key] = 1;
+            found.push({ text: pair, blob: blob.slice(0, 140) });
+          }
+        }
+        // v2.55: one conclusive, short (won't-truncate) line every scan
+        // saying exactly what the detector-driven clicker decided. This
+        // is the ground truth we've been missing: whether a target card
+        // was found, whether we already clicked it (and the page didn't
+        // move), or whether the tokens simply don't match what's on page.
+        var now2 = Date.now();
+        if (now2 - _lastTargetPostedAt > 1500) {
+          _lastTargetPostedAt = now2;
+          var tgtStr = (tgt && tgt.home ? tgt.home : '?') + '|' + (tgt && tgt.away ? tgt.away : '?');
+          if (targetEl) {
+            var clkEl = findClickableAncestor(targetEl);
+            if (!_isReallyClickable(clkEl)) {
+              // The match is page text (title/heading), not a card — we've
+              // likely ARRIVED at the game page. Don't click; look for the
+              // player. probePageState() tells us iframe/video/button state.
+              postWalkEvent('target', 'ON-PAGE-NO-CARD pair="' + targetPair + '"');
+            } else {
+              var alreadyClicked = _walkClickedEls.indexOf(clkEl) !== -1;
+              postWalkEvent('target',
+                (alreadyClicked ? 'CLICKED-BUT-NO-NAV pair="' : 'MATCH pair="')
+                + targetPair + '"');
+            }
+          } else if (nPairs > 0) {
+            postWalkEvent('target',
+              'NO-MATCH tgt=' + tgtStr + ' pairs=' + nPairs + ' eg="' + firstPair + '"');
+          } else {
+            postWalkEvent('target', 'NO-PAIRS tgt=' + tgtStr + ' cands=' + candidates.length);
+          }
+        }
+        // Click (or, better, navigate to) the matching card immediately —
+        // same pass it was seen. v2.56: prefer following the card's real
+        // href so the URL actually changes.
+        // v2.59: prefer following the slug-href anchor — it carries both
+        // team names in its URL and is a guaranteed real navigation. Only
+        // fall back to clicking matched card text if there's no slug link.
+        var slugAnchor = null;
+        try { slugAnchor = findTargetByHrefSlug(); } catch(e){}
+        if (slugAnchor && _walkClicks < _maxWalkClicks &&
+            _walkClickedEls.indexOf(slugAnchor) === -1) {
+          _walkClickedEls.push(slugAnchor);
+          _walkClicks++;
+          _currentMirrorEl = slugAnchor;
+          _mirrorClickAt = Date.now();
+          postWalkEvent('slug', 'href="' + _slugScanStats.href + '"');
+          dumpCard(slugAnchor);
+          clickOrNavigate(slugAnchor, 'clicked', 'slug: ' + _slugScanStats.href);
+        } else if (targetEl && _walkClicks < _maxWalkClicks) {
+          var node = findClickableAncestor(targetEl);
+          if (node && _isReallyClickable(node) && _walkClickedEls.indexOf(node) === -1) {
+            _walkClickedEls.push(node);
+            _walkClicks++;
+            _currentMirrorEl = node;
+            _mirrorClickAt = Date.now();
+            dumpCard(node);
+            clickOrNavigate(node, 'clicked', 'detected: ' + targetPair);
+          }
         }
         if (found.length === 0) return;
         var serialized = JSON.stringify(found);
         if (serialized === _lastDetectedSerialized) return;  // unchanged
+        if (now - _lastDetectedPostedAt < 2000) return;       // throttle posting
         _lastDetectedSerialized = serialized;
         _lastDetectedPostedAt = now;
         postWalkPayload('detected_cards', found);
@@ -1483,6 +1909,131 @@ struct StreamWebView: UIViewRepresentable {
         return el;  // fallback — original match
       }
 
+      // v2.56: the click-but-no-nav fix. The walk reliably matches the
+      // correct card, but robustClick on SPA cards / target="_blank"
+      // anchors / window.open handlers frequently does NOT change the
+      // URL — so we sit on Hop 1 forever. The cure: pull the real href
+      // out of the matched element (self → descendant <a> → ancestor
+      // <a>) and navigate straight to it with location.href, which
+      // ALWAYS produces a real navigation regardless of framework or
+      // popup-blocking. Only falls back to a synthetic click when there
+      // is no usable href to follow.
+      function _usableHref(h) {
+        if (!h) return false;
+        h = ('' + h).trim();
+        if (!h || h === '#' || h === '/') return false;
+        var low = h.toLowerCase();
+        if (low.indexOf('javascript:') === 0 || low.indexOf('mailto:') === 0 ||
+            low.indexOf('tel:') === 0 || low.indexOf('#') === 0) return false;
+        return true;
+      }
+      // v2.63: team tokens from the tapped game, used to validate
+      // cross-origin links so we follow real deep links but not ads.
+      function _hrefTokens() {
+        var t = [], tg = window.__sc_target;
+        if (tg) [tg.home, tg.away].forEach(function(s){
+          s = (s || '').toLowerCase();
+          s.split('-').forEach(function(w){ if (w.length >= 4) t.push(w); });
+        });
+        return t;
+      }
+      // v2.63: a card href is only worth following if it stays on the same
+      // site (the site's own watch/game page) OR is a cross-origin URL
+      // carrying a team token (a genuine deep link). Cross-origin token-less
+      // hrefs are betting/affiliate ads (ntv.cx cards wrap a playonrain →
+      // rainbet link) that send the walk into a casino dead-end. Reject them.
+      function _navHrefOK(href) {
+        if (!href) return false;
+        var u; try { u = new URL(href, location.href); } catch(e){ return true; }
+        if (u.host === location.host) return true;
+        var low = u.href.toLowerCase(), toks = _hrefTokens();
+        for (var i = 0; i < toks.length; i++){ if (low.indexOf(toks[i]) !== -1) return true; }
+        return false;
+      }
+      function _firstUsableAnchorHref(scope) {
+        try {
+          var as = scope.querySelectorAll && scope.querySelectorAll('a[href]');
+          if (as) for (var i = 0; i < as.length; i++) {
+            var h = as[i].getAttribute('href'); if (_usableHref(h) && _navHrefOK(h)) return h;
+          }
+        } catch(e){}
+        return '';
+      }
+      // v2.58: search the matched element, then climb its ancestors and at
+      // EACH level search that ancestor's whole subtree for a usable <a>.
+      // This catches the common card layout where the "X vs Y" text and the
+      // real "Watch" link are SIBLINGS inside a card container (the old
+      // version only saw self / descendant / direct-ancestor anchors and so
+      // returned '' → CLICKED-BUT-NO-NAV).
+      function _findNavHref(el) {
+        if (!el) return '';
+        try { if (el.tagName === 'A') { var h0 = el.getAttribute('href'); if (_usableHref(h0) && _navHrefOK(h0)) return h0; } } catch(e){}
+        var n = el, lvl = 0;
+        while (n && lvl < 6) {
+          if (n.tagName === 'A') { var h2 = n.getAttribute('href'); if (_usableHref(h2) && _navHrefOK(h2)) return h2; }
+          var h3 = _firstUsableAnchorHref(n);
+          if (h3) return h3;
+          n = n.parentElement; lvl++;
+        }
+        return '';
+      }
+      // v2.58: one-time structural ground-truth dump of a card we're about
+      // to act on, so we can SEE on-device what these sites actually use
+      // (anchor? onclick? sibling link? nothing?) instead of guessing.
+      var _dumpedCards = [];
+      function dumpCard(node) {
+        try {
+          if (!node || _dumpedCards.indexOf(node) !== -1) return;
+          _dumpedCards.push(node);
+          var parts = [];
+          parts.push('tag=' + node.tagName);
+          var href = node.getAttribute && node.getAttribute('href');
+          parts.push('href=' + (href ? ('' + href).slice(0, 40) : '-'));
+          parts.push('onclick=' + (node.hasAttribute && node.hasAttribute('onclick') ? 'Y' : 'N'));
+          parts.push('role=' + ((node.getAttribute && node.getAttribute('role')) || '-'));
+          var box = node;
+          for (var u = 0; u < 3 && box.parentElement; u++) box = box.parentElement;
+          var as = (box.querySelectorAll ? box.querySelectorAll('a[href]') : []);
+          parts.push('aIn=' + as.length);
+          var hs = [];
+          for (var i = 0; i < as.length && i < 2; i++) {
+            var hh = as[i].getAttribute('href');
+            hs.push((hh || '').slice(0, 30));
+          }
+          if (hs.length) parts.push('a=' + hs.join('|'));
+          postWalkEvent('card_dump', parts.join(' '));
+        } catch(e){ postWalkEvent('card_dump', 'err ' + e); }
+      }
+      // v2.59: is this node something a click could actually act on? A
+      // page's <h1>/<title> can contain "Atlanta Braves vs Toronto Blue
+      // Jays" (because we're already ON the game page) — matching it as a
+      // "card" and clicking it does nothing forever (CLICKED-BUT-NO-NAV).
+      // Only treat a match as a clickable card if it's a real link/button
+      // or carries a usable href; otherwise we've ARRIVED and should look
+      // for the player instead of clicking text.
+      function _isReallyClickable(node) {
+        if (!node) return false;
+        if (node.tagName === 'A' || node.tagName === 'BUTTON') return true;
+        if (node.hasAttribute && (node.hasAttribute('onclick') || node.getAttribute('role') === 'button')) return true;
+        if (_findNavHref(node)) return true;
+        return false;
+      }
+      // Returns 'nav' when it forced a real URL change, else 'click'.
+      function clickOrNavigate(node, kind, label) {
+        var href = _findNavHref(node);
+        if (href) {
+          var abs = href;
+          try { abs = new URL(href, location.href).href; } catch(e){}
+          if (abs && abs.split('#')[0] !== location.href.split('#')[0]) {
+            postWalkEvent(kind, 'nav→ ' + abs);
+            try { location.href = abs; return 'nav'; } catch(e){}
+          }
+        }
+        postWalkEvent(kind, label);
+        try { robustClick(node); } catch(e){ postWalkEvent('click_failed', String(e)); }
+        return 'click';
+      }
+
       function readableTextFromElement(el) {
         if (!el) return '';
         var parts = [];
@@ -1496,6 +2047,17 @@ struct StreamWebView: UIViewRepresentable {
           if (title) parts.push(title);
           var dm = el.getAttribute('data-match');
           if (dm) parts.push(dm);
+          // v2.50: include href (and common JS-card equivalents) so team
+          // names that live ONLY in the URL slug (e.g. <a href="/mlb/
+          // milwaukee-brewers-vs-chicago-cubs/">MIL @ CHC</a>) get matched.
+          // Sites that render with abbreviations but route via team-slug
+          // URLs were stuck at Hop 1 because the shim's text-only blob
+          // couldn't see "milwaukee-brewers"/"chicago-cubs" in the href.
+          var hrefAttrs = ['href', 'data-href', 'data-url', 'data-link'];
+          for (var hi = 0; hi < hrefAttrs.length; hi++) {
+            var hv = el.getAttribute(hrefAttrs[hi]);
+            if (hv) parts.push(hv);
+          }
         }
         // v2.44: many sites render score cards with team LOGOS only —
         // full team names live in <img alt="…">. Without this we'd
@@ -1519,10 +2081,13 @@ struct StreamWebView: UIViewRepresentable {
       // v2.43: side-channel stats so tryAdvance can post a scan event.
       // v2.44: rejSample is the longest blob the matcher rejected — shown
       // to the user when matched=0 so we can see what we're scanning.
-      var _scanStats = { candidates: 0, matched: 0, sample: '', rejSample: '' };
+      // v2.53: nHome/nAway count elements containing ONLY one team's
+      // tokens — distinguishes "team names not in DOM at all" from "both
+      // teams in DOM but never co-located in the same wrapper element".
+      var _scanStats = { candidates: 0, matched: 0, nHome: 0, nAway: 0, sample: '', rejSample: '' };
 
       function selectTargetGameElement() {
-        _scanStats = { candidates: 0, matched: 0, sample: '', rejSample: '' };
+        _scanStats = { candidates: 0, matched: 0, nHome: 0, nAway: 0, sample: '', rejSample: '' };
         if (!window.__sc_target) return null;
         var home = (window.__sc_target.home || '').toLowerCase();
         var away = (window.__sc_target.away || '').toLowerCase();
@@ -1579,6 +2144,188 @@ struct StreamWebView: UIViewRepresentable {
         return findClickableAncestor(smallest);
       }
 
+      // v2.52: element-walk fallback for sites whose card text lives in
+      // attributes (aria-label, img alt, title, data-match) rather than
+      // textContent. Earlier v2.51's text-node tree-walk reported
+      // cands=0 across Streameast/CrackStreams/bintv — proof the team
+      // names weren't in text nodes at all. This walker visits every
+      // element (capped) and uses the same `readableTextFromElement`
+      // blob harvestDetectedCards uses, so anything visible to the
+      // user-facing "Found on this page" detector is also visible here.
+      // Smallest matching blob wins; findClickableAncestor handles the
+      // common wrapping-onclick case.
+      function findTargetByTreeWalk() {
+        _scanStats = { candidates: 0, matched: 0, nHome: 0, nAway: 0, sample: '', rejSample: '' };
+        if (!window.__sc_target) return null;
+        var home = (window.__sc_target.home || '').toLowerCase();
+        var away = (window.__sc_target.away || '').toLowerCase();
+        if (!home || !away) return null;
+        function tokens(slug) {
+          var t = [];
+          if (slug.length >= 4) t.push(slug);
+          slug.split('-').forEach(function(w){ if (w.length >= 4) t.push(w); });
+          return t;
+        }
+        var ht = tokens(home), at = tokens(away);
+        if (!ht.length || !at.length) return null;
+        var allEls;
+        try { allEls = document.querySelectorAll('*'); } catch(e) { return null; }
+        var cap = Math.min(allEls.length, 5000);
+        _scanStats.candidates = cap;
+        var bestEl = null, bestSize = Infinity;
+        var longestRej = 0;
+        for (var i = 0; i < cap; i++) {
+          var el = allEls[i];
+          // Skip elements that won't ever be clickable wrappers.
+          var tag = (el.tagName || '').toLowerCase();
+          if (tag === 'script' || tag === 'style' || tag === 'meta' ||
+              tag === 'link' || tag === 'head' || tag === 'html' ||
+              tag === 'body' || tag === 'svg' || tag === 'path') continue;
+          var blob = readableTextFromElement(el).toLowerCase();
+          if (blob.length < 6 || blob.length > 1200) continue;
+          var hh = false, aa = false;
+          for (var k = 0; k < ht.length && !hh; k++) {
+            if (blob.indexOf(ht[k]) !== -1) hh = true;
+          }
+          for (var m = 0; m < at.length && !aa; m++) {
+            if (blob.indexOf(at[m]) !== -1) aa = true;
+          }
+          if (hh && aa) {
+            _scanStats.matched++;
+            if (blob.length < bestSize) {
+              bestSize = blob.length;
+              bestEl = el;
+              _scanStats.sample = blob.slice(0, 80);
+            }
+          } else {
+            // v2.53: track elements that mention exactly one team. Lets
+            // us distinguish "team names absent from DOM" (both = 0)
+            // from "teams present but never co-located" (one > 0, both = 0).
+            if (hh && !aa) _scanStats.nHome++;
+            if (aa && !hh) _scanStats.nAway++;
+            if (blob.length > longestRej) {
+              longestRej = blob.length;
+              _scanStats.rejSample = blob.slice(0, 80);
+            }
+          }
+        }
+        return findClickableAncestor(bestEl);
+      }
+
+      // v2.59: slug-href matcher — the strongest, most reliable signal.
+      // These sites route by team slug: the real game page is
+      // /mlb/atlanta-braves-toronto-blue-jays/1310742, i.e. BOTH teams are
+      // encoded in the URL. The text detector only matches visible "X vs Y"
+      // strings, so on an interstitial (buffstreams' /index18) it latches
+      // onto the page TITLE — a no-op link — and never follows the actual
+      // anchor whose href carries the slug. This scans every <a href> and
+      // returns the one whose URL contains tokens from BOTH teams. Because
+      // it returns a real anchor, clickOrNavigate forces location.href = it,
+      // which always produces a true navigation.
+      var _slugScanStats = { anchors: 0, matched: 0, href: '' };
+      function findTargetByHrefSlug() {
+        _slugScanStats = { anchors: 0, matched: 0, href: '' };
+        var tgt = window.__sc_target;
+        if (!tgt || !tgt.home || !tgt.away) return null;
+        var mk = function(slug) {
+          var t = [];
+          (slug || '').toLowerCase().split('-').forEach(function(w){ if (w.length >= 4) t.push(w); });
+          return t;
+        };
+        var ht = mk(tgt.home), at = mk(tgt.away);
+        if (!ht.length || !at.length) return null;
+        var as;
+        try { as = document.querySelectorAll('a[href]'); } catch(e) { return null; }
+        _slugScanStats.anchors = as.length;
+        var best = null, bestScore = 0;
+        var cap = Math.min(as.length, 2000);
+        for (var i = 0; i < cap; i++) {
+          var href = '';
+          try { href = as[i].getAttribute('href') || ''; } catch(e){}
+          if (!_usableHref(href)) continue;
+          var low = href.toLowerCase();
+          var hh = 0, aa = 0;
+          for (var k = 0; k < ht.length; k++) if (low.indexOf(ht[k]) !== -1) hh++;
+          for (var j = 0; j < at.length; j++) if (low.indexOf(at[j]) !== -1) aa++;
+          if (hh > 0 && aa > 0) {
+            var score = hh + aa;
+            if (score > bestScore) { bestScore = score; best = as[i]; }
+          }
+        }
+        if (best) {
+          _slugScanStats.matched = 1;
+          try { _slugScanStats.href = (best.getAttribute('href') || '').slice(0, 80); } catch(e){}
+        }
+        return best;
+      }
+
+      // v2.54: unify the click path with the detector. harvestDetectedCards
+      // (the "Found on this page" strip) reliably surfaces real game-pair
+      // cards via _gameLinePattern, yet selectTargetGameElement /
+      // findTargetByTreeWalk kept reporting matched=0 on the same DOM — the
+      // detector and the clicker disagreed. This walks the SAME candidate
+      // set harvest uses, applies the SAME regex to confirm a real "X vs Y"
+      // card, then checks whether that pair matches the tapped game's
+      // tokens (order-independent). Returns the clickable ancestor of the
+      // first matching card. If harvest can see the game, this can click it.
+      var _pairScanStats = { cands: 0, pairs: 0, matched: 0, sample: '', rejSample: '' };
+      function findTargetByPairScan() {
+        _pairScanStats = { cands: 0, pairs: 0, matched: 0, sample: '', rejSample: '' };
+        if (!window.__sc_target) return null;
+        var home = (window.__sc_target.home || '').toLowerCase();
+        var away = (window.__sc_target.away || '').toLowerCase();
+        if (!home || !away) return null;
+        function tokens(slug) {
+          var t = [];
+          if (slug.length >= 4) t.push(slug);
+          slug.split('-').forEach(function(w){ if (w.length >= 4) t.push(w); });
+          return t;
+        }
+        var ht = tokens(home), at = tokens(away);
+        if (!ht.length || !at.length) return null;
+        function hasTok(text, toks) {
+          for (var k = 0; k < toks.length; k++) {
+            if (text.indexOf(toks[k]) !== -1) return true;
+          }
+          return false;
+        }
+        var candidates;
+        try {
+          candidates = document.querySelectorAll(
+            'a[href], button, [onclick], [data-match], [data-event], [data-game], ' +
+            '[role="button"], ' +
+            '[class*="match" i],[class*="game" i],[class*="card" i],[class*="event" i],' +
+            '[class*="fixture" i]'
+          );
+        } catch(e) { return null; }
+        _pairScanStats.cands = candidates.length;
+        var cap = Math.min(candidates.length, 1200);
+        var best = null, bestSize = Infinity;
+        for (var i = 0; i < cap; i++) {
+          var el = candidates[i];
+          var blob = readableTextFromElement(el);
+          if (!blob || blob.length < 8 || blob.length > 600) continue;
+          var m = blob.match(_gameLinePattern);
+          if (!m) continue;
+          _pairScanStats.pairs++;
+          // The detected pair, lowercased and order-independent: a card
+          // matches if BOTH teams' tokens appear somewhere in the pair
+          // (the regex already proved it's an "X vs Y" card).
+          var pair = (m[1] + ' ' + m[2]).toLowerCase();
+          if (hasTok(pair, ht) && hasTok(pair, at)) {
+            _pairScanStats.matched++;
+            if (blob.length < bestSize) {
+              bestSize = blob.length;
+              best = el;
+              _pairScanStats.sample = (m[1] + ' vs ' + m[2]).slice(0, 80);
+            }
+          } else if (!_pairScanStats.rejSample) {
+            _pairScanStats.rejSample = (m[1] + ' vs ' + m[2]).slice(0, 80);
+          }
+        }
+        return best ? findClickableAncestor(best) : null;
+      }
+
       // League raw-value → URL/text hints for category-link traversal.
       // Used when no game match is found and we're still at depth 0.
       var _leagueHints = {
@@ -1613,13 +2360,33 @@ struct StreamWebView: UIViewRepresentable {
       // "category landing never advances" failure mode.
       var _catScanStats = { cands: 0, matched: 0, clicked: '', rejSample: '' };
 
+      // v2.62: every league keyword we recognize, used to detect (and
+      // reject) multi-league nav/footer blobs. crackstreams' header text
+      // "NFL NBA MLB NHL MMA Boxing NCAA WWE MethStreams" contains "mlb"
+      // and is short — the old first-match category finder picked it and
+      // clicked a menu that goes nowhere, instead of the dedicated "MLB
+      // Streams" card. Counting distinct leagues lets us throw those out.
+      var _allLeagueWords = ['nfl','nba','wnba','mlb','nhl','ncaab','ncaaf','ncaa',
+        'ufc','mma','boxing','wwe','f1','formula','nascar','soccer','football',
+        'baseball','basketball','hockey','cricket','premier','laliga','bundesliga',
+        'ligue','eredivisie','mls','tennis','golf','rugby'];
+      function _countLeagueWords(blob) {
+        var c = 0;
+        for (var i = 0; i < _allLeagueWords.length; i++) {
+          if (blob.indexOf(_allLeagueWords[i]) !== -1) c++;
+        }
+        return c;
+      }
+
+      // v2.62: score-based category finder. Picks the single, specific
+      // league card (e.g. "MLB Streams") rather than the first element
+      // that merely contains the league name. Strongly prefers a usable
+      // href whose URL carries the league key, rejects blobs mentioning
+      // several leagues (nav bars / footers), and favors short labels.
       function findCategoryLink(leagueRawValue) {
         _catScanStats = { cands: 0, matched: 0, clicked: '', rejSample: '' };
         var keys = _leagueHints[leagueRawValue] || [];
         if (!keys.length) return null;
-        // v2.44: many category landing pages (crackstreams' "NBA Streams"
-        // card, etc.) wrap their category in a styled <div onclick=> or
-        // <button>, not a plain <a>. Broaden to all clickable shapes.
         var els;
         try {
           els = document.querySelectorAll(
@@ -1628,8 +2395,9 @@ struct StreamWebView: UIViewRepresentable {
           );
         } catch(e) { return null; }
         _catScanStats.cands = els.length;
-        var cap = Math.min(els.length, 600);
+        var cap = Math.min(els.length, 800);
         var longestRej = 0;
+        var best = null, bestScore = -1, bestText = '';
         for (var i = 0; i < cap; i++) {
           var el = els[i];
           var href = '';
@@ -1637,24 +2405,31 @@ struct StreamWebView: UIViewRepresentable {
           var txt = (el.innerText || el.textContent || '');
           var blob = (txt + ' ' + href).toLowerCase();
           if (blob.length < 3 || blob.length > 200) continue;
-          var matched = false;
+          var hit = false;
           for (var k = 0; k < keys.length; k++) {
-            if (blob.indexOf(keys[k]) !== -1) {
-              matched = true;
-              break;
-            }
+            if (blob.indexOf(keys[k]) !== -1) { hit = true; break; }
           }
-          if (matched) {
-            _catScanStats.matched = 1;
-            _catScanStats.clicked = (txt || href).slice(0, 80);
-            // Walk up to the clickable ancestor (same fix as v2.41
-            // for selectTargetGameElement) — the matched element may
-            // be an inner text node whose parent has the onclick.
-            return findClickableAncestor(el);
-          } else if (blob.length > longestRej) {
-            longestRej = blob.length;
-            _catScanStats.rejSample = blob.slice(0, 80);
+          if (!hit) {
+            if (blob.length > longestRej) { longestRej = blob.length; _catScanStats.rejSample = blob.slice(0, 80); }
+            continue;
           }
+          // Reject multi-league nav/footer blobs (lists many leagues).
+          if (_countLeagueWords(blob) >= 3) continue;
+          var hrefLow = href.toLowerCase();
+          var score = 0;
+          for (var k2 = 0; k2 < keys.length; k2++) {
+            if (hrefLow.indexOf(keys[k2]) !== -1) { score += 100; break; }
+          }
+          score += Math.max(0, 60 - txt.trim().length);  // prefer short labels
+          if (_usableHref(href)) score += 25;
+          if (score > bestScore) {
+            bestScore = score; best = el; bestText = (txt.trim() || href).slice(0, 80);
+          }
+        }
+        if (best) {
+          _catScanStats.matched = 1;
+          _catScanStats.clicked = bestText;
+          return findClickableAncestor(best);
         }
         return null;
       }
@@ -1668,7 +2443,31 @@ struct StreamWebView: UIViewRepresentable {
         if (window.top !== window) return;
         if (_walkClicks >= _maxWalkClicks) return;
         // Step 3: element matching target game.
-        var node = selectTargetGameElement();
+        // v2.54: pair-scan first — it mirrors the working "Found on this
+        // page" detector exactly (same candidates, same regex), so if the
+        // game is visible to the detector it is clickable here.
+        var node = null;
+        try { node = findTargetByHrefSlug(); } catch(e){}
+        if (node) {
+          if (_walkClickedEls.indexOf(node) !== -1) return;
+          _walkClickedEls.push(node);
+          _walkClicks++;
+          _currentMirrorEl = node;
+          _mirrorClickAt = Date.now();
+          postWalkEvent('slug', 'href="' + _slugScanStats.href + '"');
+          dumpCard(node);
+          clickOrNavigate(node, 'clicked', 'slug: ' + _slugScanStats.href);
+          return;
+        }
+        try { node = findTargetByPairScan(); } catch(e){}
+        if (!node) node = selectTargetGameElement();
+        // v2.51: selector-based matcher missed — try tree-walk fallback
+        // that finds the smallest element whose textContent contains
+        // tokens from BOTH teams, regardless of class. Catches wrappers
+        // the class selector doesn't enumerate.
+        if (!node) {
+          try { node = findTargetByTreeWalk(); } catch(e){}
+        }
         if (node) {
           if (_walkClickedEls.indexOf(node) !== -1) return;
           _walkClickedEls.push(node);
@@ -1676,10 +2475,7 @@ struct StreamWebView: UIViewRepresentable {
           _currentMirrorEl = node;
           _mirrorClickAt = Date.now();
           var blob = readableTextFromElement(node);
-          postWalkEvent('clicked', 'card: ' + blob);
-          try { robustClick(node); } catch(e){
-            postWalkEvent('click_failed', String(e));
-          }
+          clickOrNavigate(node, 'clicked', 'card: ' + blob);
           return;
         }
         // Step 4b: no game match — at depth 0 try a league-named category link.
@@ -1704,10 +2500,8 @@ struct StreamWebView: UIViewRepresentable {
             _currentMirrorEl = catNode;
             _mirrorClickAt = Date.now();
             var catBlob = readableTextFromElement(catNode);
-            postWalkEvent('category_click', catBlob);
-            try { robustClick(catNode); } catch(e){
-              postWalkEvent('click_failed', String(e));
-            }
+            dumpCard(catNode);
+            clickOrNavigate(catNode, 'category_click', catBlob);
             return;
           }
         }
@@ -1724,6 +2518,20 @@ struct StreamWebView: UIViewRepresentable {
                  + ' cands=' + _scanStats.candidates
                  + ' matched=' + _scanStats.matched
                  + ' main=' + (window.top === window ? '1' : '0');
+        // v2.54: pair-scan diagnostics — pairs = real "X vs Y" cards seen
+        // (same as the detector strip), pm = those matching the tapped
+        // game. If pairs>0 but pm=0 the page lists games but not this one;
+        // if pairs=0 the cards haven't rendered (or live in an iframe).
+        info += ' pairs=' + _pairScanStats.pairs + ' pm=' + _pairScanStats.matched;
+        if (_pairScanStats.matched === 0 && _pairScanStats.rejSample) {
+          info += ' pr="' + _pairScanStats.rejSample + '"';
+        }
+        // v2.53: surface single-team counts so we can tell apart
+        // "team names absent from DOM" from "teams present but split
+        // across different wrapper elements".
+        if (_scanStats.nHome || _scanStats.nAway) {
+          info += ' h=' + _scanStats.nHome + ' a=' + _scanStats.nAway;
+        }
         if (_scanStats.matched > 0 && _scanStats.sample) {
           info += ' sample="' + _scanStats.sample + '"';
         }
@@ -1746,15 +2554,20 @@ struct StreamWebView: UIViewRepresentable {
         scanScripts();
         // v2.37: harvest cross-origin iframes for drill-down.
         try { harvestIframes(); } catch(e){}
+        try { probePageState(); } catch(e){}
         document.querySelectorAll('video').forEach(function(v) {
           if (v.paused) v.play().catch(function(){});
         });
 
+        // v2.54: harvest first — it both surfaces page content for the
+        // verification strip AND clicks the target card the instant it's
+        // detected (same DOM pass), which is the most reliable advance.
+        // tryAdvance runs after as a fallback (category links, token /
+        // tree-walk matching) for sites whose cards aren't clean "X vs Y".
+        try { harvestDetectedCards(); } catch(e){}
         // v2.35: drive page navigation toward the target game / category.
         // Bounded by _maxWalkClicks; no-op once we've clicked enough.
         try { tryAdvance(); } catch(e){}
-        // v2.40: surface page content for the verification strip.
-        try { harvestDetectedCards(); } catch(e){}
         try { detectAuthWall(); } catch(e){}
 
         var mirrorSelectors = [
@@ -1828,7 +2641,13 @@ struct StreamWebView: UIViewRepresentable {
         });
       }).observe(document.documentElement || document, {childList: true, subtree: true, attributes: true});
 
-      [100, 500, 1000, 2000, 3000, 5000, 8000, 12000, 18000].forEach(function(t) {
+      // v2.53: late scans cover SPA hydration that lands after the
+      // existing 18 s schedule and doesn't trigger a MutationObserver
+      // event the shim catches (Shadow DOM, framework batched commits,
+      // route-change-only renders). Cheap insurance since each scan is
+      // bounded.
+      [100, 500, 1000, 2000, 3000, 5000, 8000, 12000, 18000,
+       25000, 40000, 60000].forEach(function(t) {
         setTimeout(scan, t);
       });
     })();
@@ -1867,6 +2686,9 @@ struct StreamWebView: UIViewRepresentable {
 
   final class Coordinator: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     let onStreamURLFound: ((URL, [HTTPCookie]) -> Void)?
+    /// v2.48: fires after each probePlayability finishes so PlayerView
+    /// can log the result to the TraversalLog.
+    let onStreamProbed: ((URL, Bool) -> Void)?
     /// v2.38: invoked from `webView(_:didCommit:)` so PlayerView can
     /// render the navigation breadcrumb.
     let onNavigation: ((URL) -> Void)?
@@ -1901,13 +2723,54 @@ struct StreamWebView: UIViewRepresentable {
     /// to feel laggy.
     private var iframeCommitTask: Task<Void, Never>?
 
+    // v2.63: navigation pinning. The streamer's own pages are the only
+    // place we expect to legitimately land (the stream is an iframe on a
+    // source-site game page). Page-initiated top-frame redirects/popups to
+    // OTHER sites are ads/scams (therestgroup.com → awarnets.com). We pin
+    // to `sourceHost`, allow cross-site loads only when WE initiate them
+    // (iframe drill, host fallback) or the URL carries a team token, and
+    // cancel everything else at the top frame.
+    var sourceHost: String?
+    var targetTokens: [String] = []
+    private var intendedLoadURLs = Set<String>()
+
+    func noteIntendedLoad(_ url: URL) { intendedLoadURLs.insert(url.absoluteString) }
+
+    private func registrableSuffix(_ host: String) -> String {
+      let parts = host.lowercased().split(separator: ".")
+      guard parts.count >= 2 else { return host.lowercased() }
+      return parts.suffix(2).joined(separator: ".")
+    }
+    private func sameSite(_ a: String?, _ b: String?) -> Bool {
+      guard let a, let b else { return false }
+      return registrableSuffix(a) == registrableSuffix(b)
+    }
+    private func carriesTargetToken(_ url: URL) -> Bool {
+      guard !targetTokens.isEmpty else { return false }
+      let low = url.absoluteString.lowercased()
+      return targetTokens.contains { low.contains($0) }
+    }
+    /// Should this top-frame destination be allowed? Same-site as the
+    /// source (or the page we're currently on), a deep link carrying a
+    /// team token, or a load we initiated ourselves.
+    private func isAllowedTopNav(_ url: URL, current: URL?) -> Bool {
+      if intendedLoadURLs.contains(url.absoluteString) { return true }
+      if sourceHost == nil { return true }  // not yet pinned
+      if sameSite(url.host, sourceHost) { return true }
+      if sameSite(url.host, current?.host) { return true }
+      if carriesTargetToken(url) { return true }
+      return false
+    }
+
     init(onStreamURLFound: ((URL, [HTTPCookie]) -> Void)?,
+         onStreamProbed: ((URL, Bool) -> Void)? = nil,
          onNavigation: ((URL) -> Void)? = nil,
          onWalkEvent: ((StreamWebView.WalkEvent) -> Void)? = nil,
          onLoadFailed: ((URL, String) -> Void)? = nil,
          onPageChanged: ((URL) -> Void)? = nil,
          browseMode: Bool) {
       self.onStreamURLFound = onStreamURLFound
+      self.onStreamProbed = onStreamProbed
       self.onNavigation = onNavigation
       self.onWalkEvent = onWalkEvent
       self.onLoadFailed = onLoadFailed
@@ -2017,15 +2880,49 @@ struct StreamWebView: UIViewRepresentable {
           request.setValue("\(scheme)://\(host)", forHTTPHeaderField: "Origin")
         }
       }
+      noteIntendedLoad(pick.url)  // cross-host embed drill is intentional
       webView.load(request)
     }
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-      if browseMode, let url = navigationAction.request.url {
+      // v2.57: follow new-window / target="_blank" requests in the same
+      // web view (many game cards' onclick is window.open(gameURL)).
+      // v2.63: but ONLY when the destination stays on the source site or
+      // carries a team token — a cross-site, token-less new window is an
+      // ad/scam popup (buffstreams → therestgroup → awarnets), and loading
+      // it would yank us off the game page. Drop those and stay put.
+      if let url = navigationAction.request.url,
+         isAllowedTopNav(url, current: webView.url) {
+        noteIntendedLoad(url)
         webView.load(URLRequest(url: url))
+      } else if let url = navigationAction.request.url {
+        let event = StreamWebView.WalkEvent(
+          kind: "popup_blocked", info: url.host ?? url.absoluteString,
+          at: Date(), detectedCards: []
+        )
+        DispatchQueue.main.async { self.onWalkEvent?(event) }
       }
       return nil
+    }
+
+    // v2.63: auto-dismiss native JS dialogs. Scam ad frames spam
+    // alert()/confirm()/prompt() ("(17) System notification") to coerce
+    // taps; popupRedirectJS neutralizes the in-page ones, but anything
+    // that still reaches WebKit's native panel we silently dismiss
+    // (cancel/empty) so the user is never blocked or tricked.
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+      completionHandler()
+    }
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+      completionHandler(false)
+    }
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
+                 defaultText: String?, initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping (String?) -> Void) {
+      completionHandler(nil)
     }
 
     // v2.38: fire onNavigation on every top-frame commit so the
@@ -2091,6 +2988,8 @@ struct StreamWebView: UIViewRepresentable {
               break
             }
           }
+          self.sourceHost = fallback.host ?? self.sourceHost
+          self.noteIntendedLoad(fallback)
           webView.load(req)
         } else {
           self.onLoadFailed?(url, nsErr.localizedDescription)
@@ -2111,6 +3010,25 @@ struct StreamWebView: UIViewRepresentable {
          action.navigationType == .linkActivated,
          let host = action.request.url?.host,
          host != webView.url?.host {
+        decisionHandler(.cancel); return
+      }
+      // v2.63: pin the top frame to the source site. Page-initiated
+      // cross-site top-frame redirects (location.href, meta-refresh,
+      // <a target=_top> ads) arrive here as .other/.redirect — these
+      // are the popup/scam hijacks (therestgroup.com → awarnets.com).
+      // popupRedirectJS only covers window.open; this catches the rest.
+      // We never block self-initiated loads (intendedLoadURLs), same-site
+      // hops, or token-bearing deep links.
+      if !browseMode,
+         let url = action.request.url,
+         action.targetFrame?.isMainFrame == true,
+         action.navigationType != .linkActivated,
+         !isAllowedTopNav(url, current: webView.url) {
+        let event = StreamWebView.WalkEvent(
+          kind: "popup_blocked", info: url.host ?? url.absoluteString,
+          at: Date(), detectedCards: []
+        )
+        DispatchQueue.main.async { self.onWalkEvent?(event) }
         decisionHandler(.cancel); return
       }
       decisionHandler(.allow)
@@ -2144,9 +3062,26 @@ struct StreamWebView: UIViewRepresentable {
           await MainActor.run { self?.commitFallbackIfNeeded() }
         }
       }
+      // v2.48: capture referer + cookies up-front on the main thread,
+      // hand them to probePlayability so the probe runs under the same
+      // request conditions PlayerView's AVPlayer will use. Without this,
+      // embed-host manifests that require Referer/cookies get falsely
+      // rejected as unplayable, delaying playback to the 6 s fallback.
+      let referer = webView?.url
+      let cookieStore = webView?.configuration.websiteDataStore.httpCookieStore
+      let onProbed = self.onStreamProbed
       Task { [weak self] in
-        let playable = await Self.probePlayability(url)
+        let cookies: [HTTPCookie] = await {
+          guard let cookieStore else { return [] }
+          return await withCheckedContinuation { (cont: CheckedContinuation<[HTTPCookie], Never>) in
+            DispatchQueue.main.async {
+              cookieStore.getAllCookies { cont.resume(returning: $0) }
+            }
+          }
+        }()
+        let playable = await Self.probePlayability(url, referer: referer, cookies: cookies)
         await MainActor.run {
+          onProbed?(url, playable)
           guard let self, !self.found, playable else { return }
           self.commitURL(url)
         }
@@ -2169,12 +3104,20 @@ struct StreamWebView: UIViewRepresentable {
       }
     }
 
-    private static func probePlayability(_ url: URL) async -> Bool {
+    private static func probePlayability(_ url: URL,
+                                         referer: URL? = nil,
+                                         cookies: [HTTPCookie] = []) async -> Bool {
       let lower = url.absoluteString.lowercased()
       let isManifest = lower.contains(".m3u8") || lower.contains(".mpd")
       guard isManifest else { return true }
-      var headers: [String: String] = [:]
+      // v2.48: match the headers PlayerView.makePlayer sets on real
+      // playback so the probe accurately predicts AVPlayer success.
+      var headers = HTTPCookie.requestHeaderFields(with: cookies)
       headers["User-Agent"] = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+      if let referer {
+        headers["Referer"] = referer.absoluteString
+        headers["Origin"]  = (referer.scheme ?? "https") + "://" + (referer.host ?? "")
+      }
       let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
       return await withTaskGroup(of: Bool.self) { group in
         group.addTask { (try? await asset.load(.isPlayable)) ?? false }
