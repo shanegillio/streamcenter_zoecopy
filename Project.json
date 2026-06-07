@@ -18,8 +18,8 @@
         "path": "App/Info.plist",
         "properties": {
           "CFBundleDisplayName": "StreamCenter",
-          "CFBundleShortVersionString": "1.0",
-          "CFBundleVersion": "1",
+          "CFBundleShortVersionString": "1.1",
+          "CFBundleVersion": "2",
           "ITSAppUsesNonExemptEncryption": false,
           "UILaunchScreen": {},
           "NSAppTransportSecurity": {
@@ -37,8 +37,8 @@
       "settings": {
         "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
         "ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME": "AccentColor",
-        "CURRENT_PROJECT_VERSION": "1",
-        "MARKETING_VERSION": "1.0",
+        "CURRENT_PROJECT_VERSION": "2",
+        "MARKETING_VERSION": "1.1",
         "PRODUCT_BUNDLE_IDENTIFIER": "app.bitrig.new.b3037d94-1a52-4185-b143-1daa8fdcafe1",
         "PRODUCT_NAME": "$(TARGET_NAME)",
         "SWIFT_VERSION": "5.0",
