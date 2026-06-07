@@ -104,6 +104,58 @@ enum SportLeague: String, CaseIterable, Identifiable, Codable, Hashable {
     }
   }
 
+  /// Specific URL/path slugs sites use to route this league (streameast et al.
+  /// route by `/mlb/…`, `/wnba/…`). Deliberately excludes generic sport words
+  /// ("football", "basketball", "soccer") so the wrong-league navigation guard
+  /// can tell `/wnba/` from `/nba/` without `basketball` matching both. Used to
+  /// refuse navigating from a target's game page into an unrelated league.
+  var urlSlugKeywords: [String] {
+    switch self {
+    case .nfl: return ["nfl"]
+    case .nba: return ["nba"]
+    case .mlb: return ["mlb"]
+    case .nhl: return ["nhl"]
+    case .wnba: return ["wnba"]
+    case .ncaaf: return ["ncaaf", "college-football"]
+    case .ncaab: return ["ncaab", "college-basketball"]
+    case .mma: return ["mma", "ufc"]
+    case .ufc: return ["ufc", "mma"]
+    case .boxing: return ["boxing"]
+    case .f1: return ["f1", "formula-1", "formula1"]
+    case .nascar: return ["nascar"]
+    case .wwe: return ["wwe"]
+    case .tennis: return ["tennis"]
+    case .golf: return ["golf"]
+    case .cricket: return ["cricket"]
+    case .iihf: return ["iihf"]
+    case .soccer: return ["soccer"]
+    case .premierLeague: return ["premier-league", "premier", "epl"]
+    case .laLiga: return ["laliga", "la-liga"]
+    case .serieA: return ["serie-a", "seriea"]
+    case .bundesliga: return ["bundesliga"]
+    case .ligue1: return ["ligue-1", "ligue1"]
+    case .eredivisie: return ["eredivisie"]
+    case .mls: return ["mls"]
+    case .ligaMx: return ["liga-mx", "ligamx"]
+    case .championsLeague: return ["champions-league", "ucl"]
+    case .europaLeague: return ["europa-league", "uel"]
+    case .other: return []
+    }
+  }
+
+  /// Soccer competitions share teams and are often routed generically, so the
+  /// league guard skips them as a *target* to avoid blocking legitimate
+  /// cross-competition navigation (a club's Champions League vs league game).
+  var isSoccerFamily: Bool {
+    switch self {
+    case .soccer, .premierLeague, .laLiga, .serieA, .bundesliga, .ligue1,
+         .eredivisie, .mls, .ligaMx, .championsLeague, .europaLeague:
+      return true
+    default:
+      return false
+    }
+  }
+
   var sfSymbol: String {
     switch self {
     case .nfl, .ncaaf: return "football.fill"

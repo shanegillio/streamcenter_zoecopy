@@ -499,6 +499,7 @@ struct PlayerView: View {
     case "category_click": return "folder.fill"
     case "auto_nav": return "arrow.uturn.right.circle.fill"
     case "backtrack": return "arrow.uturn.backward.circle.fill"
+    case "league_block": return "sportscourt"
     case "popup_blocked": return "hand.raised.fill"
     case "click_failed": return "xmark.octagon.fill"
     case "dead_end": return "nosign"
@@ -510,6 +511,7 @@ struct PlayerView: View {
     switch kind {
     case "clicked", "category_click", "auto_nav": return .green
     case "backtrack": return .cyan
+    case "league_block": return .orange
     case "popup_blocked": return .orange
     case "click_failed", "dead_end": return .red
     case "scan", "no_match", "cat_scan": return .yellow
@@ -522,6 +524,7 @@ struct PlayerView: View {
     case "category_click": return "Walk → category: \(event.info)"
     case "auto_nav": return "Auto-tap: \(event.info)"
     case "backtrack": return "Backtracked — dead end, returning to game page"
+    case "league_block": return "Blocked wrong-league jump: \(event.info)"
     case "popup_blocked": return "Blocked pop-up: \(event.info)"
     case "click_failed": return "Walk click error: \(event.info)"
     case "scan": return "Walk: \(event.info)"
@@ -1323,6 +1326,7 @@ struct StreamWebView: UIViewRepresentable {
     context.coordinator.webView = webView
     context.coordinator.sourceHost = url.host
     context.coordinator.targetTokens = Self.slugTokens(for: targetGame)
+    context.coordinator.targetLeague = targetGame?.league
     // v2.40: expose the WebView to the bridge so PlayerView can
     // dispatch evaluateJavaScript commands (detected-card taps).
     bridge?.webView = webView
@@ -2955,6 +2959,13 @@ struct StreamWebView: UIViewRepresentable {
     // cancel everything else at the top frame.
     var sourceHost: String?
     var targetTokens: [String] = []
+    /// v2.70: the league we're after, so the navigation layer can refuse a
+    /// jump into a different sport. Source-site game pages routinely link (or
+    /// redirect) to the currently-live featured game — e.g. an MLB page that
+    /// bounces to the live WNBA game — and the shared-city token alone made
+    /// that look acceptable. This is the chokepoint every navigation path
+    /// (redirect, popup, link click) funnels through.
+    var targetLeague: SportLeague?
     private var intendedLoadURLs = Set<String>()
 
     func noteIntendedLoad(_ url: URL) { intendedLoadURLs.insert(url.absoluteString) }
@@ -2978,10 +2989,48 @@ struct StreamWebView: UIViewRepresentable {
     /// team token, or a load we initiated ourselves.
     private func isAllowedTopNav(_ url: URL, current: URL?) -> Bool {
       if intendedLoadURLs.contains(url.absoluteString) { return true }
+      // v2.70: a different sport/league is never our game — refuse it even
+      // when it's same-site. This is what stops an MLB page's redirect to the
+      // live WNBA game from being accepted just because it's on the same host.
+      if urlLeagueConflicts(url) { return false }
       if sourceHost == nil { return true }  // not yet pinned
       if sameSite(url.host, sourceHost) { return true }
       if sameSite(url.host, current?.host) { return true }
       if carriesTargetToken(url) { return true }
+      return false
+    }
+
+    /// v2.70: does this URL's path name a different sport/league than the
+    /// target's? True only when the path names some other league's specific
+    /// slug AND does not name ours. Skipped for soccer-family and `.other`
+    /// targets, where generic routing makes the test unreliable.
+    private func urlLeagueConflicts(_ url: URL) -> Bool {
+      guard let target = targetLeague, target != .other, !target.isSoccerFamily else { return false }
+      let path = url.path.lowercased()
+      if target.urlSlugKeywords.contains(where: { Self.pathNamesLeague(path, $0) }) { return false }
+      for league in SportLeague.allCases where league != target && league != .other {
+        if league.urlSlugKeywords.contains(where: { Self.pathNamesLeague(path, $0) }) { return true }
+      }
+      return false
+    }
+
+    /// True iff `keyword` appears in `path` as a whole segment — bounded by a
+    /// non-alphanumeric character (or the string edge) on both sides — so
+    /// "nba" matches "/nba/…" but not "/wnba/…".
+    private static func pathNamesLeague(_ path: String, _ keyword: String) -> Bool {
+      guard !keyword.isEmpty else { return false }
+      let chars = Array(path), k = Array(keyword)
+      guard k.count <= chars.count else { return false }
+      func isWord(_ c: Character) -> Bool { c.isLetter || c.isNumber }
+      var i = 0
+      while i + k.count <= chars.count {
+        if Array(chars[i..<i + k.count]) == k {
+          let beforeOK = i == 0 || !isWord(chars[i - 1])
+          let afterOK = i + k.count == chars.count || !isWord(chars[i + k.count])
+          if beforeOK && afterOK { return true }
+        }
+        i += 1
+      }
       return false
     }
 
@@ -3202,7 +3251,8 @@ struct StreamWebView: UIViewRepresentable {
       // somewhere safe to return to. A same-site source/game page or a deep
       // link carrying a team token is "good"; speculative cross-site drills
       // (chat/ads/widgets) are not and never overwrite this.
-      if sameSite(url.host, sourceHost) || carriesTargetToken(url) {
+      if (sameSite(url.host, sourceHost) || carriesTargetToken(url)),
+         !urlLeagueConflicts(url) {
         lastGoodPageURL = url
       }
       DispatchQueue.main.async { self.onNavigation?(url) }
@@ -3279,9 +3329,21 @@ struct StreamWebView: UIViewRepresentable {
       }
       if !browseMode,
          action.navigationType == .linkActivated,
-         let host = action.request.url?.host,
-         host != webView.url?.host {
-        decisionHandler(.cancel); return
+         let linkURL = action.request.url {
+        // Cross-host link clicks are never followed in player mode.
+        if linkURL.host != webView.url?.host {
+          decisionHandler(.cancel); return
+        }
+        // v2.70: same-host link into a different league (an MLB page's link to
+        // the live WNBA game) — refuse and stay put so we don't drift onto the
+        // wrong game.
+        if urlLeagueConflicts(linkURL) {
+          let event = StreamWebView.WalkEvent(
+            kind: "league_block", info: linkURL.path, at: Date(), detectedCards: []
+          )
+          DispatchQueue.main.async { self.onWalkEvent?(event) }
+          decisionHandler(.cancel); return
+        }
       }
       // v2.63: pin the top frame to the source site. Page-initiated
       // cross-site top-frame redirects (location.href, meta-refresh,
@@ -3295,8 +3357,10 @@ struct StreamWebView: UIViewRepresentable {
          action.targetFrame?.isMainFrame == true,
          action.navigationType != .linkActivated,
          !isAllowedTopNav(url, current: webView.url) {
+        let leagueConflict = urlLeagueConflicts(url)
         let event = StreamWebView.WalkEvent(
-          kind: "popup_blocked", info: url.host ?? url.absoluteString,
+          kind: leagueConflict ? "league_block" : "popup_blocked",
+          info: leagueConflict ? url.path : (url.host ?? url.absoluteString),
           at: Date(), detectedCards: []
         )
         DispatchQueue.main.async { self.onWalkEvent?(event) }
