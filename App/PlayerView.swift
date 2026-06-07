@@ -17,6 +17,9 @@ struct PlayerView: View {
   @State private var rulesReady = false
   @State private var attempts: [SourceAttempt] = []
   @State private var currentAttemptIdx: Int = 0
+  /// When on, shows the live scraping WebView + diagnostics. When off
+  /// (default), the user sees only a loading screen until playback starts.
+  @AppStorage("debugScrapingView") private var debugScraping = false
   /// v2.64: true while we're reading the source site to find the exact
   /// game-page URL before loading it. Shows the loading overlay so the
   /// WebView never briefly loads (and walks) the homepage first.
@@ -102,97 +105,32 @@ struct PlayerView: View {
             )
           } else if !attempts.isEmpty, currentAttemptIdx < attempts.count {
             let current = attempts[currentAttemptIdx]
-            // v2.38: verification layout — top URL strip, visible
-            // WebView in the middle, captured-streams strip at bottom.
-            VStack(spacing: 0) {
-              navStrip(sourceName: sourceName(for: current.sourceID))
-              StreamWebView(
-                url: current.pageURL,
-                ruleList: ruleList,
-                onStreamURLFound: { streamURL, cookies in
-                  Task { @MainActor in
-                    appendCandidate(
-                      url: streamURL,
-                      cookies: cookies,
-                      referer: current.pageURL
-                    )
-                    if let sid = traversalSessionID {
-                      TraversalLog.shared.recordStream(sid, url: streamURL)
-                    }
-                    // v2.47: auto-play return, gated on meaningful Hop ≥ 2.
-                    // We only auto-commit when navigation actually
-                    // advanced past the source's homepage — protects
-                    // against committing a stream URL that surfaced from
-                    // an ad iframe before the user-targeted nav happened.
-                    // Stays off for the initial Hop 1 captures; user can
-                    // still tap the strip pill manually in that case.
-                    if avPlayer == nil {
-                      let hops = URLNormalization.meaningfulHopCount(
-                        navigationHistory.map { $0.absoluteString }
-                      )
-                      if hops >= 2 {
-                        autoPlayCapturedStream(
-                          url: streamURL,
-                          cookies: cookies,
-                          referer: current.pageURL
-                        )
-                      }
-                    }
-                  }
-                },
-                onStreamProbed: { url, playable in
-                  Task { @MainActor in
-                    if let sid = traversalSessionID {
-                      TraversalLog.shared.recordEvent(
-                        sid, kind: "stream_probed",
-                        info: "\(playable ? "ok" : "fail"): \(url.absoluteString)"
-                      )
-                    }
-                  }
-                },
-                onNavigation: { navURL in
-                  Task { @MainActor in
-                    appendNavigation(navURL)
-                    if let sid = traversalSessionID {
-                      TraversalLog.shared.recordNavigation(sid, url: navURL)
-                    }
-                  }
-                },
-                onWalkEvent: { event in
-                  Task { @MainActor in
-                    handleWalkEvent(event)
-                    if let sid = traversalSessionID {
-                      TraversalLog.shared.recordEvent(
-                        sid, kind: event.kind, info: event.info
-                      )
-                    }
-                  }
-                },
-                onLoadFailed: { url, message in
-                  Task { @MainActor in
-                    loadFailure = message
-                    if let sid = traversalSessionID {
-                      TraversalLog.shared.recordEvent(
-                        sid, kind: "load_failure",
-                        info: "\(url.absoluteString): \(message)"
-                      )
-                    }
-                  }
-                },
-                onPageChanged: { _ in
-                  Task { @MainActor in
-                    resetPerPageState()
-                  }
-                },
-                bridge: webBridge,
-                targetGame: game
-              )
-              .id(current.id)
-              if !capturedStreams.isEmpty {
-                capturedStreamsStrip(referer: current.pageURL)
+            if debugScraping {
+              // Debug Mode: verification layout — top URL strip, visible
+              // WebView in the middle, captured-streams strip at bottom.
+              VStack(spacing: 0) {
+                navStrip(sourceName: sourceName(for: current.sourceID))
+                scrapeWebView(current)
+                if !capturedStreams.isEmpty {
+                  capturedStreamsStrip(referer: current.pageURL)
+                }
+              }
+              .ignoresSafeArea(edges: .bottom)
+            } else {
+              // Normal mode: keep the WebView alive (hidden) so scraping
+              // still runs, but show only a loading screen until the
+              // stream is captured and auto-plays.
+              ZStack {
+                scrapeWebView(current)
+                  .opacity(0)
+                  .allowsHitTesting(false)
+                StreamLoadingOverlay(
+                  attemptIndex: currentAttemptIdx,
+                  totalAttempts: attempts.count,
+                  sourceName: sourceName(for: current.sourceID)
+                )
               }
             }
-            .ignoresSafeArea(edges: .bottom)
           } else {
             StreamLoadingOverlay(attemptIndex: 0, totalAttempts: 0, sourceName: "")
           }
@@ -315,6 +253,104 @@ struct PlayerView: View {
   }
 
   // MARK: v2.38 verification UI
+
+  /// The scraping WebView for an attempt, wired to all of PlayerView's
+  /// callbacks. Shown directly in Debug Mode; rendered hidden (still
+  /// scraping) in normal mode behind the loading overlay.
+  @ViewBuilder
+  private func scrapeWebView(_ current: SourceAttempt) -> some View {
+    StreamWebView(
+      url: current.pageURL,
+      ruleList: ruleList,
+      onStreamURLFound: { streamURL, cookies in
+        Task { @MainActor in
+          appendCandidate(
+            url: streamURL,
+            cookies: cookies,
+            referer: current.pageURL
+          )
+          if let sid = traversalSessionID {
+            TraversalLog.shared.recordStream(sid, url: streamURL)
+          }
+          // v2.47: auto-play return, gated on meaningful Hop ≥ 2.
+          // We only auto-commit when navigation actually advanced past
+          // the source's homepage — protects against committing a stream
+          // URL that surfaced from an ad iframe before the user-targeted
+          // nav happened. Stays off for the initial Hop 1 captures; in
+          // Debug Mode the user can still tap the strip pill manually,
+          // and normal mode auto-commits via the playable probe below.
+          if avPlayer == nil {
+            let hops = URLNormalization.meaningfulHopCount(
+              navigationHistory.map { $0.absoluteString }
+            )
+            if hops >= 2 {
+              autoPlayCapturedStream(
+                url: streamURL,
+                cookies: cookies,
+                referer: current.pageURL
+              )
+            }
+          }
+        }
+      },
+      onStreamProbed: { url, playable in
+        Task { @MainActor in
+          if let sid = traversalSessionID {
+            TraversalLog.shared.recordEvent(
+              sid, kind: "stream_probed",
+              info: "\(playable ? "ok" : "fail"): \(url.absoluteString)"
+            )
+          }
+          // Normal mode has no visible strip to tap, so auto-commit the
+          // first stream that probes playable (the probe filters out junk
+          // ad-iframe captures that aren't real video).
+          if !debugScraping, playable, avPlayer == nil,
+             let cand = capturedStreams.first(where: { $0.url == url }) {
+            autoPlayCapturedStream(
+              url: cand.url, cookies: cand.cookies, referer: cand.referer
+            )
+          }
+        }
+      },
+      onNavigation: { navURL in
+        Task { @MainActor in
+          appendNavigation(navURL)
+          if let sid = traversalSessionID {
+            TraversalLog.shared.recordNavigation(sid, url: navURL)
+          }
+        }
+      },
+      onWalkEvent: { event in
+        Task { @MainActor in
+          handleWalkEvent(event)
+          if let sid = traversalSessionID {
+            TraversalLog.shared.recordEvent(
+              sid, kind: event.kind, info: event.info
+            )
+          }
+        }
+      },
+      onLoadFailed: { url, message in
+        Task { @MainActor in
+          loadFailure = message
+          if let sid = traversalSessionID {
+            TraversalLog.shared.recordEvent(
+              sid, kind: "load_failure",
+              info: "\(url.absoluteString): \(message)"
+            )
+          }
+        }
+      },
+      onPageChanged: { _ in
+        Task { @MainActor in
+          resetPerPageState()
+        }
+      },
+      bridge: webBridge,
+      targetGame: game
+    )
+    .id(current.id)
+  }
 
   /// Top strip: source name, current page URL, "via" breadcrumb of the
   /// path our walk/drill-down navigated through, and a "Try next source"

@@ -5,6 +5,7 @@ import SwiftUI
 struct SettingsView: View {
   @Environment(FavoritesStore.self) private var favorites
   @Environment(SourceRegistry.self) private var registry
+  @AppStorage("debugScrapingView") private var debugScraping = false
 
   var body: some View {
     List {
@@ -13,10 +14,10 @@ struct SettingsView: View {
         NavigationLink(destination: SourceListView()) {
           HStack(spacing: 12) {
             settingsIcon(systemName: "antenna.radiowaves.left.and.right", color: .blue)
-            Text("Source Site")
+            Text("Sources")
               .foregroundStyle(Color(.label))
             Spacer()
-            Text(registry.selectedSource.name)
+            Text("\(registry.enabledSources.count) active")
               .font(.subheadline)
               .foregroundStyle(.secondary)
           }
@@ -46,6 +47,19 @@ struct SettingsView: View {
           }
           .padding(.vertical, 2)
         }
+      }
+
+      // MARK: Debug
+      Section {
+        Toggle(isOn: $debugScraping) {
+          HStack(spacing: 12) {
+            settingsIcon(systemName: "ladybug.fill", color: .pink)
+            Text("Debug Mode")
+              .foregroundStyle(Color(.label))
+          }
+        }
+      } footer: {
+        Text("Show the web view while finding a stream. When off, you'll just see a loading screen until playback starts.")
       }
 
       // MARK: Favorites
