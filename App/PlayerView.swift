@@ -1864,7 +1864,7 @@ struct StreamWebView: UIViewRepresentable {
           // Does this detected pair match the tapped game? (order-free)
           if (haveToks && blob.length < targetSize) {
             var pl = (m[1] + ' ' + m[2]).toLowerCase();
-            if (_sideHit(pl, 'home') && _sideHit(pl, 'away')) {
+            if (_pairHit(pl)) {
               targetEl = el; targetSize = blob.length; targetPair = pair;
             }
           }
@@ -2067,15 +2067,19 @@ struct StreamWebView: UIViewRepresentable {
       // rainbet link) that send the walk into a casino dead-end. Reject them.
       function _navHrefOK(href) {
         if (!href) return false;
+        // v2.70: never follow a link into a different sport/league than the
+        // one we want. An LA MLB game page links to other LA games (e.g. the
+        // WNBA Sparks); the shared city token shouldn't carry us there.
+        if (_urlLeagueConflicts(href)) return false;
         var u; try { u = new URL(href, location.href); } catch(e){ return true; }
         if (u.host === location.host) return true;
         var low = u.href.toLowerCase(), toks = _hrefTokens();
         for (var i = 0; i < toks.length; i++){ if (low.indexOf(toks[i]) !== -1) return true; }
         // v2.65: also accept cross-origin deep links routed by team
-        // abbreviation (e.g. embedindia.st/embed/mlb/.../wsh-ari) — require
-        // BOTH sides so a lone 2-char abbr in an ad URL can't sneak through.
-        if (_hasAnyToks('home') && _hasAnyToks('away') &&
-            _sideHit(low, 'home') && _sideHit(low, 'away')) return true;
+        // abbreviation (e.g. embedindia.st/embed/mlb/.../wsh-ari). v2.70:
+        // require two DISTINCT team tokens so a shared city word (or a lone
+        // 2-char abbr in an ad URL) can't satisfy both sides.
+        if (_hasAnyToks('home') && _hasAnyToks('away') && _pairHit(low)) return true;
         return false;
       }
       function _firstUsableAnchorHref(scope) {
@@ -2270,6 +2274,55 @@ struct StreamWebView: UIViewRepresentable {
         return _longToks(side).length > 0 || _abbrToks(side).length > 0;
       }
 
+      // v2.70: every distinct token from `side` that appears in `blob`.
+      function _collectHits(blob, side) {
+        var low = ('' + blob).toLowerCase(), hits = [];
+        var longs = _longToks(side);
+        for (var i = 0; i < longs.length; i++)
+          if (low.indexOf(longs[i]) !== -1 && hits.indexOf(longs[i]) === -1) hits.push(longs[i]);
+        var abbrs = _abbrToks(side);
+        for (var j = 0; j < abbrs.length; j++)
+          if (_boundedHit(low, abbrs[j]) && hits.indexOf(abbrs[j]) === -1) hits.push(abbrs[j]);
+        return hits;
+      }
+      // v2.70: a true pair match requires home AND away to be identified by
+      // DIFFERENT tokens. Both LA teams (Dodgers, Angels) and an LA Sparks
+      // (WNBA) game all contain the shared city word "angeles", so the old
+      // "_sideHit(home) && _sideHit(away)" fired on a wrong-sport game where
+      // only the city matched. Demanding two distinct tokens means the city
+      // word alone can never satisfy both sides — a distinctive token
+      // (nickname/abbr) for each team must be present.
+      function _pairHit(blob) {
+        var hh = _collectHits(blob, 'home');
+        var aa = _collectHits(blob, 'away');
+        if (!hh.length || !aa.length) return false;
+        for (var i = 0; i < hh.length; i++)
+          for (var j = 0; j < aa.length; j++)
+            if (hh[i] !== aa[j]) return true;
+        return false;
+      }
+      // v2.70: does this URL name a DIFFERENT sport/league than the target's?
+      // Streameast routes by league segment (/mlb/…, /wnba/…); an MLB game
+      // page links to same-site games in other leagues, and we must never
+      // follow those. Returns true only when the path names some other
+      // league and does NOT name ours. `_leagueHints` (defined below) is the
+      // same league→keyword map the category finder already uses.
+      function _urlLeagueConflicts(url) {
+        var tg = window.__sc_target;
+        if (!tg || !tg.league || typeof _leagueHints === 'undefined') return false;
+        var path;
+        try { path = new URL(url, location.href).pathname.toLowerCase(); }
+        catch(e) { path = ('' + url).toLowerCase(); }
+        var mine = _leagueHints[tg.league] || [];
+        for (var i = 0; i < mine.length; i++) if (_boundedHit(path, mine[i])) return false;
+        for (var lg in _leagueHints) {
+          if (lg === tg.league) continue;
+          var keys = _leagueHints[lg];
+          for (var k = 0; k < keys.length; k++) if (_boundedHit(path, keys[k])) return true;
+        }
+        return false;
+      }
+
       var _scanStats = { candidates: 0, matched: 0, nHome: 0, nAway: 0, sample: '', rejSample: '' };
 
       function selectTargetGameElement() {
@@ -2277,7 +2330,7 @@ struct StreamWebView: UIViewRepresentable {
         if (!window.__sc_target) return null;
         if (!_hasAnyToks('home') || !_hasAnyToks('away')) return null;
         function bothPresent(text) {
-          return _sideHit(text, 'home') && _sideHit(text, 'away');
+          return _pairHit(text);
         }
         var candidates;
         try {
@@ -2348,7 +2401,7 @@ struct StreamWebView: UIViewRepresentable {
           var blob = readableTextFromElement(el).toLowerCase();
           if (blob.length < 6 || blob.length > 1200) continue;
           var hh = _sideHit(blob, 'home'), aa = _sideHit(blob, 'away');
-          if (hh && aa) {
+          if (_pairHit(blob)) {
             _scanStats.matched++;
             if (blob.length < bestSize) {
               bestSize = blob.length;
@@ -2394,11 +2447,14 @@ struct StreamWebView: UIViewRepresentable {
           var href = '';
           try { href = as[i].getAttribute('href') || ''; } catch(e){}
           if (!_usableHref(href)) continue;
+          if (_urlLeagueConflicts(href)) continue;   // wrong sport/league
           var low = href.toLowerCase();
           // v2.65: match home + away via long tokens (substring) or
-          // abbreviations (bounded). Score prefers abbreviation hits since a
-          // URL carrying both team abbreviations is an unambiguous deep link.
-          if (_sideHit(low, 'home') && _sideHit(low, 'away')) {
+          // abbreviations (bounded). v2.70: require two DISTINCT tokens so a
+          // shared city word ("angeles") can't match both teams of a
+          // different LA game. Score prefers abbreviation hits since a URL
+          // carrying both team abbreviations is an unambiguous deep link.
+          if (_pairHit(low)) {
             var score = 2;
             if (_abbrToks('home').some(function(a){ return _boundedHit(low, a); })) score++;
             if (_abbrToks('away').some(function(a){ return _boundedHit(low, a); })) score++;
@@ -2449,7 +2505,7 @@ struct StreamWebView: UIViewRepresentable {
           // matches if BOTH teams' tokens appear somewhere in the pair
           // (the regex already proved it's an "X vs Y" card).
           var pair = (m[1] + ' ' + m[2]).toLowerCase();
-          if (_sideHit(pair, 'home') && _sideHit(pair, 'away')) {
+          if (_pairHit(pair)) {
             _pairScanStats.matched++;
             if (blob.length < bestSize) {
               bestSize = blob.length;
