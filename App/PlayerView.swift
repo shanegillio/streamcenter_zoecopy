@@ -1042,19 +1042,31 @@ final class StreamWebViewBridge: ObservableObject {
         })); } catch(e){}
       }
       var t = '\(escaped)'.toLowerCase();
-      // Team tokens from the pair we're following, used to validate
-      // cross-origin deep links (real game URLs carry the slug). Must be
-      // built AFTER `t` is assigned — referencing it earlier hit the
-      // hoisted-but-undefined `t` and threw, aborting the whole click.
+      // v2.73: per-side EXCLUSIVE tokens from the pair. The walk used to
+      // follow the first usable same-site href near the matched card, which
+      // on ntv.cx grabbed a generic "/matches/kobra" server link beside the
+      // game — so we detoured there instead of the one-hop "/watch/kobra/
+      // <teams>-<id>" the card's own click produces. We now only auto-navigate
+      // to a URL that NAMES THE GAME (a distinctive token from BOTH teams);
+      // anything else falls through to running the card's own handler.
       var toks = [];
       t.replace(/\\bvs\\b|@|—|–/g, ' ').split(/\\s+/).forEach(function(w){
         if (w.length >= 4) toks.push(w);
       });
-      // A homepage card link is only worth following if it stays on the
-      // same site (the site's own watch/game page) OR it's a cross-origin
-      // URL that carries a team token (a genuine deep link). Cross-origin,
-      // token-less links are betting/affiliate ads (playonrain → rainbet)
-      // that derail the walk into a casino. Reject those.
+      var _sides = t.split(/\\bvs\\b|@|—|–/);
+      function _words(s){ var w = []; ('' + (s || '')).split(/\\s+/).forEach(function(x){ if (x.length >= 4) w.push(x); }); return w; }
+      function _excl(a, b){ return a.filter(function(w){ return b.indexOf(w) === -1; }); }
+      var _s0 = _words(_sides[0]), _s1 = _words(_sides[1] || '');
+      var _homeEx = _excl(_s0, _s1), _awayEx = _excl(_s1, _s0);
+      function hrefNamesGame(h){
+        if (!h || !_homeEx.length || !_awayEx.length) return false;
+        var low = ('' + h).toLowerCase();
+        var hh = _homeEx.some(function(w){ return low.indexOf(w) !== -1; });
+        var aa = _awayEx.some(function(w){ return low.indexOf(w) !== -1; });
+        return hh && aa;
+      }
+      // Cross-origin ad guard (kept for the skip-ad check below): an off-site
+      // link is only worth touching if it carries a team token.
       function navHrefOK(href){
         if (!href) return false;
         var u; try { u = new URL(href, location.href); } catch(e){ return true; }
@@ -1070,49 +1082,36 @@ final class StreamWebViewBridge: ObservableObject {
         var low = h.toLowerCase();
         if (low.indexOf('javascript:') === 0 || low.indexOf('mailto:') === 0 ||
             low.indexOf('tel:') === 0 || low.indexOf('#') === 0) return false;
-        return navHrefOK(h);
+        return true;
       }
-      // Pull a navigable URL from common attributes on a single element.
-      function hrefAttr(el){
+      // A game-naming URL from this element's href, onclick text, or data-*.
+      function gameHref(el){
         if (!el || !el.getAttribute) return '';
-        var keys = ['href','data-href','data-url','data-link'];
-        for (var i = 0; i < keys.length; i++){
-          var v = el.getAttribute(keys[i]);
-          if (usableHref(v)) return v;
-        }
-        // v2.71: JS-only cards (no <a href>) keep their destination in an
-        // onclick handler or a data-* attribute. Extract a usable URL so we
-        // navigate directly instead of relying on a synthetic click the
-        // site's handler ignores.
+        var direct = el.getAttribute('href');
+        if (usableHref(direct) && hrefNamesGame(direct)) return direct;
         var srcs = [];
         var oc = el.getAttribute('onclick'); if (oc) srcs.push(oc);
-        var more = ['data-src','data-watch','data-play','data-stream'];
-        for (var k = 0; k < more.length; k++){ var mv = el.getAttribute(more[k]); if (mv) srcs.push(mv); }
+        var keys = ['data-href','data-url','data-link','data-src','data-watch','data-play','data-stream'];
+        for (var k = 0; k < keys.length; k++){ var v = el.getAttribute(keys[k]); if (v) srcs.push(v); }
         for (var s = 0; s < srcs.length; s++){
+          if (usableHref(srcs[s]) && hrefNamesGame(srcs[s])) return srcs[s];
           var re = /['"]((?:https?:\\/\\/|\\/)[^'"]+)['"]/g, m;
-          while ((m = re.exec(srcs[s])) !== null){ if (usableHref(m[1])) return m[1]; }
+          while ((m = re.exec(srcs[s])) !== null){ if (usableHref(m[1]) && hrefNamesGame(m[1])) return m[1]; }
         }
         return '';
       }
-      function firstHrefIn(scope){
-        try {
-          var as = scope.querySelectorAll && scope.querySelectorAll(
-            'a[href],[data-href],[data-url],[data-link]');
-          if (as) for (var i = 0; i < as.length; i++){
-            var h = hrefAttr(as[i]); if (h) return h;
-          }
-        } catch(e){}
-        return '';
-      }
-      // Self → climb ancestors, searching each subtree (catches sibling
-      // "Watch" links inside the same card container).
+      // Self → climb ancestors, also searching each subtree, for a URL that
+      // names the game. Never returns a generic nearby link.
       function findNavHref(el){
         if (!el) return '';
-        var h0 = hrefAttr(el); if (h0) return h0;
         var n = el, lvl = 0;
         while (n && lvl < 6){
-          var ha = hrefAttr(n); if (ha) return ha;
-          var hs = firstHrefIn(n); if (hs) return hs;
+          var hg = gameHref(n); if (hg) return hg;
+          try {
+            var as = n.querySelectorAll && n.querySelectorAll(
+              'a[href],[data-href],[data-url],[data-link]');
+            if (as) for (var i = 0; i < as.length; i++){ var h = gameHref(as[i]); if (h) return h; }
+          } catch(e){}
           n = n.parentElement; lvl++;
         }
         return '';
@@ -2111,30 +2110,23 @@ struct StreamWebView: UIViewRepresentable {
         if (_hasAnyToks('home') && _hasAnyToks('away') && _pairHit(low)) return true;
         return false;
       }
-      function _firstUsableAnchorHref(scope) {
-        try {
-          var as = scope.querySelectorAll && scope.querySelectorAll('a[href]');
-          if (as) for (var i = 0; i < as.length; i++) {
-            var h = as[i].getAttribute('href'); if (_usableHref(h) && _navHrefOK(h)) return h;
-          }
-        } catch(e){}
-        return '';
+      // v2.73: a URL is only safe to auto-navigate to if it NAMES THE GAME —
+      // i.e. it carries a distinctive token from BOTH teams (_pairHit). The
+      // old code grabbed the first usable same-site href anywhere near the
+      // card, which on ntv.cx meant a generic "/matches/kobra" server link
+      // sitting beside the game card. We kept detouring there instead of the
+      // one-hop "/watch/kobra/<teams>-<id>" the card's own click produces.
+      // Requiring the game's tokens means we only shortcut to a true deep
+      // link; for anything else we let the card's own handler run (below).
+      function _hrefNamesGame(h) {
+        if (!_usableHref(h) || !_navHrefOK(h)) return false;
+        if (!(_hasAnyToks('home') && _hasAnyToks('away'))) return false;
+        return _pairHit(('' + h).toLowerCase());
       }
-      // v2.58: search the matched element, then climb its ancestors and at
-      // EACH level search that ancestor's whole subtree for a usable <a>.
-      // This catches the common card layout where the "X vs Y" text and the
-      // real "Watch" link are SIBLINGS inside a card container (the old
-      // version only saw self / descendant / direct-ancestor anchors and so
-      // returned '' → CLICKED-BUT-NO-NAV).
-      // v2.71: many sites (ntv.cx) render game cards as JS <div>s with no
-      // <a href> — the /watch/… destination lives in an onclick handler or a
-      // data-* attribute. A synthetic click usually fails to trigger the
-      // site's handler (untrusted-event gating), so we get stuck on
-      // CLICKED-BUT-NO-NAV. Pull a real URL out of the handler/attribute text
-      // so clickOrNavigate can drive location.href to it — a guaranteed
-      // navigation. Only accepts URLs that pass _navHrefOK (same-site or a
-      // team-token-bearing deep link), so an ad URL in a handler is ignored.
-      function _handlerHref(el) {
+      // Scan an element's onclick text + data-* attributes for a URL that
+      // names the game. (We never extract a generic URL here — a non-game
+      // URL in a handler is exactly the /matches/kobra trap.)
+      function _gameHrefFromHandler(el) {
         if (!el || !el.getAttribute) return '';
         var srcs = [];
         var oc = el.getAttribute('onclick'); if (oc) srcs.push(oc);
@@ -2142,24 +2134,31 @@ struct StreamWebView: UIViewRepresentable {
         for (var a = 0; a < attrs.length; a++) { var v = el.getAttribute(attrs[a]); if (v) srcs.push(v); }
         for (var s = 0; s < srcs.length; s++) {
           var str = srcs[s];
-          if (_usableHref(str) && _navHrefOK(str)) return str;
+          if (_hrefNamesGame(str)) return str;
           var re = /['"]((?:https?:\\/\\/|\\/)[^'"]+)['"]/g, m;
-          while ((m = re.exec(str)) !== null) {
-            if (_usableHref(m[1]) && _navHrefOK(m[1])) return m[1];
-          }
+          while ((m = re.exec(str)) !== null) { if (_hrefNamesGame(m[1])) return m[1]; }
         }
         return '';
       }
+      // Returns a deep link that names the game (anchor href, descendant/
+      // sibling anchor, or a URL embedded in a handler), or '' if none.
       function _findNavHref(el) {
         if (!el) return '';
-        try { if (el.tagName === 'A') { var h0 = el.getAttribute('href'); if (_usableHref(h0) && _navHrefOK(h0)) return h0; } } catch(e){}
         var n = el, lvl = 0;
         while (n && lvl < 6) {
-          if (n.tagName === 'A') { var h2 = n.getAttribute('href'); if (_usableHref(h2) && _navHrefOK(h2)) return h2; }
-          var h3 = _firstUsableAnchorHref(n);
-          if (h3) return h3;
-          var h4 = _handlerHref(n);   // onclick / data-* embedded URL
-          if (h4) return h4;
+          if (n.tagName === 'A') {
+            var h = n.getAttribute('href');
+            if (_hrefNamesGame(h)) return h;
+          }
+          try {
+            var as = n.querySelectorAll && n.querySelectorAll('a[href]');
+            if (as) for (var i = 0; i < as.length; i++) {
+              var hh = as[i].getAttribute('href');
+              if (_hrefNamesGame(hh)) return hh;
+            }
+          } catch(e){}
+          var hm = _gameHrefFromHandler(n);
+          if (hm) return hm;
           n = n.parentElement; lvl++;
         }
         return '';
