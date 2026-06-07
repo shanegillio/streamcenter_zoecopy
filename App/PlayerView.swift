@@ -1080,6 +1080,18 @@ final class StreamWebViewBridge: ObservableObject {
           var v = el.getAttribute(keys[i]);
           if (usableHref(v)) return v;
         }
+        // v2.71: JS-only cards (no <a href>) keep their destination in an
+        // onclick handler or a data-* attribute. Extract a usable URL so we
+        // navigate directly instead of relying on a synthetic click the
+        // site's handler ignores.
+        var srcs = [];
+        var oc = el.getAttribute('onclick'); if (oc) srcs.push(oc);
+        var more = ['data-src','data-watch','data-play','data-stream'];
+        for (var k = 0; k < more.length; k++){ var mv = el.getAttribute(more[k]); if (mv) srcs.push(mv); }
+        for (var s = 0; s < srcs.length; s++){
+          var re = /['"]((?:https?:\\/\\/|\\/)[^'"]+)['"]/g, m;
+          while ((m = re.exec(srcs[s])) !== null){ if (usableHref(m[1])) return m[1]; }
+        }
         return '';
       }
       function firstHrefIn(scope){
@@ -2101,6 +2113,30 @@ struct StreamWebView: UIViewRepresentable {
       // real "Watch" link are SIBLINGS inside a card container (the old
       // version only saw self / descendant / direct-ancestor anchors and so
       // returned '' → CLICKED-BUT-NO-NAV).
+      // v2.71: many sites (ntv.cx) render game cards as JS <div>s with no
+      // <a href> — the /watch/… destination lives in an onclick handler or a
+      // data-* attribute. A synthetic click usually fails to trigger the
+      // site's handler (untrusted-event gating), so we get stuck on
+      // CLICKED-BUT-NO-NAV. Pull a real URL out of the handler/attribute text
+      // so clickOrNavigate can drive location.href to it — a guaranteed
+      // navigation. Only accepts URLs that pass _navHrefOK (same-site or a
+      // team-token-bearing deep link), so an ad URL in a handler is ignored.
+      function _handlerHref(el) {
+        if (!el || !el.getAttribute) return '';
+        var srcs = [];
+        var oc = el.getAttribute('onclick'); if (oc) srcs.push(oc);
+        var attrs = ['data-href','data-url','data-link','data-src','data-watch','data-play','data-stream'];
+        for (var a = 0; a < attrs.length; a++) { var v = el.getAttribute(attrs[a]); if (v) srcs.push(v); }
+        for (var s = 0; s < srcs.length; s++) {
+          var str = srcs[s];
+          if (_usableHref(str) && _navHrefOK(str)) return str;
+          var re = /['"]((?:https?:\\/\\/|\\/)[^'"]+)['"]/g, m;
+          while ((m = re.exec(str)) !== null) {
+            if (_usableHref(m[1]) && _navHrefOK(m[1])) return m[1];
+          }
+        }
+        return '';
+      }
       function _findNavHref(el) {
         if (!el) return '';
         try { if (el.tagName === 'A') { var h0 = el.getAttribute('href'); if (_usableHref(h0) && _navHrefOK(h0)) return h0; } } catch(e){}
@@ -2109,6 +2145,8 @@ struct StreamWebView: UIViewRepresentable {
           if (n.tagName === 'A') { var h2 = n.getAttribute('href'); if (_usableHref(h2) && _navHrefOK(h2)) return h2; }
           var h3 = _firstUsableAnchorHref(n);
           if (h3) return h3;
+          var h4 = _handlerHref(n);   // onclick / data-* embedded URL
+          if (h4) return h4;
           n = n.parentElement; lvl++;
         }
         return '';
@@ -2125,7 +2163,16 @@ struct StreamWebView: UIViewRepresentable {
           parts.push('tag=' + node.tagName);
           var href = node.getAttribute && node.getAttribute('href');
           parts.push('href=' + (href ? ('' + href).slice(0, 40) : '-'));
-          parts.push('onclick=' + (node.hasAttribute && node.hasAttribute('onclick') ? 'Y' : 'N'));
+          // v2.71: dump the actual onclick text + any data-* attrs so a
+          // no-href card's navigation mechanism is visible in the log when
+          // URL extraction can't recover it (function-arg routers etc.).
+          var ocv = node.getAttribute && node.getAttribute('onclick');
+          parts.push('onclick=' + (ocv ? ('"' + ('' + ocv).slice(0, 80) + '"') : 'N'));
+          var dataAttrs = ['data-href','data-url','data-link','data-src','data-watch','data-play','data-stream','data-id','data-match'];
+          for (var da = 0; da < dataAttrs.length; da++) {
+            var dv = node.getAttribute && node.getAttribute(dataAttrs[da]);
+            if (dv) parts.push(dataAttrs[da] + '="' + ('' + dv).slice(0, 50) + '"');
+          }
           parts.push('role=' + ((node.getAttribute && node.getAttribute('role')) || '-'));
           var box = node;
           for (var u = 0; u < 3 && box.parentElement; u++) box = box.parentElement;
