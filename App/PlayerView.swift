@@ -125,13 +125,19 @@ struct PlayerView: View {
               }
               .ignoresSafeArea(edges: .bottom)
             } else {
-              // Normal mode: keep the WebView alive (hidden) so scraping
-              // still runs, but show only a loading screen until the
-              // stream is captured and auto-plays.
+              // Normal mode: keep the WebView alive AND on-screen so scraping
+              // runs, but cover it with an opaque loading screen. v2.67: we
+              // render it at full opacity behind a solid black layer rather
+              // than `.opacity(0)`. A zero-opacity WKWebView is treated by
+              // WebKit as not visible, which throttles timers and blocks media
+              // autoplay/visibility observers — so some sites (crackstreams.ms)
+              // never started their player and never emitted the stream until
+              // Debug Mode showed the WebView. Keeping it laid out and visible
+              // (just occluded) lets the player initialize as it does in Debug.
               ZStack {
                 scrapeWebView(current)
-                  .opacity(0)
                   .allowsHitTesting(false)
+                Color.black.ignoresSafeArea()
                 StreamLoadingOverlay(
                   attemptIndex: currentAttemptIdx,
                   totalAttempts: attempts.count,
@@ -301,7 +307,7 @@ struct PlayerView: View {
           }
         }
       },
-      onStreamProbed: { url, playable in
+      onStreamProbed: { url, playable, cookies, referer in
         Task { @MainActor in
           if let sid = traversalSessionID {
             TraversalLog.shared.recordEvent(
@@ -310,12 +316,17 @@ struct PlayerView: View {
             )
           }
           // Normal mode has no visible strip to tap, so auto-commit the
-          // first stream that probes playable (the probe filters out junk
-          // ad-iframe captures that aren't real video).
-          if !debugScraping, playable, avPlayer == nil,
-             let cand = capturedStreams.first(where: { $0.url == url }) {
+          // first stream that probes playable. v2.67: play it directly from
+          // the probe's own cookies/referer instead of looking it up in
+          // `capturedStreams` — that list is populated later (via commitURL →
+          // onStreamURLFound), so the lookup was always empty here and normal
+          // mode could get stuck on the loading screen for flat sites
+          // (crackstreams.ms) whose real stream surfaces before Hop 2. The
+          // probe already filters out non-video ad captures.
+          if !debugScraping, playable, avPlayer == nil {
+            appendCandidate(url: url, cookies: cookies, referer: referer ?? current.pageURL)
             autoPlayCapturedStream(
-              url: cand.url, cookies: cand.cookies, referer: cand.referer
+              url: url, cookies: cookies, referer: referer ?? current.pageURL
             )
           }
         }
@@ -1183,7 +1194,10 @@ struct StreamWebView: UIViewRepresentable {
   /// isPlayable probe finishes, regardless of outcome. PlayerView
   /// records this in the TraversalLog so probe failures are visible
   /// in Settings → Traversal Log during iterative testing.
-  var onStreamProbed: ((URL, Bool) -> Void)? = nil
+  /// v2.67: carries the cookies + referer used for the probe so normal mode
+  /// can auto-commit a playable stream directly, without waiting for the
+  /// candidate to land in `capturedStreams`.
+  var onStreamProbed: ((URL, Bool, [HTTPCookie], URL?) -> Void)? = nil
   /// v2.38: fired on every top-frame navigation commit (initial load,
   /// iframe-drill navigations, redirect chains). Used by PlayerView to
   /// build the breadcrumb the user sees in verification mode.
@@ -2796,7 +2810,7 @@ struct StreamWebView: UIViewRepresentable {
     let onStreamURLFound: ((URL, [HTTPCookie]) -> Void)?
     /// v2.48: fires after each probePlayability finishes so PlayerView
     /// can log the result to the TraversalLog.
-    let onStreamProbed: ((URL, Bool) -> Void)?
+    let onStreamProbed: ((URL, Bool, [HTTPCookie], URL?) -> Void)?
     /// v2.38: invoked from `webView(_:didCommit:)` so PlayerView can
     /// render the navigation breadcrumb.
     let onNavigation: ((URL) -> Void)?
@@ -2871,7 +2885,7 @@ struct StreamWebView: UIViewRepresentable {
     }
 
     init(onStreamURLFound: ((URL, [HTTPCookie]) -> Void)?,
-         onStreamProbed: ((URL, Bool) -> Void)? = nil,
+         onStreamProbed: ((URL, Bool, [HTTPCookie], URL?) -> Void)? = nil,
          onNavigation: ((URL) -> Void)? = nil,
          onWalkEvent: ((StreamWebView.WalkEvent) -> Void)? = nil,
          onLoadFailed: ((URL, String) -> Void)? = nil,
@@ -3189,7 +3203,7 @@ struct StreamWebView: UIViewRepresentable {
         }()
         let playable = await Self.probePlayability(url, referer: referer, cookies: cookies)
         await MainActor.run {
-          onProbed?(url, playable)
+          onProbed?(url, playable, cookies, referer)
           guard let self, !self.found, playable else { return }
           self.commitURL(url)
         }
