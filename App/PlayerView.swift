@@ -236,14 +236,12 @@ struct PlayerView: View {
     for c in game.streamURLs {
       if !enabledIDs.contains(c.sourceID) { continue }
       if failureStore.isFailedRecently(gameKey: gameKey, sourceID: c.sourceID) { continue }
-      if health.isInParkingCooldown(c.sourceID) { continue }
       built.append(SourceAttempt(sourceID: c.sourceID, pageURL: c.pageURL))
     }
     let preResolvedIDs = Set(built.map(\.sourceID))
     let fallbackSources = registry.enabledSources
       .filter { !preResolvedIDs.contains($0.id) }
       .filter { !failureStore.isFailedRecently(gameKey: gameKey, sourceID: $0.id) }
-      .filter { !health.isInParkingCooldown($0.id) }
     let fallbackIDs = fallbackSources.map(\.id)
     let demotedIDs = Set(fallbackIDs.filter { health.isDemoted($0) })
     let healthyIDs = fallbackIDs.filter { !demotedIDs.contains($0) }
@@ -1284,13 +1282,14 @@ struct StreamWebView: UIViewRepresentable {
     let walkProxy = WeakScriptProxy(delegate: context.coordinator)
     config.userContentController.add(walkProxy, name: "streamWalk")
 
-    // v2.57: the walk also needs popups REDIRECTED, not suppressed. Many
+    // v2.57: the walk needs popups REDIRECTED, not suppressed. Many
     // stream-site game cards have no <a href> — their onclick calls
-    // window.open(gameURL). popupSuppressJS turned that into a no-op, so
-    // we clicked the right card and went nowhere (CLICKED-BUT-NO-NAV).
-    // Redirecting window.open into a same-frame navigation lets the walk
-    // follow those cards. (The risk is an ad popup hijacking the frame,
-    // but a dropped navigation guarantees failure, so redirect wins.)
+    // window.open(gameURL). Suppressing window.open turned that into a
+    // no-op, so we clicked the right card and went nowhere
+    // (CLICKED-BUT-NO-NAV). Redirecting window.open into a same-frame
+    // navigation lets the walk follow those cards. (The risk is an ad popup
+    // hijacking the frame, but a dropped navigation guarantees failure, so
+    // redirect wins.)
     let popupJS = Self.popupRedirectJS
     config.userContentController.addUserScript(WKUserScript(
       source: popupJS, injectionTime: .atDocumentStart, forMainFrameOnly: false
@@ -1339,13 +1338,6 @@ struct StreamWebView: UIViewRepresentable {
   func updateUIView(_ uiView: WKWebView, context: Context) {}
 
   // MARK: JS Payloads
-
-  static let popupSuppressJS = """
-    window.open = function(){return null;};
-    window.alert = function(){};
-    window.confirm = function(){return false;};
-    window.prompt = function(){return '';};
-  """
 
   // v2.63: window.open is used two ways on these sites: (1) legit game
   // cards whose onclick calls window.open(gameURL) — we WANT to follow
