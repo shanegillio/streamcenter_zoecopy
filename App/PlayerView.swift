@@ -498,6 +498,7 @@ struct PlayerView: View {
     case "clicked": return "hand.tap.fill"
     case "category_click": return "folder.fill"
     case "auto_nav": return "arrow.uturn.right.circle.fill"
+    case "backtrack": return "arrow.uturn.backward.circle.fill"
     case "popup_blocked": return "hand.raised.fill"
     case "click_failed": return "xmark.octagon.fill"
     case "dead_end": return "nosign"
@@ -508,6 +509,7 @@ struct PlayerView: View {
   private func walkColor(for kind: String) -> Color {
     switch kind {
     case "clicked", "category_click", "auto_nav": return .green
+    case "backtrack": return .cyan
     case "popup_blocked": return .orange
     case "click_failed", "dead_end": return .red
     case "scan", "no_match", "cat_scan": return .yellow
@@ -519,6 +521,7 @@ struct PlayerView: View {
     case "clicked": return "Walk clicked: \(event.info.replacingOccurrences(of: "card: ", with: ""))"
     case "category_click": return "Walk → category: \(event.info)"
     case "auto_nav": return "Auto-tap: \(event.info)"
+    case "backtrack": return "Backtracked — dead end, returning to game page"
     case "popup_blocked": return "Blocked pop-up: \(event.info)"
     case "click_failed": return "Walk click error: \(event.info)"
     case "scan": return "Walk: \(event.info)"
@@ -1515,14 +1518,12 @@ struct StreamWebView: UIViewRepresentable {
         var score = 500, hit = false;
 
         // Geometry: a portrait frame is a chat box / sidebar, never a video
-        // player — disqualify outright. A wide, sizeable frame is a positive
-        // signal and sets drill priority by area.
+        // player — disqualify outright. Landscape geometry only refines drill
+        // priority; it does NOT qualify an iframe on its own (a 400x300 chat
+        // box is "landscape and sizeable" too), so it never sets `hit`.
         var w = parseInt(el.getAttribute('width') || el.clientWidth || 0, 10) || 0;
         var h = parseInt(el.getAttribute('height') || el.clientHeight || 0, 10) || 0;
-        if (w > 0 && h > 0) {
-          if (h > w * 1.2) return -1;                 // portrait → not a player
-          if (w >= 280) { hit = true; score = Math.min(score, Math.max(0, 1000 - w * h)); }
-        }
+        if (w > 0 && h > 0 && h > w * 1.2) return -1;   // portrait → not a player
 
         // Media-permission attributes: the standards-based way an embed marks
         // itself a player (autoplay / fullscreen / encrypted-media).
@@ -1549,6 +1550,9 @@ struct StreamWebView: UIViewRepresentable {
             if (host.indexOf(_knownEmbedHosts[i]) !== -1) { hit = true; score = Math.min(score, 100); break; }
           }
         } catch(e){}
+
+        // Only now let landscape size sharpen priority among real candidates.
+        if (hit && w >= 280 && w >= h) score = Math.min(score, Math.max(0, 1000 - w * h));
 
         return hit ? score : -1;
       }
@@ -2870,6 +2874,22 @@ struct StreamWebView: UIViewRepresentable {
     /// to feel laggy.
     private var iframeCommitTask: Task<Void, Never>?
 
+    // v2.69: relevance backtracking. The iframe drill is a *guess* — it
+    // navigates the whole top frame into a cross-origin frame hoping it's the
+    // player. When the guess is wrong (a chat/comment/social/ad widget like
+    // st.chatango.com), we used to strand the user on a page with no relation
+    // to the game. Instead we remember the last page that actually referenced
+    // the target — a same-site source/game page or a token-bearing deep link
+    // — and, if a drill produces no stream and the page it landed on has no
+    // video/player, we navigate back there and skip that dead-end. This
+    // generalizes past any one category: the test is "did it yield a stream
+    // or at least look like a player," not "is this host a known chat widget."
+    private var lastGoodPageURL: URL?
+    private var drillWatchdog: Task<Void, Never>?
+    /// Whether the most recent page_state the shim reported saw a <video>
+    /// element. Lets a slow-but-real embed avoid being backtracked away.
+    private var lastPageHasVideo = false
+
     // v2.63: navigation pinning. The streamer's own pages are the only
     // place we expect to legitimately land (the stream is an iframe on a
     // source-site game page). Page-initiated top-frame redirects/popups to
@@ -2951,6 +2971,13 @@ struct StreamWebView: UIViewRepresentable {
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let kind = json["kind"] as? String else { return }
       let info = (json["info"] as? String) ?? ""
+      // v2.69: track whether the current page rendered a <video> so the
+      // drill watchdog can spare a slow-but-real player from backtracking.
+      // page_state info looks like "rs=… dom=N iframes=N vid=N playBtns=N".
+      if kind == "page_state", let r = info.range(of: "vid=") {
+        let digits = info[r.upperBound...].prefix { $0.isNumber }
+        lastPageHasVideo = (Int(digits) ?? 0) > 0
+      }
       var detected: [StreamWebView.DetectedCard] = []
       // v2.40: detected_cards events carry a payload array
       if kind == "detected_cards",
@@ -3028,7 +3055,41 @@ struct StreamWebView: UIViewRepresentable {
         }
       }
       noteIntendedLoad(pick.url)  // cross-host embed drill is intentional
+      lastPageHasVideo = false    // re-evaluated from the drilled page's state
       webView.load(request)
+      startDrillWatchdog()
+    }
+
+    /// v2.69: arm the backtrack watchdog after a speculative drill. If the
+    /// drilled page hasn't produced a stream — and doesn't even look like a
+    /// player — by the deadline, we return to the last page that referenced
+    /// the target. 6 s mirrors the firstObserved fallback: long enough for a
+    /// real embed-host player to emit its manifest or render a <video>.
+    private func startDrillWatchdog() {
+      drillWatchdog?.cancel()
+      drillWatchdog = Task { [weak self] in
+        try? await Task.sleep(nanoseconds: 6_000_000_000)
+        await MainActor.run { self?.backtrackIfDrillFailed() }
+      }
+    }
+
+    private func backtrackIfDrillFailed() {
+      drillWatchdog = nil
+      guard !found, let back = lastGoodPageURL, let webView else { return }
+      // A real (if slow) player rendered a <video> — give it the benefit of
+      // the doubt rather than abandoning a working embed.
+      if lastPageHasVideo { return }
+      // Already back on a page that references the target — nothing to undo.
+      if let cur = webView.url,
+         sameSite(cur.host, back.host) || carriesTargetToken(cur) { return }
+      pendingBestIframe = nil
+      iframeCommitTask?.cancel(); iframeCommitTask = nil
+      noteIntendedLoad(back)
+      let event = StreamWebView.WalkEvent(
+        kind: "backtrack", info: back.absoluteString, at: Date(), detectedCards: []
+      )
+      DispatchQueue.main.async { self.onWalkEvent?(event) }
+      webView.load(URLRequest(url: back))
     }
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
@@ -3081,6 +3142,13 @@ struct StreamWebView: UIViewRepresentable {
     // events) so different pages' data don't overlap on one screen.
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
       guard let url = webView.url else { return }
+      // v2.69: remember pages that reference the target so backtracking has
+      // somewhere safe to return to. A same-site source/game page or a deep
+      // link carrying a team token is "good"; speculative cross-site drills
+      // (chat/ads/widgets) are not and never overwrite this.
+      if sameSite(url.host, sourceHost) || carriesTargetToken(url) {
+        lastGoodPageURL = url
+      }
       DispatchQueue.main.async { self.onNavigation?(url) }
       let key = (url.host ?? "") + url.path
       if lastCommittedKey != key {
@@ -3242,6 +3310,7 @@ struct StreamWebView: UIViewRepresentable {
 
     private func commitURL(_ url: URL) {
       found = true
+      drillWatchdog?.cancel(); drillWatchdog = nil
       if let store = webView?.configuration.websiteDataStore.httpCookieStore {
         store.getAllCookies { cookies in
           DispatchQueue.main.async { self.onStreamURLFound?(url, cookies) }
