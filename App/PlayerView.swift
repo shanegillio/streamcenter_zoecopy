@@ -924,8 +924,11 @@ final class StreamWebViewBridge: ObservableObject {
           kind: 'auto_nav', info: ('' + info).slice(0,160), time: Date.now()
         })); } catch(e){}
       }
+      var t = '\(escaped)'.toLowerCase();
       // Team tokens from the pair we're following, used to validate
-      // cross-origin deep links (real game URLs carry the slug).
+      // cross-origin deep links (real game URLs carry the slug). Must be
+      // built AFTER `t` is assigned — referencing it earlier hit the
+      // hoisted-but-undefined `t` and threw, aborting the whole click.
       var toks = [];
       t.replace(/\\bvs\\b|@|—|–/g, ' ').split(/\\s+/).forEach(function(w){
         if (w.length >= 4) toks.push(w);
@@ -1026,7 +1029,6 @@ final class StreamWebViewBridge: ObservableObject {
           }
         } catch(e){}
       }
-      var t = '\(escaped)'.toLowerCase();
       var sel = 'a[href],button,[onclick],[data-match],[data-event],[data-game],' +
                 '[role="button"],[class*="card" i],[class*="match" i],[class*="game" i]';
       var els = document.querySelectorAll(sel);
