@@ -1183,9 +1183,14 @@ final class StreamWebViewBridge: ObservableObject {
           }
         } catch(e){}
       }
+      // v2.68: is the label a game pair ("X vs Y") rather than a category
+      // ("WNBA Streams")? For a game we must NOT force-navigate to a link
+      // that doesn't carry the team slug.
+      var isPair = /(^|\\s)vs(\\s|$)|@|—|–/.test(t);
       var sel = 'a[href],button,[onclick],[data-match],[data-event],[data-game],' +
                 '[role="button"],[class*="card" i],[class*="match" i],[class*="game" i]';
       var els = document.querySelectorAll(sel);
+      var firstMatch = null;
       for (var i = 0; i < els.length && i < 2000; i++) {
         var e = els[i];
         var b = ((e.innerText || e.textContent || '') + ' ' +
@@ -1193,9 +1198,16 @@ final class StreamWebViewBridge: ObservableObject {
                  (e.getAttribute && (e.getAttribute('title') || '')))
                 .replace(/\\s+/g, ' ').toLowerCase();
         if (b.indexOf(t) === -1) continue;
-        // Prefer a real destination URL — always navigates.
+        if (!firstMatch) firstMatch = e;
+        // Prefer a real destination URL. v2.68: but for a game card, only
+        // FOLLOW a link that carries the team slug (the real /watch/<server>/
+        // <home-vs-away> URL). Forcing location.href to the first generic
+        // same-site link — a "kobra server" tile → /matches/kobra — hijacks
+        // the page before the card's own onclick can route to the game, and
+        // strands us on a server-list page. A non-pair (category) follow may
+        // use any same-site link.
         var href = findNavHref(e);
-        if (href) {
+        if (href && (!isPair || hrefHasToken(href))) {
           var abs = href;
           try { abs = new URL(href, location.href).href; } catch(err){}
           if (abs && abs.split('#')[0] !== location.href.split('#')[0]) {
@@ -1203,11 +1215,12 @@ final class StreamWebViewBridge: ObservableObject {
             try { location.href = abs; return true; } catch(err){}
           }
         }
-        // No reachable href — fall back to a synthetic click on the
-        // nearest clickable ancestor (handles pure-JS onclick cards). But
-        // if that ancestor is an <a> pointing off-site to an ad (its href
-        // failed navHrefOK), clicking it would just open the ad — skip it.
-        var target = findClickableAncestor(e);
+      }
+      // No team-token deep link found. Click the matched card and let the
+      // site's own handler route to the game, rather than jumping to a
+      // generic link. Skip an <a> whose href is an off-site ad.
+      if (firstMatch) {
+        var target = findClickableAncestor(firstMatch);
         if (target && target.tagName === 'A') {
           var rawHref = target.getAttribute('href');
           if (rawHref && !navHrefOK(rawHref)) {
@@ -1216,7 +1229,7 @@ final class StreamWebViewBridge: ObservableObject {
           }
         }
         report('click ' + (target && target.tagName ? target.tagName : '?') +
-               ' no-href');
+               ' no-token-href');
         robustClick(target);
         return true;
       }
@@ -2202,9 +2215,14 @@ struct StreamWebView: UIViewRepresentable {
         return false;
       }
       // Returns 'nav' when it forced a real URL change, else 'click'.
+      // v2.68: for a game click (every kind except 'category_click') only
+      // force-navigate to a link carrying the team slug. A game card's
+      // nearest generic link is often a "server" tile (/matches/kobra) that
+      // hijacks the page off the game; if there's no slug link we click the
+      // card and let the site route to /watch/<server>/<slug> itself.
       function clickOrNavigate(node, kind, label) {
         var href = _findNavHref(node);
-        if (href) {
+        if (href && (kind === 'category_click' || _hrefHasTeamToken(href))) {
           var abs = href;
           try { abs = new URL(href, location.href).href; } catch(e){}
           if (abs && abs.split('#')[0] !== location.href.split('#')[0]) {
