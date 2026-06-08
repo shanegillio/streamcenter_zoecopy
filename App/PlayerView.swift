@@ -60,6 +60,11 @@ struct PlayerView: View {
   /// in order. Surfaced as a "via X → Y → Z" breadcrumb. Coordinator
   /// appends here on each `webView(_:didCommit:)`.
   @State private var navigationHistory: [URL] = []
+  /// v2.68: per-URL visit counts for the current source attempt. If the walk
+  /// oscillates between the same pages (a redirect ping-pong), this lets us
+  /// bail out instead of hanging. Reset on each new attempt.
+  @State private var navVisitCounts: [String: Int] = [:]
+  private static let maxRevisits = 4
   /// v2.39: most-recent walk activity event from the JS-shim. Shown
   /// in navStrip so the user can see whether the walk fired, what it
   /// clicked, or that it gave up.
@@ -715,6 +720,20 @@ struct PlayerView: View {
     if navigationHistory.count > 8 {
       navigationHistory.removeFirst(navigationHistory.count - 8)
     }
+    // v2.68: detect a navigation loop (e.g. sources.bintvs.fun ⇄ bintv.net/
+    // ?cat=Baseball). Ignore the query so trivial param churn still counts as
+    // the same page. If we keep landing back on the same URL, this source is
+    // bouncing us in circles — give up and move on rather than hang.
+    var key = url.absoluteString
+    if let q = url.absoluteString.firstIndex(of: "?") { key = String(url.absoluteString[..<q]) }
+    let count = (navVisitCounts[key] ?? 0) + 1
+    navVisitCounts[key] = count
+    if count >= Self.maxRevisits {
+      if let sid = traversalSessionID {
+        TraversalLog.shared.recordEvent(sid, kind: "nav_loop", info: key)
+      }
+      handleDeadEnd()
+    }
   }
 
   private func playCandidate(_ cand: StreamCandidate) {
@@ -814,6 +833,7 @@ struct PlayerView: View {
     }
     capturedStreams = []
     navigationHistory = []
+    navVisitCounts = [:]
     lastWalkEvent = nil
     loadFailure = nil
     detectedCards = []
@@ -906,6 +926,7 @@ struct PlayerView: View {
           buildAttempts()
           capturedStreams = []
           navigationHistory = []
+          navVisitCounts = [:]
           lastWalkEvent = nil
           loadFailure = nil
           detectedCards = []
@@ -2521,12 +2542,22 @@ struct StreamWebView: UIViewRepresentable {
       var _routedScanStats = { source: '', url: '' };
       function _extractTargetURLFrom(text) {
         if (!text) return '';
-        var low = ('' + text).toLowerCase();
-        var matches = low.match(/(https?:\\/\\/[^\\s"'`()<>]+|\\/[a-z0-9][a-z0-9._~\\/-]+)/g);
+        // Match on the ORIGINAL text (case-insensitive) so the returned URL
+        // keeps its real casing — _sideHit lowercases internally for the test.
+        var matches = ('' + text).match(/(https?:\\/\\/[^\\s"'`()<>]+|\\/[a-z0-9][a-z0-9._~\\/-]+)/gi);
         if (!matches) return '';
+        var curr = location.href.split('#')[0].toLowerCase();
         for (var k = 0; k < matches.length; k++) {
           var cand = matches[k];
-          if (_sideHit(cand, 'home') && _sideHit(cand, 'away')) return cand;
+          if (!(_sideHit(cand, 'home') && _sideHit(cand, 'away'))) continue;
+          // v2.68: skip a self-referential match. The current page URL itself
+          // carries both team slugs (sources.bintvs.fun/?match=chicago-cubs-
+          // vs-san-francisco-giants); returning it would just no-op the nav
+          // (same URL) and stall — keep scanning for the NEXT hop (the embed).
+          var abs = cand;
+          try { abs = new URL(cand, location.href).href.split('#')[0].toLowerCase(); } catch(e){}
+          if (abs === curr) continue;
+          return cand;
         }
         return '';
       }
@@ -2794,7 +2825,17 @@ struct StreamWebView: UIViewRepresentable {
           return;
         }
         // Step 4b: no game match — at depth 0 try a league-named category link.
-        if (_walkClicks === 0 && window.__sc_target && window.__sc_target.league) {
+        // v2.68: but NOT when the current page URL already carries both team
+        // names. That means we've already followed a game-specific link (e.g.
+        // sources.bintvs.fun/?match=chicago-cubs-vs-san-francisco-giants) and
+        // its stream options just haven't rendered yet — jumping to a league
+        // category here navigates BACKWARDS (…/?cat=Baseball), which then
+        // routes forward again into an endless ping-pong loop.
+        var _here = location.href.toLowerCase();
+        var _onGamePage = _hasAnyToks('home') && _hasAnyToks('away') &&
+                          _sideHit(_here, 'home') && _sideHit(_here, 'away');
+        if (_walkClicks === 0 && !_onGamePage &&
+            window.__sc_target && window.__sc_target.league) {
           var catNode = findCategoryLink(window.__sc_target.league);
           // v2.45: always emit cat_scan after the lookup so the user
           // sees whether the category branch found anything, regardless
