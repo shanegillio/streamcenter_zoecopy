@@ -107,7 +107,7 @@ struct SettingsView: View {
       Text(title).foregroundStyle(Color(.label))
       Spacer()
       if count > 0 {
-        Text("\(count) selected")
+        Text("\(count)")
           .font(.subheadline)
           .foregroundStyle(.secondary)
       }
