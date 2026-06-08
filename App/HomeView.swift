@@ -15,6 +15,11 @@ struct HomeView: View {
   var body: some View {
     NavigationStack {
       content
+        // Pull-to-refresh applies to every state's ScrollView (loading,
+        // empty, and the populated list) via the environment refresh action,
+        // so a pull always re-scrapes the schedule and live scores.
+        // forceRefresh=true bypasses the ESPN freshness cache.
+        .refreshable { await loadLeagues(forceRefresh: true) }
         .navigationTitle("Streams")
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
@@ -182,14 +187,6 @@ struct HomeView: View {
         .padding(.bottom, 32)
       }
     }
-    // v2.22: pull-to-refresh is the manual reload trigger. The feed
-    // otherwise loads once per source switch — no background polling,
-    // no per-favorite re-fetch.
-    // v2.23: forceRefresh=true so this actually re-scrapes instead of
-    // returning APIDiscovery's cached endpoint result.
-    .refreshable {
-      await loadLeagues(forceRefresh: true)
-    }
   }
 
   // MARK: - No-sources state (first launch)
@@ -262,7 +259,9 @@ struct HomeView: View {
   /// of loading, not fetched separately first. This function just sets
   /// loading state and delegates to `loadAllLiveGames`.
   private func loadLeagues(forceRefresh: Bool = false) async {
-    selectedFilter = nil
+    // A manual refresh keeps the user's chip selection; a source/favorites
+    // change resets to "All" since the available leagues may differ.
+    if !forceRefresh { selectedFilter = nil }
     isLoadingLeagues = true
     await loadAllLiveGames(forceRefresh: forceRefresh)
     isLoadingLeagues = false
