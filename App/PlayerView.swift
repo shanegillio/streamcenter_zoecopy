@@ -1532,8 +1532,17 @@ struct StreamWebView: UIViewRepresentable {
         if (!u || typeof u !== 'string') return false;
         if (u.indexOf('blob:') === 0) return false;
         var l = u.toLowerCase().split('?')[0];
+        // A real manifest extension is conclusive regardless of path.
         if (l.indexOf('.m3u8') !== -1) return true;
         if (l.indexOf('.mpd')  !== -1) return true;
+        // v2.68: the weak path words below (/live/, /stream/, …) also appear
+        // in JSON/data endpoints — bintv.net's homepage calls streamed.pk/api/
+        // matches/live/popular-viewcount, which we mis-captured and autoplayed
+        // as the stream. Reject anything that looks like an API/data/asset
+        // request before applying the weak path heuristics.
+        if (/\\/api\\/|\\/ajax\\/|viewcount|\\.(?:json|js|css|png|jpe?g|gif|svg|webp|woff2?|ico|txt|xml)$/.test(l)) {
+          return false;
+        }
         var pathPatterns = ['/hls/', '/live/', '/stream/', '/chunklist', '/playlist',
                             '/manifest', '/index.m3u', '/master.m3u'];
         for (var i = 0; i < pathPatterns.length; i++) {
