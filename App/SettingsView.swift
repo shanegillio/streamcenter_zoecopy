@@ -104,12 +104,12 @@ struct SettingsView: View {
   private func settingsRow(icon: String, color: Color, title: String, count: Int) -> some View {
     HStack(spacing: 12) {
       settingsIcon(systemName: icon, color: color)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(title).foregroundStyle(Color(.label))
-        if count > 0 {
-          Text("\(count) selected")
-            .font(.caption).foregroundStyle(.secondary)
-        }
+      Text(title).foregroundStyle(Color(.label))
+      Spacer()
+      if count > 0 {
+        Text("\(count) selected")
+          .font(.subheadline)
+          .foregroundStyle(.secondary)
       }
     }
     .padding(.vertical, 2)
