@@ -1092,25 +1092,52 @@ final class StreamWebViewBridge: ObservableObject {
         }
         return '';
       }
-      function firstHrefIn(scope){
+      // v2.68: does this href carry a team token (i.e. it's the actual game
+      // deep link, not a generic nav link)?
+      function hrefHasToken(h){
+        if (!h) return false;
+        var low = ('' + h).toLowerCase();
+        for (var i = 0; i < toks.length; i++){ if (low.indexOf(toks[i]) !== -1) return true; }
+        return false;
+      }
+      // Best usable href in a subtree. v2.68: prefer one carrying a team
+      // token (the real game deep link, e.g. /watch/kobra/los-angeles-sparks-
+      // vs-portland-fire-2469363) over a generic same-site link (the "kobra
+      // server" selector → /matches/kobra). Returning the first usable anchor
+      // is what sent us to the server-list page instead of the game.
+      function bestHrefIn(scope){
         try {
           var as = scope.querySelectorAll && scope.querySelectorAll(
             'a[href],[data-href],[data-url],[data-link]');
-          if (as) for (var i = 0; i < as.length; i++){
-            var h = hrefAttr(as[i]); if (h) return h;
+          if (as){
+            var fallback = '';
+            for (var i = 0; i < as.length; i++){
+              var h = hrefAttr(as[i]); if (!h) continue;
+              if (hrefHasToken(h)) return h;
+              if (!fallback) fallback = h;
+            }
+            return fallback;
           }
         } catch(e){}
         return '';
       }
       // Self → climb ancestors, searching each subtree (catches sibling
-      // "Watch" links inside the same card container).
+      // "Watch" links inside the same card container). v2.68: a first pass
+      // prefers a team-token deep link anywhere in scope before falling back
+      // to the first usable href.
       function findNavHref(el){
         if (!el) return '';
-        var h0 = hrefAttr(el); if (h0) return h0;
         var n = el, lvl = 0;
         while (n && lvl < 6){
+          var ht = hrefAttr(n); if (ht && hrefHasToken(ht)) return ht;
+          var hst = bestHrefIn(n); if (hst && hrefHasToken(hst)) return hst;
+          n = n.parentElement; lvl++;
+        }
+        var h0 = hrefAttr(el); if (h0) return h0;
+        n = el; lvl = 0;
+        while (n && lvl < 6){
           var ha = hrefAttr(n); if (ha) return ha;
-          var hs = firstHrefIn(n); if (hs) return hs;
+          var hs = bestHrefIn(n); if (hs) return hs;
           n = n.parentElement; lvl++;
         }
         return '';
@@ -2078,11 +2105,29 @@ struct StreamWebView: UIViewRepresentable {
             _sideHit(low, 'home') && _sideHit(low, 'away')) return true;
         return false;
       }
+      // v2.68: an href that carries BOTH teams is the real game deep link
+      // (e.g. /watch/kobra/los-angeles-sparks-vs-portland-fire-…), not a
+      // generic same-site nav link (a "kobra server" tile → /matches/kobra).
+      function _hrefHasTeamToken(h) {
+        if (!h) return false;
+        if (!_hasAnyToks('home') || !_hasAnyToks('away')) return false;
+        var low = ('' + h).toLowerCase();
+        return _sideHit(low, 'home') && _sideHit(low, 'away');
+      }
+      // v2.68: best usable href in a subtree — prefer a team-token deep link
+      // over the first generic same-site anchor.
       function _firstUsableAnchorHref(scope) {
         try {
           var as = scope.querySelectorAll && scope.querySelectorAll('a[href]');
-          if (as) for (var i = 0; i < as.length; i++) {
-            var h = as[i].getAttribute('href'); if (_usableHref(h) && _navHrefOK(h)) return h;
+          if (as) {
+            var fallback = '';
+            for (var i = 0; i < as.length; i++) {
+              var h = as[i].getAttribute('href');
+              if (!_usableHref(h) || !_navHrefOK(h)) continue;
+              if (_hrefHasTeamToken(h)) return h;
+              if (!fallback) fallback = h;
+            }
+            return fallback;
           }
         } catch(e){}
         return '';
@@ -2093,10 +2138,20 @@ struct StreamWebView: UIViewRepresentable {
       // real "Watch" link are SIBLINGS inside a card container (the old
       // version only saw self / descendant / direct-ancestor anchors and so
       // returned '' → CLICKED-BUT-NO-NAV).
+      // v2.68: a first pass prefers a team-token deep link anywhere in scope
+      // before falling back to the first usable href, so a card's "server"
+      // selector links don't win over the actual game URL.
       function _findNavHref(el) {
         if (!el) return '';
-        try { if (el.tagName === 'A') { var h0 = el.getAttribute('href'); if (_usableHref(h0) && _navHrefOK(h0)) return h0; } } catch(e){}
         var n = el, lvl = 0;
+        while (n && lvl < 6) {
+          if (n.tagName === 'A') { var ht = n.getAttribute('href'); if (_usableHref(ht) && _navHrefOK(ht) && _hrefHasTeamToken(ht)) return ht; }
+          var hst = _firstUsableAnchorHref(n);
+          if (hst && _hrefHasTeamToken(hst)) return hst;
+          n = n.parentElement; lvl++;
+        }
+        try { if (el.tagName === 'A') { var h0 = el.getAttribute('href'); if (_usableHref(h0) && _navHrefOK(h0)) return h0; } } catch(e){}
+        n = el; lvl = 0;
         while (n && lvl < 6) {
           if (n.tagName === 'A') { var h2 = n.getAttribute('href'); if (_usableHref(h2) && _navHrefOK(h2)) return h2; }
           var h3 = _firstUsableAnchorHref(n);
