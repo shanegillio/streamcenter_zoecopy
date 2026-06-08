@@ -1025,7 +1025,15 @@ final class StreamWebViewBridge: ObservableObject {
   /// the traversal log instead of silent.
   func clickFirstMatching(_ pair: String) {
     guard let webView else { return }
-    let escaped = pair
+    // v2.68: collapse interior whitespace to single spaces BEFORE escaping.
+    // Category labels arrive as multi-line text ("WNBA Streams\nClick to view
+    // all games"); a raw newline inside the single-quoted JS string literal
+    // below is a syntax error that silently aborts the whole click — which is
+    // exactly why the WNBA-streams card was identified but never followed.
+    let normalized = pair
+      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let escaped = normalized
       .replacingOccurrences(of: "\\", with: "\\\\")
       .replacingOccurrences(of: "'", with: "\\'")
     let js = """
@@ -1155,7 +1163,8 @@ final class StreamWebViewBridge: ObservableObject {
         var e = els[i];
         var b = ((e.innerText || e.textContent || '') + ' ' +
                  (e.getAttribute && (e.getAttribute('aria-label') || '')) + ' ' +
-                 (e.getAttribute && (e.getAttribute('title') || ''))).toLowerCase();
+                 (e.getAttribute && (e.getAttribute('title') || '')))
+                .replace(/\\s+/g, ' ').toLowerCase();
         if (b.indexOf(t) === -1) continue;
         // Prefer a real destination URL — always navigates.
         var href = findNavHref(e);
