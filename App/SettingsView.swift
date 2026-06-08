@@ -17,7 +17,7 @@ struct SettingsView: View {
             Text("Sources")
               .foregroundStyle(Color(.label))
             Spacer()
-            Text("\(registry.enabledSources.count) active")
+            Text("\(registry.enabledSources.count)")
               .font(.subheadline)
               .foregroundStyle(.secondary)
           }
