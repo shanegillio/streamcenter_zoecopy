@@ -1833,6 +1833,7 @@ struct StreamWebView: UIViewRepresentable {
       var _walkClicks = 0;
       var _maxWalkClicks = 4;
       var _walkClickedEls = [];
+      var _routedNavedTo = '';
       var _lastTargetPostedAt = 0;
 
       // v2.39: surface walk activity to native so PlayerView's verification
@@ -2752,7 +2753,13 @@ struct StreamWebView: UIViewRepresentable {
         if (routed && _walkClicks < _maxWalkClicks) {
           var rabs = routed;
           try { rabs = new URL(routed, location.href).href; } catch(e){}
-          if (rabs && rabs.split('#')[0] !== location.href.split('#')[0]) {
+          // v2.68: navigate ONCE per URL. Re-issuing location.href every scan
+          // tick interrupts the in-flight load ("frame load interrupted"),
+          // which never commits and trips host-fallback into switching/
+          // disabling the source.
+          if (rabs && rabs !== _routedNavedTo &&
+              rabs.split('#')[0] !== location.href.split('#')[0]) {
+            _routedNavedTo = rabs;
             _walkClicks++;
             postWalkEvent('routed', '(' + _routedScanStats.source + ') nav→ ' + rabs);
             try { location.href = rabs; return; } catch(e){}
@@ -3266,6 +3273,15 @@ struct StreamWebView: UIViewRepresentable {
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
                  withError error: Error) {
       let nsErr = error as NSError
+      // v2.68: a cancelled/interrupted provisional load is almost always
+      // self-inflicted — we started a new in-app navigation (e.g. to a
+      // recovered /watch/<game> URL) while a prior load was still in flight,
+      // or a redirect superseded it. It is NOT a host/DNS failure, so do not
+      // run HostFallback (which rewrites the source URL to a sibling host and
+      // can leave the source disabled). Just let the new load proceed.
+      let isCancelled = nsErr.domain == NSURLErrorDomain && nsErr.code == NSURLErrorCancelled
+      let isFrameInterrupted = nsErr.domain == "WebKitErrorDomain" && nsErr.code == 102
+      if isCancelled || isFrameInterrupted { return }
       guard !hostFallbackAttempted else {
         DispatchQueue.main.async {
           if let u = webView.url ?? URL(string: "about:blank") {
