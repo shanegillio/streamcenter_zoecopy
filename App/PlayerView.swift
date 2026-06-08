@@ -1228,8 +1228,24 @@ final class StreamWebViewBridge: ObservableObject {
             return false;
           }
         }
-        report('click ' + (target && target.tagName ? target.tagName : '?') +
-               ' no-token-href');
+        // v2.68: dump the card's structure so a JS-routed card (no <a href>
+        // for the game) shows us how it encodes the link instead of leaving
+        // us guessing after a silent CLICKED-BUT-NO-NAV.
+        try {
+          var parts = ['tag=' + (target && target.tagName)];
+          if (target && target.className) parts.push('cls=' + ('' + target.className).slice(0, 50));
+          ['onclick','data-href','data-url','data-link','data-slug','data-id'].forEach(function(k){
+            var dv = target && target.getAttribute && target.getAttribute(k);
+            if (dv) parts.push(k + '=' + ('' + dv).slice(0, 50));
+          });
+          var inner = target && target.querySelectorAll && target.querySelectorAll('a[href]');
+          if (inner && inner.length) {
+            var hh = [];
+            for (var z = 0; z < inner.length && z < 4; z++) hh.push((inner[z].getAttribute('href') || '').slice(0, 40));
+            parts.push('a=' + hh.join('|'));
+          }
+          report('click ' + parts.join(' '));
+        } catch(e){ report('click ' + (target && target.tagName ? target.tagName : '?') + ' no-token-href'); }
         robustClick(target);
         return true;
       }
@@ -2485,6 +2501,50 @@ struct StreamWebView: UIViewRepresentable {
         return best;
       }
 
+      // v2.68: ntv.cx-style SPA cards route via JS, so the real game URL
+      // (/watch/kobra/chicago-cubs-vs-san-francisco-giants-2469363) is NOT a
+      // plain <a href> — the slug-anchor scan finds nothing and we end up
+      // clicking a DIV that never navigates (CLICKED-BUT-NO-NAV → dead end).
+      // This harvests any URL/path carrying BOTH team slugs out of element
+      // attributes (href / data-* / onclick) AND the raw page HTML, so we can
+      // navigate straight to the game even when it's only referenced in JS.
+      var _routedScanStats = { source: '', url: '' };
+      function _extractTargetURLFrom(text) {
+        if (!text) return '';
+        var low = ('' + text).toLowerCase();
+        var matches = low.match(/(https?:\\/\\/[^\\s"'`()<>]+|\\/[a-z0-9][a-z0-9._~\\/-]+)/g);
+        if (!matches) return '';
+        for (var k = 0; k < matches.length; k++) {
+          var cand = matches[k];
+          if (_sideHit(cand, 'home') && _sideHit(cand, 'away')) return cand;
+        }
+        return '';
+      }
+      function findRoutedGameURL() {
+        _routedScanStats = { source: '', url: '' };
+        if (!window.__sc_target) return '';
+        if (!_hasAnyToks('home') || !_hasAnyToks('away')) return '';
+        var els;
+        try { els = document.querySelectorAll('[href],[data-href],[data-url],[data-link],[data-slug],[onclick]'); }
+        catch(e){ els = []; }
+        var attrs = ['href','data-href','data-url','data-link','data-slug','onclick'];
+        var cap = Math.min(els.length, 3000);
+        for (var i = 0; i < cap; i++) {
+          for (var j = 0; j < attrs.length; j++) {
+            var v = els[i].getAttribute && els[i].getAttribute(attrs[j]);
+            var hit = _extractTargetURLFrom(v);
+            if (hit) { _routedScanStats = { source: attrs[j], url: hit }; return hit; }
+          }
+        }
+        // Last resort: scan the serialized HTML (catches slugs only present
+        // in inline JSON / script state used to build the route).
+        try {
+          var hit2 = _extractTargetURLFrom(document.body && document.body.innerHTML);
+          if (hit2) { _routedScanStats = { source: 'html', url: hit2 }; return hit2; }
+        } catch(e){}
+        return '';
+      }
+
       // v2.54: unify the click path with the detector. harvestDetectedCards
       // (the "Found on this page" strip) reliably surfaces real game-pair
       // cards via _gameLinePattern, yet selectTargetGameElement /
@@ -2682,6 +2742,21 @@ struct StreamWebView: UIViewRepresentable {
           dumpCard(node);
           clickOrNavigate(node, 'clicked', 'slug: ' + _slugScanStats.href);
           return;
+        }
+        // v2.68: no slug anchor — try to recover a JS-routed game URL from
+        // attributes/HTML and navigate to it directly. This is what reaches
+        // ntv.cx's /watch/<server>/<home-vs-away> page (its cards have no
+        // <a href> for the game, so clicking the DIV went nowhere).
+        var routed = '';
+        try { routed = findRoutedGameURL(); } catch(e){}
+        if (routed && _walkClicks < _maxWalkClicks) {
+          var rabs = routed;
+          try { rabs = new URL(routed, location.href).href; } catch(e){}
+          if (rabs && rabs.split('#')[0] !== location.href.split('#')[0]) {
+            _walkClicks++;
+            postWalkEvent('routed', '(' + _routedScanStats.source + ') nav→ ' + rabs);
+            try { location.href = rabs; return; } catch(e){}
+          }
         }
         try { node = findTargetByPairScan(); } catch(e){}
         if (!node) node = selectTargetGameElement();
