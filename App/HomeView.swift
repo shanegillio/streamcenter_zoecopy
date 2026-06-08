@@ -15,11 +15,6 @@ struct HomeView: View {
   var body: some View {
     NavigationStack {
       content
-        // Pull-to-refresh applies to every state's ScrollView (loading,
-        // empty, and the populated list) via the environment refresh action,
-        // so a pull always re-scrapes the schedule and live scores.
-        // forceRefresh=true bypasses the ESPN freshness cache.
-        .refreshable { await loadLeagues(forceRefresh: true) }
         .navigationTitle("Streams")
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
@@ -73,8 +68,10 @@ struct HomeView: View {
         LoadingPhraseView()
           .frame(maxWidth: .infinity, minHeight: 500)
       }
+      .refreshable { await loadLeagues(forceRefresh: true) }
     } else if visibleLeagues.isEmpty && !isLoadingLive {
       ScrollView { emptyState.frame(maxWidth: .infinity, minHeight: 500) }
+        .refreshable { await loadLeagues(forceRefresh: true) }
     } else {
       VStack(spacing: 0) {
         leagueChipRow
@@ -187,6 +184,9 @@ struct HomeView: View {
         .padding(.bottom, 32)
       }
     }
+    // Pull-to-refresh re-scrapes the schedule and live scores.
+    // forceRefresh=true bypasses the ESPN freshness cache.
+    .refreshable { await loadLeagues(forceRefresh: true) }
   }
 
   // MARK: - No-sources state (first launch)
