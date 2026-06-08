@@ -3163,6 +3163,24 @@ struct StreamWebView: UIViewRepresentable {
          authPathFragments.contains(where: { path.contains($0) }) {
         return
       }
+      // v2.68: don't drill into ad iframes. After we've reached the real
+      // embed (embed.st/.../ppv-san-francisco-giants-vs-chicago-cubs/1, which
+      // carries both team names) its page is littered with cross-origin ad
+      // frames (ndcertainlywhen.com/?tid=…, playonrain.com). Drilling the top
+      // frame into one — via an "intended load" that bypasses the popup
+      // guard — is exactly how we ended up stranded on an ad, searching
+      // forever. A cross-origin iframe is only a real stream embed if it
+      // carries a team token or is same-site as the page we're on now.
+      let currentHost = webView?.url?.host
+      if !sameSite(host, currentHost),
+         !sameSite(host, sourceHost),
+         !carriesTargetToken(url) {
+        let event = StreamWebView.WalkEvent(
+          kind: "iframe_skipped", info: host, at: Date(), detectedCards: []
+        )
+        DispatchQueue.main.async { self.onWalkEvent?(event) }
+        return
+      }
       let score = (json["score"] as? Int) ?? 500
       if visitedIframeURLs.contains(urlStr) { return }  // don't loop
       // Track best; if first candidate, schedule a commit after a
