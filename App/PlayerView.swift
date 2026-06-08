@@ -60,6 +60,11 @@ struct PlayerView: View {
   /// in order. Surfaced as a "via X → Y → Z" breadcrumb. Coordinator
   /// appends here on each `webView(_:didCommit:)`.
   @State private var navigationHistory: [URL] = []
+  /// v2.68: per-URL visit counts for the current source attempt. If the walk
+  /// oscillates between the same pages (a redirect ping-pong), this lets us
+  /// bail out instead of hanging. Reset on each new attempt.
+  @State private var navVisitCounts: [String: Int] = [:]
+  private static let maxRevisits = 4
   /// v2.39: most-recent walk activity event from the JS-shim. Shown
   /// in navStrip so the user can see whether the walk fired, what it
   /// clicked, or that it gave up.
@@ -715,6 +720,20 @@ struct PlayerView: View {
     if navigationHistory.count > 8 {
       navigationHistory.removeFirst(navigationHistory.count - 8)
     }
+    // v2.68: detect a navigation loop (e.g. sources.bintvs.fun ⇄ bintv.net/
+    // ?cat=Baseball). Ignore the query so trivial param churn still counts as
+    // the same page. If we keep landing back on the same URL, this source is
+    // bouncing us in circles — give up and move on rather than hang.
+    var key = url.absoluteString
+    if let q = url.absoluteString.firstIndex(of: "?") { key = String(url.absoluteString[..<q]) }
+    let count = (navVisitCounts[key] ?? 0) + 1
+    navVisitCounts[key] = count
+    if count >= Self.maxRevisits {
+      if let sid = traversalSessionID {
+        TraversalLog.shared.recordEvent(sid, kind: "nav_loop", info: key)
+      }
+      handleDeadEnd()
+    }
   }
 
   private func playCandidate(_ cand: StreamCandidate) {
@@ -814,6 +833,7 @@ struct PlayerView: View {
     }
     capturedStreams = []
     navigationHistory = []
+    navVisitCounts = [:]
     lastWalkEvent = nil
     loadFailure = nil
     detectedCards = []
@@ -906,6 +926,7 @@ struct PlayerView: View {
           buildAttempts()
           capturedStreams = []
           navigationHistory = []
+          navVisitCounts = [:]
           lastWalkEvent = nil
           loadFailure = nil
           detectedCards = []
@@ -1025,7 +1046,15 @@ final class StreamWebViewBridge: ObservableObject {
   /// the traversal log instead of silent.
   func clickFirstMatching(_ pair: String) {
     guard let webView else { return }
-    let escaped = pair
+    // v2.68: collapse interior whitespace to single spaces BEFORE escaping.
+    // Category labels arrive as multi-line text ("WNBA Streams\nClick to view
+    // all games"); a raw newline inside the single-quoted JS string literal
+    // below is a syntax error that silently aborts the whole click — which is
+    // exactly why the WNBA-streams card was identified but never followed.
+    let normalized = pair
+      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let escaped = normalized
       .replacingOccurrences(of: "\\", with: "\\\\")
       .replacingOccurrences(of: "'", with: "\\'")
     let js = """
@@ -1049,10 +1078,18 @@ final class StreamWebViewBridge: ObservableObject {
       // URL that carries a team token (a genuine deep link). Cross-origin,
       // token-less links are betting/affiliate ads (playonrain → rainbet)
       // that derail the walk into a casino. Reject those.
+      function baseName(host){
+        var p = ('' + host).toLowerCase().split('.');
+        return p.length >= 2 ? p[p.length - 2] : (p[0] || '');
+      }
       function navHrefOK(href){
         if (!href) return false;
         var u; try { u = new URL(href, location.href); } catch(e){ return true; }
         if (u.host === location.host) return true;
+        // v2.68: a sibling mirror domain (same brand base) is the site's
+        // own listing/game page — follow it, don't treat it as an ad.
+        var hbase = baseName(location.host);
+        if (hbase.length >= 5 && hbase === baseName(u.host)) return true;
         var low = u.href.toLowerCase();
         for (var i = 0; i < toks.length; i++){ if (low.indexOf(toks[i]) !== -1) return true; }
         return false;
@@ -1076,25 +1113,52 @@ final class StreamWebViewBridge: ObservableObject {
         }
         return '';
       }
-      function firstHrefIn(scope){
+      // v2.68: does this href carry a team token (i.e. it's the actual game
+      // deep link, not a generic nav link)?
+      function hrefHasToken(h){
+        if (!h) return false;
+        var low = ('' + h).toLowerCase();
+        for (var i = 0; i < toks.length; i++){ if (low.indexOf(toks[i]) !== -1) return true; }
+        return false;
+      }
+      // Best usable href in a subtree. v2.68: prefer one carrying a team
+      // token (the real game deep link, e.g. /watch/kobra/los-angeles-sparks-
+      // vs-portland-fire-2469363) over a generic same-site link (the "kobra
+      // server" selector → /matches/kobra). Returning the first usable anchor
+      // is what sent us to the server-list page instead of the game.
+      function bestHrefIn(scope){
         try {
           var as = scope.querySelectorAll && scope.querySelectorAll(
             'a[href],[data-href],[data-url],[data-link]');
-          if (as) for (var i = 0; i < as.length; i++){
-            var h = hrefAttr(as[i]); if (h) return h;
+          if (as){
+            var fallback = '';
+            for (var i = 0; i < as.length; i++){
+              var h = hrefAttr(as[i]); if (!h) continue;
+              if (hrefHasToken(h)) return h;
+              if (!fallback) fallback = h;
+            }
+            return fallback;
           }
         } catch(e){}
         return '';
       }
       // Self → climb ancestors, searching each subtree (catches sibling
-      // "Watch" links inside the same card container).
+      // "Watch" links inside the same card container). v2.68: a first pass
+      // prefers a team-token deep link anywhere in scope before falling back
+      // to the first usable href.
       function findNavHref(el){
         if (!el) return '';
-        var h0 = hrefAttr(el); if (h0) return h0;
         var n = el, lvl = 0;
         while (n && lvl < 6){
+          var ht = hrefAttr(n); if (ht && hrefHasToken(ht)) return ht;
+          var hst = bestHrefIn(n); if (hst && hrefHasToken(hst)) return hst;
+          n = n.parentElement; lvl++;
+        }
+        var h0 = hrefAttr(el); if (h0) return h0;
+        n = el; lvl = 0;
+        while (n && lvl < 6){
           var ha = hrefAttr(n); if (ha) return ha;
-          var hs = firstHrefIn(n); if (hs) return hs;
+          var hs = bestHrefIn(n); if (hs) return hs;
           n = n.parentElement; lvl++;
         }
         return '';
@@ -1140,18 +1204,31 @@ final class StreamWebViewBridge: ObservableObject {
           }
         } catch(e){}
       }
+      // v2.68: is the label a game pair ("X vs Y") rather than a category
+      // ("WNBA Streams")? For a game we must NOT force-navigate to a link
+      // that doesn't carry the team slug.
+      var isPair = /(^|\\s)vs(\\s|$)|@|—|–/.test(t);
       var sel = 'a[href],button,[onclick],[data-match],[data-event],[data-game],' +
                 '[role="button"],[class*="card" i],[class*="match" i],[class*="game" i]';
       var els = document.querySelectorAll(sel);
+      var firstMatch = null;
       for (var i = 0; i < els.length && i < 2000; i++) {
         var e = els[i];
         var b = ((e.innerText || e.textContent || '') + ' ' +
                  (e.getAttribute && (e.getAttribute('aria-label') || '')) + ' ' +
-                 (e.getAttribute && (e.getAttribute('title') || ''))).toLowerCase();
+                 (e.getAttribute && (e.getAttribute('title') || '')))
+                .replace(/\\s+/g, ' ').toLowerCase();
         if (b.indexOf(t) === -1) continue;
-        // Prefer a real destination URL — always navigates.
+        if (!firstMatch) firstMatch = e;
+        // Prefer a real destination URL. v2.68: but for a game card, only
+        // FOLLOW a link that carries the team slug (the real /watch/<server>/
+        // <home-vs-away> URL). Forcing location.href to the first generic
+        // same-site link — a "kobra server" tile → /matches/kobra — hijacks
+        // the page before the card's own onclick can route to the game, and
+        // strands us on a server-list page. A non-pair (category) follow may
+        // use any same-site link.
         var href = findNavHref(e);
-        if (href) {
+        if (href && (!isPair || hrefHasToken(href))) {
           var abs = href;
           try { abs = new URL(href, location.href).href; } catch(err){}
           if (abs && abs.split('#')[0] !== location.href.split('#')[0]) {
@@ -1159,11 +1236,12 @@ final class StreamWebViewBridge: ObservableObject {
             try { location.href = abs; return true; } catch(err){}
           }
         }
-        // No reachable href — fall back to a synthetic click on the
-        // nearest clickable ancestor (handles pure-JS onclick cards). But
-        // if that ancestor is an <a> pointing off-site to an ad (its href
-        // failed navHrefOK), clicking it would just open the ad — skip it.
-        var target = findClickableAncestor(e);
+      }
+      // No team-token deep link found. Click the matched card and let the
+      // site's own handler route to the game, rather than jumping to a
+      // generic link. Skip an <a> whose href is an off-site ad.
+      if (firstMatch) {
+        var target = findClickableAncestor(firstMatch);
         if (target && target.tagName === 'A') {
           var rawHref = target.getAttribute('href');
           if (rawHref && !navHrefOK(rawHref)) {
@@ -1171,8 +1249,24 @@ final class StreamWebViewBridge: ObservableObject {
             return false;
           }
         }
-        report('click ' + (target && target.tagName ? target.tagName : '?') +
-               ' no-href');
+        // v2.68: dump the card's structure so a JS-routed card (no <a href>
+        // for the game) shows us how it encodes the link instead of leaving
+        // us guessing after a silent CLICKED-BUT-NO-NAV.
+        try {
+          var parts = ['tag=' + (target && target.tagName)];
+          if (target && target.className) parts.push('cls=' + ('' + target.className).slice(0, 50));
+          ['onclick','data-href','data-url','data-link','data-slug','data-id'].forEach(function(k){
+            var dv = target && target.getAttribute && target.getAttribute(k);
+            if (dv) parts.push(k + '=' + ('' + dv).slice(0, 50));
+          });
+          var inner = target && target.querySelectorAll && target.querySelectorAll('a[href]');
+          if (inner && inner.length) {
+            var hh = [];
+            for (var z = 0; z < inner.length && z < 4; z++) hh.push((inner[z].getAttribute('href') || '').slice(0, 40));
+            parts.push('a=' + hh.join('|'));
+          }
+          report('click ' + parts.join(' '));
+        } catch(e){ report('click ' + (target && target.tagName ? target.tagName : '?') + ' no-token-href'); }
         robustClick(target);
         return true;
       }
@@ -1360,7 +1454,13 @@ struct StreamWebView: UIViewRepresentable {
       var ok = false;
       try {
         var u = new URL(abs);
-        if (u.host === location.host) ok = true;
+        // v2.68: same host OR a sibling mirror domain sharing the brand
+        // base (crackstreams.ms ↔ crackstreams.ws) is the site's own page.
+        var hb = location.host.toLowerCase().split('.');
+        var ub = u.host.toLowerCase().split('.');
+        var hbase = hb.length >= 2 ? hb[hb.length - 2] : (hb[0] || '');
+        var ubase = ub.length >= 2 ? ub[ub.length - 2] : (ub[0] || '');
+        if (u.host === location.host || (hbase.length >= 5 && hbase === ubase)) ok = true;
         else {
           var tg = window.__sc_target, toks = [], low = abs.toLowerCase();
           if (tg) [tg.home, tg.away].forEach(function(s){
@@ -1453,8 +1553,17 @@ struct StreamWebView: UIViewRepresentable {
         if (!u || typeof u !== 'string') return false;
         if (u.indexOf('blob:') === 0) return false;
         var l = u.toLowerCase().split('?')[0];
+        // A real manifest extension is conclusive regardless of path.
         if (l.indexOf('.m3u8') !== -1) return true;
         if (l.indexOf('.mpd')  !== -1) return true;
+        // v2.68: the weak path words below (/live/, /stream/, …) also appear
+        // in JSON/data endpoints — bintv.net's homepage calls streamed.pk/api/
+        // matches/live/popular-viewcount, which we mis-captured and autoplayed
+        // as the stream. Reject anything that looks like an API/data/asset
+        // request before applying the weak path heuristics.
+        if (/\\/api\\/|\\/ajax\\/|viewcount|\\.(?:json|js|css|png|jpe?g|gif|svg|webp|woff2?|ico|txt|xml)$/.test(l)) {
+          return false;
+        }
         var pathPatterns = ['/hls/', '/live/', '/stream/', '/chunklist', '/playlist',
                             '/manifest', '/index.m3u', '/master.m3u'];
         for (var i = 0; i < pathPatterns.length; i++) {
@@ -1754,6 +1863,7 @@ struct StreamWebView: UIViewRepresentable {
       var _walkClicks = 0;
       var _maxWalkClicks = 4;
       var _walkClickedEls = [];
+      var _routedNavedTo = '';
       var _lastTargetPostedAt = 0;
 
       // v2.39: surface walk activity to native so PlayerView's verification
@@ -2023,15 +2133,29 @@ struct StreamWebView: UIViewRepresentable {
         });
         return t;
       }
+      // v2.68: brand-base of a host ("crackstreams.ms"/"crackstreams.ws" →
+      // "crackstreams"). Lets us recognize a site's own sibling mirror
+      // domains as same-site instead of mistaking the hop for an ad.
+      function _baseName(host) {
+        var p = ('' + host).toLowerCase().split('.');
+        return p.length >= 2 ? p[p.length - 2] : (p[0] || '');
+      }
+      function _sameBrand(a, b) {
+        if (a === b) return true;
+        var ba = _baseName(a);
+        return ba.length >= 5 && ba === _baseName(b);
+      }
       // v2.63: a card href is only worth following if it stays on the same
       // site (the site's own watch/game page) OR is a cross-origin URL
       // carrying a team token (a genuine deep link). Cross-origin token-less
       // hrefs are betting/affiliate ads (ntv.cx cards wrap a playonrain →
       // rainbet link) that send the walk into a casino dead-end. Reject them.
+      // v2.68: a sibling mirror domain (same brand base) is the site's own
+      // listing, not an ad — follow it so the category/game hop lands.
       function _navHrefOK(href) {
         if (!href) return false;
         var u; try { u = new URL(href, location.href); } catch(e){ return true; }
-        if (u.host === location.host) return true;
+        if (_sameBrand(u.host, location.host)) return true;
         var low = u.href.toLowerCase(), toks = _hrefTokens();
         for (var i = 0; i < toks.length; i++){ if (low.indexOf(toks[i]) !== -1) return true; }
         // v2.65: also accept cross-origin deep links routed by team
@@ -2041,11 +2165,29 @@ struct StreamWebView: UIViewRepresentable {
             _sideHit(low, 'home') && _sideHit(low, 'away')) return true;
         return false;
       }
+      // v2.68: an href that carries BOTH teams is the real game deep link
+      // (e.g. /watch/kobra/los-angeles-sparks-vs-portland-fire-…), not a
+      // generic same-site nav link (a "kobra server" tile → /matches/kobra).
+      function _hrefHasTeamToken(h) {
+        if (!h) return false;
+        if (!_hasAnyToks('home') || !_hasAnyToks('away')) return false;
+        var low = ('' + h).toLowerCase();
+        return _sideHit(low, 'home') && _sideHit(low, 'away');
+      }
+      // v2.68: best usable href in a subtree — prefer a team-token deep link
+      // over the first generic same-site anchor.
       function _firstUsableAnchorHref(scope) {
         try {
           var as = scope.querySelectorAll && scope.querySelectorAll('a[href]');
-          if (as) for (var i = 0; i < as.length; i++) {
-            var h = as[i].getAttribute('href'); if (_usableHref(h) && _navHrefOK(h)) return h;
+          if (as) {
+            var fallback = '';
+            for (var i = 0; i < as.length; i++) {
+              var h = as[i].getAttribute('href');
+              if (!_usableHref(h) || !_navHrefOK(h)) continue;
+              if (_hrefHasTeamToken(h)) return h;
+              if (!fallback) fallback = h;
+            }
+            return fallback;
           }
         } catch(e){}
         return '';
@@ -2056,10 +2198,20 @@ struct StreamWebView: UIViewRepresentable {
       // real "Watch" link are SIBLINGS inside a card container (the old
       // version only saw self / descendant / direct-ancestor anchors and so
       // returned '' → CLICKED-BUT-NO-NAV).
+      // v2.68: a first pass prefers a team-token deep link anywhere in scope
+      // before falling back to the first usable href, so a card's "server"
+      // selector links don't win over the actual game URL.
       function _findNavHref(el) {
         if (!el) return '';
-        try { if (el.tagName === 'A') { var h0 = el.getAttribute('href'); if (_usableHref(h0) && _navHrefOK(h0)) return h0; } } catch(e){}
         var n = el, lvl = 0;
+        while (n && lvl < 6) {
+          if (n.tagName === 'A') { var ht = n.getAttribute('href'); if (_usableHref(ht) && _navHrefOK(ht) && _hrefHasTeamToken(ht)) return ht; }
+          var hst = _firstUsableAnchorHref(n);
+          if (hst && _hrefHasTeamToken(hst)) return hst;
+          n = n.parentElement; lvl++;
+        }
+        try { if (el.tagName === 'A') { var h0 = el.getAttribute('href'); if (_usableHref(h0) && _navHrefOK(h0)) return h0; } } catch(e){}
+        n = el; lvl = 0;
         while (n && lvl < 6) {
           if (n.tagName === 'A') { var h2 = n.getAttribute('href'); if (_usableHref(h2) && _navHrefOK(h2)) return h2; }
           var h3 = _firstUsableAnchorHref(n);
@@ -2110,9 +2262,14 @@ struct StreamWebView: UIViewRepresentable {
         return false;
       }
       // Returns 'nav' when it forced a real URL change, else 'click'.
+      // v2.68: for a game click (every kind except 'category_click') only
+      // force-navigate to a link carrying the team slug. A game card's
+      // nearest generic link is often a "server" tile (/matches/kobra) that
+      // hijacks the page off the game; if there's no slug link we click the
+      // card and let the site route to /watch/<server>/<slug> itself.
       function clickOrNavigate(node, kind, label) {
         var href = _findNavHref(node);
-        if (href) {
+        if (href && (kind === 'category_click' || _hrefHasTeamToken(href))) {
           var abs = href;
           try { abs = new URL(href, location.href).href; } catch(e){}
           if (abs && abs.split('#')[0] !== location.href.split('#')[0]) {
@@ -2375,6 +2532,60 @@ struct StreamWebView: UIViewRepresentable {
         return best;
       }
 
+      // v2.68: ntv.cx-style SPA cards route via JS, so the real game URL
+      // (/watch/kobra/chicago-cubs-vs-san-francisco-giants-2469363) is NOT a
+      // plain <a href> — the slug-anchor scan finds nothing and we end up
+      // clicking a DIV that never navigates (CLICKED-BUT-NO-NAV → dead end).
+      // This harvests any URL/path carrying BOTH team slugs out of element
+      // attributes (href / data-* / onclick) AND the raw page HTML, so we can
+      // navigate straight to the game even when it's only referenced in JS.
+      var _routedScanStats = { source: '', url: '' };
+      function _extractTargetURLFrom(text) {
+        if (!text) return '';
+        // Match on the ORIGINAL text (case-insensitive) so the returned URL
+        // keeps its real casing — _sideHit lowercases internally for the test.
+        var matches = ('' + text).match(/(https?:\\/\\/[^\\s"'`()<>]+|\\/[a-z0-9][a-z0-9._~\\/-]+)/gi);
+        if (!matches) return '';
+        var curr = location.href.split('#')[0].toLowerCase();
+        for (var k = 0; k < matches.length; k++) {
+          var cand = matches[k];
+          if (!(_sideHit(cand, 'home') && _sideHit(cand, 'away'))) continue;
+          // v2.68: skip a self-referential match. The current page URL itself
+          // carries both team slugs (sources.bintvs.fun/?match=chicago-cubs-
+          // vs-san-francisco-giants); returning it would just no-op the nav
+          // (same URL) and stall — keep scanning for the NEXT hop (the embed).
+          var abs = cand;
+          try { abs = new URL(cand, location.href).href.split('#')[0].toLowerCase(); } catch(e){}
+          if (abs === curr) continue;
+          return cand;
+        }
+        return '';
+      }
+      function findRoutedGameURL() {
+        _routedScanStats = { source: '', url: '' };
+        if (!window.__sc_target) return '';
+        if (!_hasAnyToks('home') || !_hasAnyToks('away')) return '';
+        var els;
+        try { els = document.querySelectorAll('[href],[data-href],[data-url],[data-link],[data-slug],[onclick]'); }
+        catch(e){ els = []; }
+        var attrs = ['href','data-href','data-url','data-link','data-slug','onclick'];
+        var cap = Math.min(els.length, 3000);
+        for (var i = 0; i < cap; i++) {
+          for (var j = 0; j < attrs.length; j++) {
+            var v = els[i].getAttribute && els[i].getAttribute(attrs[j]);
+            var hit = _extractTargetURLFrom(v);
+            if (hit) { _routedScanStats = { source: attrs[j], url: hit }; return hit; }
+          }
+        }
+        // Last resort: scan the serialized HTML (catches slugs only present
+        // in inline JSON / script state used to build the route).
+        try {
+          var hit2 = _extractTargetURLFrom(document.body && document.body.innerHTML);
+          if (hit2) { _routedScanStats = { source: 'html', url: hit2 }; return hit2; }
+        } catch(e){}
+        return '';
+      }
+
       // v2.54: unify the click path with the detector. harvestDetectedCards
       // (the "Found on this page" strip) reliably surfaces real game-pair
       // cards via _gameLinePattern, yet selectTargetGameElement /
@@ -2573,6 +2784,27 @@ struct StreamWebView: UIViewRepresentable {
           clickOrNavigate(node, 'clicked', 'slug: ' + _slugScanStats.href);
           return;
         }
+        // v2.68: no slug anchor — try to recover a JS-routed game URL from
+        // attributes/HTML and navigate to it directly. This is what reaches
+        // ntv.cx's /watch/<server>/<home-vs-away> page (its cards have no
+        // <a href> for the game, so clicking the DIV went nowhere).
+        var routed = '';
+        try { routed = findRoutedGameURL(); } catch(e){}
+        if (routed && _walkClicks < _maxWalkClicks) {
+          var rabs = routed;
+          try { rabs = new URL(routed, location.href).href; } catch(e){}
+          // v2.68: navigate ONCE per URL. Re-issuing location.href every scan
+          // tick interrupts the in-flight load ("frame load interrupted"),
+          // which never commits and trips host-fallback into switching/
+          // disabling the source.
+          if (rabs && rabs !== _routedNavedTo &&
+              rabs.split('#')[0] !== location.href.split('#')[0]) {
+            _routedNavedTo = rabs;
+            _walkClicks++;
+            postWalkEvent('routed', '(' + _routedScanStats.source + ') nav→ ' + rabs);
+            try { location.href = rabs; return; } catch(e){}
+          }
+        }
         try { node = findTargetByPairScan(); } catch(e){}
         if (!node) node = selectTargetGameElement();
         // v2.51: selector-based matcher missed — try tree-walk fallback
@@ -2593,7 +2825,17 @@ struct StreamWebView: UIViewRepresentable {
           return;
         }
         // Step 4b: no game match — at depth 0 try a league-named category link.
-        if (_walkClicks === 0 && window.__sc_target && window.__sc_target.league) {
+        // v2.68: but NOT when the current page URL already carries both team
+        // names. That means we've already followed a game-specific link (e.g.
+        // sources.bintvs.fun/?match=chicago-cubs-vs-san-francisco-giants) and
+        // its stream options just haven't rendered yet — jumping to a league
+        // category here navigates BACKWARDS (…/?cat=Baseball), which then
+        // routes forward again into an endless ping-pong loop.
+        var _here = location.href.toLowerCase();
+        var _onGamePage = _hasAnyToks('home') && _hasAnyToks('away') &&
+                          _sideHit(_here, 'home') && _sideHit(_here, 'away');
+        if (_walkClicks === 0 && !_onGamePage &&
+            window.__sc_target && window.__sc_target.league) {
           var catNode = findCategoryLink(window.__sc_target.league);
           // v2.45: always emit cat_scan after the lookup so the user
           // sees whether the category branch found anything, regardless
@@ -2855,9 +3097,23 @@ struct StreamWebView: UIViewRepresentable {
       guard parts.count >= 2 else { return host.lowercased() }
       return parts.suffix(2).joined(separator: ".")
     }
+    /// The brand label immediately left of the TLD ("crackstreams.ms" and
+    /// "crackstreams.ws" both → "crackstreams").
+    private func brandBase(_ host: String) -> String {
+      let parts = host.lowercased().split(separator: ".")
+      guard parts.count >= 2 else { return host.lowercased() }
+      return String(parts[parts.count - 2])
+    }
     private func sameSite(_ a: String?, _ b: String?) -> Bool {
       guard let a, let b else { return false }
-      return registrableSuffix(a) == registrableSuffix(b)
+      if registrableSuffix(a) == registrableSuffix(b) { return true }
+      // v2.68: these aggregators spread the same listing across sibling
+      // mirror domains (crackstreams.ms ↔ crackstreams.ws) and link between
+      // them. Treat a shared, distinctive brand base as the same site so the
+      // mirror hop isn't rejected as a cross-site ad — which stranded the
+      // walk on the landing page, never reaching the game listing.
+      let base = brandBase(a)
+      return base.count >= 5 && base == brandBase(b)
     }
     private func carriesTargetToken(_ url: URL) -> Bool {
       guard !targetTokens.isEmpty else { return false }
@@ -2955,6 +3211,24 @@ struct StreamWebView: UIViewRepresentable {
                                "/log-in", "/auth", "/oauth"]
       if authHostPrefixes.contains(where: { host.hasPrefix($0) }) ||
          authPathFragments.contains(where: { path.contains($0) }) {
+        return
+      }
+      // v2.68: don't drill into ad iframes. After we've reached the real
+      // embed (embed.st/.../ppv-san-francisco-giants-vs-chicago-cubs/1, which
+      // carries both team names) its page is littered with cross-origin ad
+      // frames (ndcertainlywhen.com/?tid=…, playonrain.com). Drilling the top
+      // frame into one — via an "intended load" that bypasses the popup
+      // guard — is exactly how we ended up stranded on an ad, searching
+      // forever. A cross-origin iframe is only a real stream embed if it
+      // carries a team token or is same-site as the page we're on now.
+      let currentHost = webView?.url?.host
+      if !sameSite(host, currentHost),
+         !sameSite(host, sourceHost),
+         !carriesTargetToken(url) {
+        let event = StreamWebView.WalkEvent(
+          kind: "iframe_skipped", info: host, at: Date(), detectedCards: []
+        )
+        DispatchQueue.main.async { self.onWalkEvent?(event) }
         return
       }
       let score = (json["score"] as? Int) ?? 500
@@ -3067,6 +3341,15 @@ struct StreamWebView: UIViewRepresentable {
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
                  withError error: Error) {
       let nsErr = error as NSError
+      // v2.68: a cancelled/interrupted provisional load is almost always
+      // self-inflicted — we started a new in-app navigation (e.g. to a
+      // recovered /watch/<game> URL) while a prior load was still in flight,
+      // or a redirect superseded it. It is NOT a host/DNS failure, so do not
+      // run HostFallback (which rewrites the source URL to a sibling host and
+      // can leave the source disabled). Just let the new load proceed.
+      let isCancelled = nsErr.domain == NSURLErrorDomain && nsErr.code == NSURLErrorCancelled
+      let isFrameInterrupted = nsErr.domain == "WebKitErrorDomain" && nsErr.code == 102
+      if isCancelled || isFrameInterrupted { return }
       guard !hostFallbackAttempted else {
         DispatchQueue.main.async {
           if let u = webView.url ?? URL(string: "about:blank") {
@@ -3122,8 +3405,8 @@ struct StreamWebView: UIViewRepresentable {
       }
       if !browseMode,
          action.navigationType == .linkActivated,
-         let host = action.request.url?.host,
-         host != webView.url?.host {
+         let url = action.request.url,
+         !isAllowedTopNav(url, current: webView.url) {
         decisionHandler(.cancel); return
       }
       // v2.63: pin the top frame to the source site. Page-initiated
