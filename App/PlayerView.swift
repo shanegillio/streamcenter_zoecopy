@@ -1049,10 +1049,18 @@ final class StreamWebViewBridge: ObservableObject {
       // URL that carries a team token (a genuine deep link). Cross-origin,
       // token-less links are betting/affiliate ads (playonrain → rainbet)
       // that derail the walk into a casino. Reject those.
+      function baseName(host){
+        var p = ('' + host).toLowerCase().split('.');
+        return p.length >= 2 ? p[p.length - 2] : (p[0] || '');
+      }
       function navHrefOK(href){
         if (!href) return false;
         var u; try { u = new URL(href, location.href); } catch(e){ return true; }
         if (u.host === location.host) return true;
+        // v2.68: a sibling mirror domain (same brand base) is the site's
+        // own listing/game page — follow it, don't treat it as an ad.
+        var hbase = baseName(location.host);
+        if (hbase.length >= 5 && hbase === baseName(u.host)) return true;
         var low = u.href.toLowerCase();
         for (var i = 0; i < toks.length; i++){ if (low.indexOf(toks[i]) !== -1) return true; }
         return false;
@@ -1360,7 +1368,13 @@ struct StreamWebView: UIViewRepresentable {
       var ok = false;
       try {
         var u = new URL(abs);
-        if (u.host === location.host) ok = true;
+        // v2.68: same host OR a sibling mirror domain sharing the brand
+        // base (crackstreams.ms ↔ crackstreams.ws) is the site's own page.
+        var hb = location.host.toLowerCase().split('.');
+        var ub = u.host.toLowerCase().split('.');
+        var hbase = hb.length >= 2 ? hb[hb.length - 2] : (hb[0] || '');
+        var ubase = ub.length >= 2 ? ub[ub.length - 2] : (ub[0] || '');
+        if (u.host === location.host || (hbase.length >= 5 && hbase === ubase)) ok = true;
         else {
           var tg = window.__sc_target, toks = [], low = abs.toLowerCase();
           if (tg) [tg.home, tg.away].forEach(function(s){
@@ -2023,15 +2037,29 @@ struct StreamWebView: UIViewRepresentable {
         });
         return t;
       }
+      // v2.68: brand-base of a host ("crackstreams.ms"/"crackstreams.ws" →
+      // "crackstreams"). Lets us recognize a site's own sibling mirror
+      // domains as same-site instead of mistaking the hop for an ad.
+      function _baseName(host) {
+        var p = ('' + host).toLowerCase().split('.');
+        return p.length >= 2 ? p[p.length - 2] : (p[0] || '');
+      }
+      function _sameBrand(a, b) {
+        if (a === b) return true;
+        var ba = _baseName(a);
+        return ba.length >= 5 && ba === _baseName(b);
+      }
       // v2.63: a card href is only worth following if it stays on the same
       // site (the site's own watch/game page) OR is a cross-origin URL
       // carrying a team token (a genuine deep link). Cross-origin token-less
       // hrefs are betting/affiliate ads (ntv.cx cards wrap a playonrain →
       // rainbet link) that send the walk into a casino dead-end. Reject them.
+      // v2.68: a sibling mirror domain (same brand base) is the site's own
+      // listing, not an ad — follow it so the category/game hop lands.
       function _navHrefOK(href) {
         if (!href) return false;
         var u; try { u = new URL(href, location.href); } catch(e){ return true; }
-        if (u.host === location.host) return true;
+        if (_sameBrand(u.host, location.host)) return true;
         var low = u.href.toLowerCase(), toks = _hrefTokens();
         for (var i = 0; i < toks.length; i++){ if (low.indexOf(toks[i]) !== -1) return true; }
         // v2.65: also accept cross-origin deep links routed by team
@@ -2855,9 +2883,23 @@ struct StreamWebView: UIViewRepresentable {
       guard parts.count >= 2 else { return host.lowercased() }
       return parts.suffix(2).joined(separator: ".")
     }
+    /// The brand label immediately left of the TLD ("crackstreams.ms" and
+    /// "crackstreams.ws" both → "crackstreams").
+    private func brandBase(_ host: String) -> String {
+      let parts = host.lowercased().split(separator: ".")
+      guard parts.count >= 2 else { return host.lowercased() }
+      return String(parts[parts.count - 2])
+    }
     private func sameSite(_ a: String?, _ b: String?) -> Bool {
       guard let a, let b else { return false }
-      return registrableSuffix(a) == registrableSuffix(b)
+      if registrableSuffix(a) == registrableSuffix(b) { return true }
+      // v2.68: these aggregators spread the same listing across sibling
+      // mirror domains (crackstreams.ms ↔ crackstreams.ws) and link between
+      // them. Treat a shared, distinctive brand base as the same site so the
+      // mirror hop isn't rejected as a cross-site ad — which stranded the
+      // walk on the landing page, never reaching the game listing.
+      let base = brandBase(a)
+      return base.count >= 5 && base == brandBase(b)
     }
     private func carriesTargetToken(_ url: URL) -> Bool {
       guard !targetTokens.isEmpty else { return false }
@@ -3122,8 +3164,8 @@ struct StreamWebView: UIViewRepresentable {
       }
       if !browseMode,
          action.navigationType == .linkActivated,
-         let host = action.request.url?.host,
-         host != webView.url?.host {
+         let url = action.request.url,
+         !isAllowedTopNav(url, current: webView.url) {
         decisionHandler(.cancel); return
       }
       // v2.63: pin the top frame to the source site. Page-initiated
