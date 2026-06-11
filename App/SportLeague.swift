@@ -19,6 +19,14 @@ enum SportLeague: String, CaseIterable, Identifiable, Codable, Hashable {
   case ligaMx
   case championsLeague
   case europaLeague
+  // International tournaments. Each is just an ESPN competition slug
+  // (see ESPNScoreboardService.apiPath); they only produce listings while
+  // the tournament is actually on ESPN's schedule, off-season otherwise.
+  case worldCup
+  case clubWorldCup
+  case euros
+  case copaAmerica
+  case nationsLeague
   case f1
   case ncaaf
   case ncaab
@@ -55,6 +63,11 @@ enum SportLeague: String, CaseIterable, Identifiable, Codable, Hashable {
     case .ligaMx: return "Liga MX"
     case .championsLeague: return "Champions League"
     case .europaLeague: return "Europa League"
+    case .worldCup: return "World Cup"
+    case .clubWorldCup: return "Club World Cup"
+    case .euros: return "Euros"
+    case .copaAmerica: return "Copa América"
+    case .nationsLeague: return "Nations League"
     case .f1: return "Formula 1"
     case .ncaaf: return "College Football"
     case .ncaab: return "College Basketball"
@@ -81,25 +94,30 @@ enum SportLeague: String, CaseIterable, Identifiable, Codable, Hashable {
     case .ufc:          return 7
     case .mma:          return 8
     case .boxing:       return 9
-    case .premierLeague:return 10
-    case .mls:          return 11
-    case .laLiga:       return 12
-    case .serieA:       return 13
-    case .bundesliga:   return 14
-    case .ligue1:       return 15
-    case .championsLeague: return 16
-    case .europaLeague: return 17
-    case .ligaMx:       return 18
-    case .eredivisie:   return 19
-    case .soccer:       return 20
-    case .tennis:       return 21
-    case .nascar:       return 22
-    case .golf:         return 23
-    case .wwe:          return 24
-    case .wnba:         return 25
-    case .f1:           return 26
-    case .cricket:      return 27
-    case .iihf:         return 28
+    case .worldCup:     return 10
+    case .premierLeague:return 11
+    case .mls:          return 12
+    case .laLiga:       return 13
+    case .serieA:       return 14
+    case .bundesliga:   return 15
+    case .ligue1:       return 16
+    case .championsLeague: return 17
+    case .europaLeague: return 18
+    case .euros:        return 19
+    case .copaAmerica:  return 20
+    case .clubWorldCup: return 21
+    case .nationsLeague: return 22
+    case .ligaMx:       return 23
+    case .eredivisie:   return 24
+    case .soccer:       return 25
+    case .tennis:       return 26
+    case .nascar:       return 27
+    case .golf:         return 28
+    case .wwe:          return 29
+    case .wnba:         return 30
+    case .f1:           return 31
+    case .cricket:      return 32
+    case .iihf:         return 33
     case .other:        return 99
     }
   }
@@ -113,7 +131,8 @@ enum SportLeague: String, CaseIterable, Identifiable, Codable, Hashable {
     case .mma, .ufc: return "figure.martial.arts"
     case .boxing: return "figure.boxing"
     case .soccer, .premierLeague, .laLiga, .serieA, .bundesliga,
-         .ligue1, .eredivisie, .mls, .ligaMx, .championsLeague, .europaLeague: return "soccerball"
+         .ligue1, .eredivisie, .mls, .ligaMx, .championsLeague, .europaLeague,
+         .worldCup, .clubWorldCup, .euros, .copaAmerica, .nationsLeague: return "soccerball"
     case .f1, .nascar: return "car.fill"
     case .wwe: return "figure.wrestling"
     case .tennis: return "tennisball.fill"
@@ -138,7 +157,8 @@ enum SportLeague: String, CaseIterable, Identifiable, Codable, Hashable {
     case .boxing: return "🥊"
     case .soccer, .premierLeague, .laLiga, .serieA, .bundesliga,
          .ligue1, .eredivisie, .mls, .ligaMx,
-         .championsLeague, .europaLeague: return "⚽"
+         .championsLeague, .europaLeague,
+         .worldCup, .clubWorldCup, .euros, .copaAmerica, .nationsLeague: return "⚽"
     case .f1: return "🏎️"
     case .nascar: return "🏁"
     case .wwe: return "🤼"
@@ -180,7 +200,8 @@ enum SportLeague: String, CaseIterable, Identifiable, Codable, Hashable {
     case .mma, .ufc: return Color(red: 0.90, green: 0.25, blue: 0.10)
     case .boxing: return Color(red: 0.85, green: 0.10, blue: 0.10)
     case .soccer, .premierLeague, .laLiga, .serieA, .bundesliga,
-         .ligue1, .eredivisie, .mls, .ligaMx, .championsLeague, .europaLeague:
+         .ligue1, .eredivisie, .mls, .ligaMx, .championsLeague, .europaLeague,
+         .worldCup, .clubWorldCup, .euros, .copaAmerica, .nationsLeague:
       return Color(red: 0.15, green: 0.65, blue: 0.30)
     case .f1: return Color(red: 0.90, green: 0.10, blue: 0.10)
     case .ncaaf: return Color(red: 0.80, green: 0.50, blue: 0.10)

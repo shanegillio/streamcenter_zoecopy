@@ -18,17 +18,6 @@ enum GameURLResolver {
   /// site didn't surface a confident match (caller falls back to the walk).
   static func resolve(game: Game, sourceRoot: URL, timeout: TimeInterval = 12) async -> URL? {
     let root = rootURL(sourceRoot)
-
-    // v2.65: a learned URL template (see SourceProbe) gives the exact game
-    // page with no homepage scrape and no DOM walk — the most reliable path,
-    // and immune to the wrong-game category misfire. Falls through to reading
-    // the site when there's no template or it can't fill every placeholder.
-    if let host = root.host,
-       let template = await MainActor.run(body: { SourceTemplateStore.shared.template(forHost: host) }),
-       let templated = template.url(for: game, root: root) {
-      return templated
-    }
-
     let rootLinks = await scrape(root, timeout: timeout)
     guard !rootLinks.isEmpty else { return nil }
 
@@ -116,7 +105,8 @@ enum GameURLResolver {
     case .ufc: return ["ufc", "mma"]
     case .boxing: return ["boxing"]
     case .soccer, .premierLeague, .laLiga, .serieA, .bundesliga, .ligue1,
-         .eredivisie, .mls, .ligaMx, .championsLeague, .europaLeague:
+         .eredivisie, .mls, .ligaMx, .championsLeague, .europaLeague,
+         .worldCup, .clubWorldCup, .euros, .copaAmerica, .nationsLeague:
       return ["soccer", "football"]
     case .f1: return ["f1", "formula", "motor"]
     case .ncaaf: return ["ncaaf", "college", "football"]

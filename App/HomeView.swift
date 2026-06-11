@@ -68,8 +68,10 @@ struct HomeView: View {
         LoadingPhraseView()
           .frame(maxWidth: .infinity, minHeight: 500)
       }
+      .refreshable { await loadLeagues(forceRefresh: true) }
     } else if visibleLeagues.isEmpty && !isLoadingLive {
       ScrollView { emptyState.frame(maxWidth: .infinity, minHeight: 500) }
+        .refreshable { await loadLeagues(forceRefresh: true) }
     } else {
       VStack(spacing: 0) {
         leagueChipRow
@@ -182,14 +184,9 @@ struct HomeView: View {
         .padding(.bottom, 32)
       }
     }
-    // v2.22: pull-to-refresh is the manual reload trigger. The feed
-    // otherwise loads once per source switch — no background polling,
-    // no per-favorite re-fetch.
-    // v2.23: forceRefresh=true so this actually re-scrapes instead of
-    // returning APIDiscovery's cached endpoint result.
-    .refreshable {
-      await loadLeagues(forceRefresh: true)
-    }
+    // Pull-to-refresh re-scrapes the schedule and live scores.
+    // forceRefresh=true bypasses the ESPN freshness cache.
+    .refreshable { await loadLeagues(forceRefresh: true) }
   }
 
   // MARK: - No-sources state (first launch)
@@ -262,7 +259,9 @@ struct HomeView: View {
   /// of loading, not fetched separately first. This function just sets
   /// loading state and delegates to `loadAllLiveGames`.
   private func loadLeagues(forceRefresh: Bool = false) async {
-    selectedFilter = nil
+    // A manual refresh keeps the user's chip selection; a source/favorites
+    // change resets to "All" since the available leagues may differ.
+    if !forceRefresh { selectedFilter = nil }
     isLoadingLeagues = true
     await loadAllLiveGames(forceRefresh: forceRefresh)
     isLoadingLeagues = false

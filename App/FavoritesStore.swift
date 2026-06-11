@@ -50,7 +50,8 @@ enum Sport: String, CaseIterable, Identifiable, Codable, Hashable {
   // All SportLeague cases that belong to this sport
   var leagues: [SportLeague] {
     switch self {
-    case .soccer:           return [.soccer, .premierLeague, .laLiga, .serieA, .bundesliga]
+    case .soccer:           return [.soccer, .premierLeague, .laLiga, .serieA, .bundesliga,
+                                    .worldCup, .clubWorldCup, .euros, .copaAmerica, .nationsLeague]
     case .basketball:       return [.nba, .wnba, .ncaab]
     case .americanFootball: return [.nfl, .ncaaf]
     case .baseball:         return [.mlb]

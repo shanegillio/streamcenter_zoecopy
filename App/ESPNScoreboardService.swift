@@ -52,6 +52,13 @@ actor ESPNScoreboardService {
     case .ligaMx:        return ("soccer", "mex.1")
     case .championsLeague: return ("soccer", "uefa.champions")
     case .europaLeague:  return ("soccer", "uefa.europa")
+    // International tournaments. Listed here so ESPN's schedule for each
+    // surfaces automatically; out-of-season slugs simply return no events.
+    case .worldCup:      return ("soccer", "fifa.world")
+    case .clubWorldCup:  return ("soccer", "fifa.cwc")
+    case .euros:         return ("soccer", "uefa.euro")
+    case .copaAmerica:   return ("soccer", "conmebol.america")
+    case .nationsLeague: return ("soccer", "uefa.nations")
     // Generic .soccer catch-all stays on MLS; this is the bucket every
     // unclassified soccer game lands in, and US users are the primary
     // audience.

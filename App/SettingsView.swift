@@ -17,7 +17,7 @@ struct SettingsView: View {
             Text("Sources")
               .foregroundStyle(Color(.label))
             Spacer()
-            Text("\(registry.enabledSources.count) active")
+            Text("\(registry.enabledSources.count)")
               .font(.subheadline)
               .foregroundStyle(.secondary)
           }
@@ -39,19 +39,6 @@ struct SettingsView: View {
           }
           .padding(.vertical, 2)
         }
-      }
-
-      // MARK: Debug
-      Section {
-        Toggle(isOn: $debugScraping) {
-          HStack(spacing: 12) {
-            settingsIcon(systemName: "ladybug.fill", color: .pink)
-            Text("Debug Mode")
-              .foregroundStyle(Color(.label))
-          }
-        }
-      } footer: {
-        Text("Show the web view while finding a stream. When off, you'll just see a loading screen until playback starts.")
       }
 
       // MARK: Favorites
@@ -82,6 +69,19 @@ struct SettingsView: View {
       } footer: {
         Text("Favorites surface live games on the home screen and mark tiles with a star.")
       }
+
+      // MARK: Debug
+      Section {
+        Toggle(isOn: $debugScraping) {
+          HStack(spacing: 12) {
+            settingsIcon(systemName: "ladybug.fill", color: .pink)
+            Text("Debug Mode")
+              .foregroundStyle(Color(.label))
+          }
+        }
+      } footer: {
+        Text("Show the web view while finding a stream. When off, you'll just see a loading screen until playback starts.")
+      }
     }
     .listStyle(.insetGrouped)
     .navigationTitle("Settings")
@@ -104,12 +104,12 @@ struct SettingsView: View {
   private func settingsRow(icon: String, color: Color, title: String, count: Int) -> some View {
     HStack(spacing: 12) {
       settingsIcon(systemName: icon, color: color)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(title).foregroundStyle(Color(.label))
-        if count > 0 {
-          Text("\(count) selected")
-            .font(.caption).foregroundStyle(.secondary)
-        }
+      Text(title).foregroundStyle(Color(.label))
+      Spacer()
+      if count > 0 {
+        Text("\(count)")
+          .font(.subheadline)
+          .foregroundStyle(.secondary)
       }
     }
     .padding(.vertical, 2)
@@ -124,8 +124,6 @@ struct SettingsView: View {
 struct SourceListView: View {
   @Environment(SourceRegistry.self) private var registry
   @Environment(\.dismiss) private var dismiss
-  @AppStorage("debugScrapingView") private var debugScraping = false
-  private let templateStore = SourceTemplateStore.shared
   @State private var showAddSource = false
   @State private var newName = ""
   @State private var newURL  = ""
@@ -176,39 +174,6 @@ struct SourceListView: View {
           Text("Any enabled source may be used to find a stream when you tap a game. Add multiple to improve coverage — ESPN provides the game listings; sources serve the streams.")
             .font(.footnote)
             .foregroundStyle(.secondary)
-        }
-
-        // Debug Mode: per-source URL templates, learned by probing and
-        // editable here.
-        if debugScraping {
-          Section {
-            ForEach(registry.sources.filter { !$0.isBuiltIn }) { source in
-              NavigationLink {
-                SourceTemplateEditorView(host: source.baseURL.host ?? "", root: source.baseURL)
-              } label: {
-                VStack(alignment: .leading, spacing: 3) {
-                  Text(source.name)
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(Color(.label))
-                  if let t = templateStore.template(forHost: source.baseURL.host) {
-                    Text(t.pathPattern)
-                      .font(.caption.monospaced())
-                      .foregroundStyle(.green)
-                  } else {
-                    Text("No template — uses page walk")
-                      .font(.caption)
-                      .foregroundStyle(.secondary)
-                  }
-                }
-              }
-            }
-          } header: {
-            Text("URL Templates")
-          } footer: {
-            Text("Learned automatically when a source is added. A template lets the app jump straight to a game's page instead of walking the homepage.")
-              .font(.footnote)
-              .foregroundStyle(.secondary)
-          }
         }
       }
       .listStyle(.insetGrouped)
@@ -327,161 +292,6 @@ private struct AddSourcePopup: View {
       }
     }
     .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
-  }
-}
-
-// MARK: - Source template editor (Debug Mode)
-
-/// Debug-only editor for a source's learned URL template. Lets the user view,
-/// hand-correct, clear, or re-probe the template. Placeholders supported in
-/// the pattern: {league}, {date}, {home}, {away}.
-struct SourceTemplateEditorView: View {
-  let host: String
-  let root: URL
-  private let store = SourceTemplateStore.shared
-  @Environment(\.dismiss) private var dismiss
-
-  @State private var pattern = ""
-  @State private var dateFormat = ""
-  @State private var teamStyle: SourceTemplate.TeamStyle = .abbreviation
-  @State private var verified = false
-  @State private var probing = false
-  @State private var previewURL: String?
-  @State private var sampleGames: [Game] = []
-
-  var body: some View {
-    List {
-      Section {
-        TextField("/live/{league}/{date}/{away}-{home}", text: $pattern)
-          .font(.body.monospaced())
-          .autocorrectionDisabled()
-          .textInputAutocapitalization(.never)
-        TextField("Date format (e.g. yyyy-MM-dd)", text: $dateFormat)
-          .font(.body.monospaced())
-          .autocorrectionDisabled()
-          .textInputAutocapitalization(.never)
-        Picker("Team style", selection: $teamStyle) {
-          Text("Abbreviation (wsh)").tag(SourceTemplate.TeamStyle.abbreviation)
-          Text("Full slug (washington-nationals)").tag(SourceTemplate.TeamStyle.slug)
-        }
-      } header: {
-        Text("Template")
-      } footer: {
-        Text("Placeholders: {league}, {date}, {home}, {away}.")
-      }
-
-      if let previewURL {
-        Section("Preview") {
-          Text(previewURL)
-            .font(.caption.monospaced())
-            .foregroundStyle(.blue)
-            .textSelection(.enabled)
-        }
-      }
-
-      if let status = store.status(forHost: host) {
-        Section("Last Probe") {
-          Text(status)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-      }
-
-      Section {
-        Button {
-          save()
-        } label: {
-          Label("Save Template", systemImage: "checkmark.circle.fill")
-        }
-        .disabled(pattern.trimmingCharacters(in: .whitespaces).isEmpty)
-
-        Button {
-          reprobe()
-        } label: {
-          HStack {
-            Label("Re-probe Source", systemImage: "arrow.clockwise")
-            if probing { Spacer(); ProgressView() }
-          }
-        }
-        .disabled(probing)
-
-        Button(role: .destructive) {
-          store.set(nil, forHost: host)
-          pattern = ""; dateFormat = ""; verified = false; previewURL = nil
-        } label: {
-          Label("Clear Template", systemImage: "trash")
-        }
-      } footer: {
-        if verified {
-          Label("Verified against the site's links", systemImage: "checkmark.seal.fill")
-            .font(.caption)
-            .foregroundStyle(.green)
-        }
-      }
-    }
-    .listStyle(.insetGrouped)
-    .navigationTitle(host)
-    .navigationBarTitleDisplayMode(.inline)
-    .onAppear(perform: loadFromStore)
-    .task {
-      sampleGames = await ScheduleAggregator.shared.todaysGames()
-      updatePreview()
-    }
-    .onChange(of: pattern) { _, _ in updatePreview() }
-    .onChange(of: dateFormat) { _, _ in updatePreview() }
-    .onChange(of: teamStyle) { _, _ in updatePreview() }
-  }
-
-  private func loadFromStore() {
-    if let t = store.template(forHost: host) {
-      pattern = t.pathPattern
-      dateFormat = t.dateFormat
-      teamStyle = t.teamStyle
-      verified = t.verified
-    }
-  }
-
-  private func currentTemplate() -> SourceTemplate {
-    SourceTemplate(
-      pathPattern: pattern.trimmingCharacters(in: .whitespaces),
-      dateFormat: dateFormat.trimmingCharacters(in: .whitespaces),
-      teamStyle: teamStyle,
-      verified: verified
-    )
-  }
-
-  private func save() {
-    // A hand-edited template is no longer "probe-verified".
-    verified = false
-    store.set(currentTemplate(), forHost: host)
-  }
-
-  private func updatePreview() {
-    let trimmed = pattern.trimmingCharacters(in: .whitespaces)
-    guard !trimmed.isEmpty, let game = sampleGames.first(where: { !$0.awayTeam.isEmpty }) ?? sampleGames.first else {
-      previewURL = nil
-      return
-    }
-    previewURL = currentTemplate().url(for: game, root: root)?.absoluteString
-  }
-
-  private func reprobe() {
-    probing = true
-    Task {
-      let result = await SourceProbe.probeWithStatus(root: root)
-      await MainActor.run {
-        probing = false
-        store.setStatus(result.status, forHost: host)
-        if let learned = result.template {
-          store.set(learned, forHost: host)
-          pattern = learned.pathPattern
-          dateFormat = learned.dateFormat
-          teamStyle = learned.teamStyle
-          verified = learned.verified
-          updatePreview()
-        }
-      }
-    }
   }
 }
 

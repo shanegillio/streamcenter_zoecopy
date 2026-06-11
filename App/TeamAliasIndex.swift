@@ -73,32 +73,12 @@ final class TeamAliasIndex {
 
   /// Whether `paddedHaystack` (a normalized string wrapped in leading and
   /// trailing spaces) mentions this team — via a long token (substring) or
-  /// an abbreviation (whole word). Shared by GameURLResolver and SourceProbe.
+  /// an abbreviation (whole word). Used by GameURLResolver.
   func matches(team displayName: String, inPadded paddedHaystack: String) -> Bool {
     let t = tokens(forTeam: displayName)
     if t.long.contains(where: { paddedHaystack.contains($0) }) { return true }
     if t.abbr.contains(where: { paddedHaystack.contains(" \($0) ") }) { return true }
     return false
-  }
-
-  /// The team's canonical short abbreviation (e.g. "wsh"), used to build deep
-  /// links for abbreviation-routed sites. The first 2–3 letter alias after
-  /// the canonical name. nil when the team isn't in the database.
-  func primaryAbbreviation(forTeam displayName: String) -> String? {
-    let key = Self.normalize(displayName)
-    guard let raw = aliasesByName[key] else { return nil }
-    for alias in raw.dropFirst() {  // dropFirst skips the canonical name
-      let a = Self.normalize(alias).replacingOccurrences(of: " ", with: "")
-      if (2...3).contains(a.count), a.allSatisfy({ $0.isLetter }) { return a }
-    }
-    return nil
-  }
-
-  /// Hyphenated full-name slug (e.g. "washington-nationals").
-  func slug(forTeam displayName: String) -> String {
-    Self.normalize(displayName)
-      .replacingOccurrences(of: " ", with: "-")
-      .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
   }
 
   // MARK: - Loading

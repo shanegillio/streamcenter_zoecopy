@@ -789,18 +789,6 @@ struct PlayerView: View {
     guard path.isEmpty || path == "/" else { return }
     resolving = true
     defer { resolving = false }
-    // v2.66: if this source has never been initialized, learn its URL
-    // template now (bounded) so we can jump straight to the game instead of
-    // walking the homepage. Once learned it's cached, so this only blocks the
-    // very first tap on a new source. Failure leaves no template → the walk.
-    if let host = url.host, SourceTemplateStore.shared.template(forHost: host) == nil,
-       SourceTemplateStore.shared.status(forHost: host) == nil {
-      let result = await SourceProbe.probeWithStatus(root: url)
-      SourceTemplateStore.shared.setStatus(result.status, forHost: host)
-      if let template = result.template {
-        SourceTemplateStore.shared.set(template, forHost: host)
-      }
-    }
     guard let resolved = await GameURLResolver.resolve(game: game, sourceRoot: url),
           resolved.absoluteString != url.absoluteString else { return }
     guard currentAttemptIdx < attempts.count else { return }
