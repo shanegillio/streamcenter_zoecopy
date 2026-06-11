@@ -16,7 +16,8 @@ enum TeamLogoService {
     case .mlb: return "mlb"
     case .nhl: return "nhl"
     case .ncaab: return "mens-college-basketball"
-    case .premierLeague, .laLiga, .serieA, .bundesliga, .soccer: return "soccer"
+    case .premierLeague, .laLiga, .serieA, .bundesliga, .soccer,
+         .worldCup, .clubWorldCup, .euros, .copaAmerica, .nationsLeague: return "soccer"
     default: return nil
     }
   }

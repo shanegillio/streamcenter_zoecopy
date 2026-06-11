@@ -105,7 +105,8 @@ enum GameURLResolver {
     case .ufc: return ["ufc", "mma"]
     case .boxing: return ["boxing"]
     case .soccer, .premierLeague, .laLiga, .serieA, .bundesliga, .ligue1,
-         .eredivisie, .mls, .ligaMx, .championsLeague, .europaLeague:
+         .eredivisie, .mls, .ligaMx, .championsLeague, .europaLeague,
+         .worldCup, .clubWorldCup, .euros, .copaAmerica, .nationsLeague:
       return ["soccer", "football"]
     case .f1: return ["f1", "formula", "motor"]
     case .ncaaf: return ["ncaaf", "college", "football"]

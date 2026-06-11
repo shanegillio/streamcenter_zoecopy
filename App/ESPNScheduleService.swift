@@ -23,6 +23,7 @@ actor ESPNScheduleService {
     .nba, .wnba, .ncaab, .nfl, .ncaaf, .mlb, .nhl, .mls,
     .premierLeague, .laLiga, .serieA, .bundesliga, .ligue1,
     .eredivisie, .ligaMx, .championsLeague, .europaLeague,
+    .worldCup, .clubWorldCup, .euros, .copaAmerica, .nationsLeague,
     .f1, .nascar, .ufc,
   ]
 
