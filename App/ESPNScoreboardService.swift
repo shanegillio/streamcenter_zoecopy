@@ -95,8 +95,10 @@ actor ESPNScoreboardService {
 
   // Returns cached (or freshly fetched) ESPN events for the league.
   // Fetches today and tomorrow in parallel to cover pre-game listings.
-  func events(for league: SportLeague) async -> [ESPNEvent] {
-    if let cached = cache[league], Date() < cached.expiry {
+  // `forceRefresh=true` skips the cached-freshness check so a pull-to-refresh
+  // actually re-hits ESPN for new scores instead of replaying cached events.
+  func events(for league: SportLeague, forceRefresh: Bool = false) async -> [ESPNEvent] {
+    if !forceRefresh, let cached = cache[league], Date() < cached.expiry {
       return cached.events
     }
     guard let (sport, slug) = Self.apiPath(for: league) else { return [] }

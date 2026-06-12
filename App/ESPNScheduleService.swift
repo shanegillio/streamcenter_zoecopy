@@ -53,7 +53,7 @@ actor ESPNScheduleService {
     await withTaskGroup(of: (SportLeague, [ESPNScoreboardService.ESPNEvent]).self) { group in
       for league in Self.leagues {
         group.addTask {
-          let events = await ESPNScoreboardService.shared.events(for: league)
+          let events = await ESPNScoreboardService.shared.events(for: league, forceRefresh: forceRefresh)
           return (league, events)
         }
       }
