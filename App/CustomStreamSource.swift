@@ -45,8 +45,8 @@ struct CustomStreamSource: StreamSource {
   /// that matches (text or href contains both normalized team names).
   /// Falls back to a single LLM call when plain matching produces zero
   /// hits — the user's "LLM/scraper hybrid" verbatim.
-  func matchedGameURLs(amongCanonical games: [Game]) async -> [String: URL] {
-    let links = await scrapeLinks()
+  func matchedGameURLs(amongCanonical games: [Game], forceRefresh: Bool = false) async -> [String: URL] {
+    let links = await scrapeLinks(forceRefresh: forceRefresh)
     guard !links.isEmpty else { return [:] }
 
     var matches: [String: URL] = [:]
@@ -134,9 +134,10 @@ struct CustomStreamSource: StreamSource {
 
   /// Loads the source's baseURL in a WKWebView and extracts anchor links.
   /// Handles DNS failure by trying common TLD variants via `HostFallback`.
-  /// Cached for 60 s via `ScrapeCache`.
-  func scrapeLinks(timeout: TimeInterval = 15) async -> [ScrapedLink] {
-    if let cached = await ScrapeCache.shared.get(baseURL) { return cached }
+  /// Cached for 60 s via `ScrapeCache`; `forceRefresh=true` skips the cache
+  /// and re-scrapes so a pull-to-refresh sees the site's current listings.
+  func scrapeLinks(timeout: TimeInterval = 15, forceRefresh: Bool = false) async -> [ScrapedLink] {
+    if !forceRefresh, let cached = await ScrapeCache.shared.get(baseURL) { return cached }
     let scraper = await MainActor.run { WebViewScraper() }
     let result = await scraper.scrapeWithDiagnostic(url: baseURL, timeout: timeout)
 

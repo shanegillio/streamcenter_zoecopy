@@ -20,6 +20,14 @@ protocol ListingProducer: Sendable {
   /// Returns Games for today + tomorrow. Each producer manages its own
   /// caching / TTL internally; this call may return cached results.
   func todaysGames() async -> [Game]
+
+  /// Same, but `forceRefresh=true` bypasses the producer's own cache so a
+  /// pull-to-refresh re-fetches fresh data. Defaults to the cached path.
+  func todaysGames(forceRefresh: Bool) async -> [Game]
+}
+
+extension ListingProducer {
+  func todaysGames(forceRefresh: Bool) async -> [Game] { await todaysGames() }
 }
 
 /// Wraps the existing `ESPNScheduleService` as a `ListingProducer`. Kept
@@ -59,10 +67,7 @@ actor ScheduleAggregator {
     await withTaskGroup(of: [Game].self) { group in
       for producer in producers {
         group.addTask {
-          if let espn = producer as? ESPNListingProducer {
-            return await espn.todaysGames(forceRefresh: forceRefresh)
-          }
-          return await producer.todaysGames()
+          await producer.todaysGames(forceRefresh: forceRefresh)
         }
       }
       for await games in group { results.append(games) }

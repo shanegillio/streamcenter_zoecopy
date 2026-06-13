@@ -288,7 +288,8 @@ struct HomeView: View {
           // CF clearance + JS render + substring match. Plain matching
           // is cheap; the budget mostly bounds the scrape itself.
           await Self.boundedMatchedGameURLs(
-            source: source, canonical: canonicalGames, budgetSeconds: 15
+            source: source, canonical: canonicalGames, budgetSeconds: 15,
+            forceRefresh: forceRefresh
           )
         }
       }
@@ -389,11 +390,12 @@ struct HomeView: View {
   static func boundedMatchedGameURLs(
     source: AnyStreamSource,
     canonical: [Game],
-    budgetSeconds: Int
+    budgetSeconds: Int,
+    forceRefresh: Bool = false
   ) async -> (String, [String: URL]) {
     let result = await withTaskGroup(of: (String, [String: URL])?.self) { group in
       group.addTask {
-        let m = await source.matchedGameURLs(amongCanonical: canonical)
+        let m = await source.matchedGameURLs(amongCanonical: canonical, forceRefresh: forceRefresh)
         return (source.id, m)
       }
       group.addTask {

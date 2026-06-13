@@ -9,8 +9,9 @@ protocol StreamSource {
   /// v2.32: the source's only job. For each canonical Game in `games`,
   /// return the per-game page URL on this source whose anchor text or
   /// href contains both team names. Empty when this source has no
-  /// matches today.
-  func matchedGameURLs(amongCanonical games: [Game]) async -> [String: URL]
+  /// matches today. `forceRefresh=true` re-scrapes the homepage instead
+  /// of serving cached links, so a pull-to-refresh finds new game options.
+  func matchedGameURLs(amongCanonical games: [Game], forceRefresh: Bool) async -> [String: URL]
 }
 
 /// Type-erased wrapper around any `StreamSource` so the registry can
@@ -20,18 +21,18 @@ struct AnyStreamSource: Identifiable, Equatable {
   let name: String
   let baseURL: URL
   let isBuiltIn: Bool
-  private let _matchedGameURLs: ([Game]) async -> [String: URL]
+  private let _matchedGameURLs: ([Game], Bool) async -> [String: URL]
 
   init<S: StreamSource>(_ source: S, builtIn: Bool = false) {
     id = source.id
     name = source.name
     baseURL = source.baseURL
     isBuiltIn = builtIn
-    _matchedGameURLs = source.matchedGameURLs(amongCanonical:)
+    _matchedGameURLs = source.matchedGameURLs(amongCanonical:forceRefresh:)
   }
 
-  func matchedGameURLs(amongCanonical games: [Game]) async -> [String: URL] {
-    await _matchedGameURLs(games)
+  func matchedGameURLs(amongCanonical games: [Game], forceRefresh: Bool = false) async -> [String: URL] {
+    await _matchedGameURLs(games, forceRefresh)
   }
 
   static func == (lhs: AnyStreamSource, rhs: AnyStreamSource) -> Bool {
