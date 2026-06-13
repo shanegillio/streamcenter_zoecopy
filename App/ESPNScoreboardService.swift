@@ -123,21 +123,32 @@ actor ESPNScoreboardService {
       return dateFmt.string(from: date)
     }
 
+    // Each date task returns its events on success, or nil when the request
+    // failed (network error, non-200 status, or unparseable body). A 200 with
+    // valid JSON and no events is success-with-empty, NOT a failure. The
+    // distinction matters on a force-refresh: firing every league at once can
+    // get individual requests rate-limited, and a dropped "today" request must
+    // not be mistaken for "no games today" (which would drop live games).
     var allRaw: [[String: Any]] = []
-    await withTaskGroup(of: [[String: Any]].self) { group in
+    var anyFailed = false
+    await withTaskGroup(of: [[String: Any]]?.self) { group in
       for dateStr in dateStrings {
         let urlStr = "https://site.api.espn.com/apis/site/v2/sports/\(sport)/\(slug)/scoreboard?dates=\(dateStr)"
         group.addTask {
-          guard let url = URL(string: urlStr) else { return [] }
+          guard let url = URL(string: urlStr) else { return nil }
           var req = URLRequest(url: url, timeoutInterval: 10)
           req.setValue("application/json", forHTTPHeaderField: "Accept")
-          guard let (data, _) = try? await URLSession.shared.data(for: req),
-                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                let events = json["events"] as? [[String: Any]] else { return [] }
-          return events
+          guard let (data, response) = try? await URLSession.shared.data(for: req),
+                (response as? HTTPURLResponse)?.statusCode == 200,
+                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+          }
+          return (json["events"] as? [[String: Any]]) ?? []
         }
       }
-      for await chunk in group { allRaw.append(contentsOf: chunk) }
+      for await chunk in group {
+        if let chunk { allRaw.append(contentsOf: chunk) } else { anyFailed = true }
+      }
     }
 
     // Deduplicate by event ID (same game can appear in both date windows around midnight)
@@ -147,15 +158,24 @@ actor ESPNScoreboardService {
       guard seen.insert(ev.id).inserted else { return nil }
       return ev
     }
-    // v2.49: if the fresh fetch came back empty, fall back to the
-    // last-known-good result for this league (within `lastNonEmptyTTL`)
-    // so a transient ESPN/network failure doesn't blank the UI for a
-    // full refresh cycle. Use a short cache TTL so we retry promptly.
-    if parsed.isEmpty,
-       let last = lastNonEmpty[league],
-       Date().timeIntervalSince(last.at) < Self.lastNonEmptyTTL {
-      cache[league] = (last.events, Date().addingTimeInterval(30))
-      return last.events
+    // Fall back to last-known-good when the fetch can't be trusted:
+    //   • parsed is empty (nothing usable came back), or
+    //   • a request failed — a partial result must not drop games whose
+    //     request was the one that failed. Merge instead: fresh events win
+    //     (updated scores/status) and games that didn't come back are kept.
+    // This is what keeps a flaky force-refresh from wiping live games that
+    // are still in progress (they reappear on the next clean fetch anyway).
+    if let last = lastNonEmpty[league],
+       Date().timeIntervalSince(last.at) < Self.lastNonEmptyTTL,
+       parsed.isEmpty || anyFailed {
+      var byID: [String: ESPNEvent] = [:]
+      for ev in last.events { byID[ev.id] = ev }
+      for ev in parsed { byID[ev.id] = ev }   // fresh wins on collision
+      let merged = Array(byID.values)
+      let hasLive = merged.contains { $0.isLive }
+      cache[league] = (merged, Date().addingTimeInterval(hasLive ? 60 : 30))
+      if !parsed.isEmpty { lastNonEmpty[league] = (merged, Date()) }
+      return merged
     }
     let hasLive = parsed.contains { $0.isLive }
     // 60 s when live games exist (keeps score/period fresh), 90 s otherwise
