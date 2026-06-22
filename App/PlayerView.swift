@@ -3421,6 +3421,16 @@ struct StreamWebView: UIViewRepresentable {
           if !found { report(url) }
           decisionHandler(.cancel); return
         }
+        // v2.69 (unwrap): the wrapper carries the real manifest inside its
+        // query (bintv-nett.blogspot.com/?src=…%2Fmaster.m3u8). Its nested
+        // player frequently won't self-start headlessly, so the manifest
+        // request never fires on its own. Pull the embedded manifest out and
+        // report it directly. We don't cancel — the wrapper still loads as a
+        // fallback in case the extracted URL is locked and its player ends up
+        // fetching a playable variant we can catch above.
+        if !found, let inner = Self.embeddedManifestURL(in: url) {
+          report(inner)
+        }
       }
       if !browseMode,
          action.navigationType == .linkActivated,
@@ -3518,6 +3528,38 @@ struct StreamWebView: UIViewRepresentable {
       } else {
         DispatchQueue.main.async { self.onStreamURLFound?(url, []) }
       }
+    }
+
+    /// v2.69: extract the real media manifest a wrapper/embed URL carries in
+    /// its (often multiply percent-encoded) query string. Returns nil when the
+    /// URL is itself a direct manifest, or when no embedded manifest is found.
+    /// Players like bintv chain several redirect hops —
+    /// `…blogspot.com/?src=…%2F%3Fq%3D…%2Fmaster.m3u8` — so we decode a few
+    /// passes and take the innermost (last) manifest URL, which is the real one
+    /// (the outer layers only contain ".m3u8" because they wrap it).
+    static func embeddedManifestURL(in url: URL) -> URL? {
+      let path = url.path.lowercased()
+      if path.contains(".m3u8") || path.contains(".mpd") { return nil }
+      let whole = url.absoluteString.lowercased()
+      guard whole.contains(".m3u8") || whole.contains(".mpd") else { return nil }
+      var s = url.absoluteString
+      for _ in 0..<3 {
+        guard let decoded = s.removingPercentEncoding, decoded != s else { break }
+        s = decoded
+      }
+      let pattern = #"https?://[^\s"'<>&]+\.(?:m3u8|mpd)(?:\?[^\s"'<>&]*)?"#
+      guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+      let range = NSRange(s.startIndex..., in: s)
+      let matches = regex.matches(in: s, range: range)
+      for m in matches.reversed() {
+        guard let r = Range(m.range, in: s) else { continue }
+        let candidate = String(s[r])
+        guard let inner = URL(string: candidate),
+              inner.absoluteString != url.absoluteString else { continue }
+        let ip = inner.path.lowercased()
+        if ip.contains(".m3u8") || ip.contains(".mpd") { return inner }
+      }
+      return nil
     }
 
     private static func probePlayability(_ url: URL,
