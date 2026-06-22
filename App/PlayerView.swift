@@ -1196,6 +1196,29 @@ final class StreamWebViewBridge: ObservableObject {
       // ("WNBA Streams")? For a game we must NOT force-navigate to a link
       // that doesn't carry the team slug.
       var isPair = /(^|\\s)vs(\\s|$)|@|—|–/.test(t);
+      // v2.69: does the element's text identify the target? The exact
+      // contiguous phrase ("france vs iraq") is the strongest signal, but a
+      // source frequently lists the same game in the OTHER order ("Iraq vs
+      // France") or with a different separator ("France - Iraq", "France @
+      // Iraq"). Our canonical pair string then never appears verbatim, so the
+      // in-page walk identifies the card (it matches teams as independent
+      // tokens) yet this click executor couldn't re-find it — the
+      // CLICKED-BUT-NO-NAV / no-match dead-end. For a pair, fall back to an
+      // order-independent match requiring every team token to be present.
+      // The length cap keeps the order-independent path scoped to a single
+      // game card: a card's text is short ("Iraq vs France 0-0 8' LIVE"),
+      // whereas a multi-game container would collect both tokens from
+      // different cards and match falsely.
+      function labelMatches(b){
+        if (b.indexOf(t) !== -1) return true;
+        if (isPair && toks.length >= 2 && b.length <= 160){
+          for (var k = 0; k < toks.length; k++){
+            if (b.indexOf(toks[k]) === -1) return false;
+          }
+          return true;
+        }
+        return false;
+      }
       var sel = 'a[href],button,[onclick],[data-match],[data-event],[data-game],' +
                 '[role="button"],[class*="card" i],[class*="match" i],[class*="game" i]';
       var els = document.querySelectorAll(sel);
@@ -1206,7 +1229,7 @@ final class StreamWebViewBridge: ObservableObject {
                  (e.getAttribute && (e.getAttribute('aria-label') || '')) + ' ' +
                  (e.getAttribute && (e.getAttribute('title') || '')))
                 .replace(/\\s+/g, ' ').toLowerCase();
-        if (b.indexOf(t) === -1) continue;
+        if (!labelMatches(b)) continue;
         if (!firstMatch) firstMatch = e;
         // Prefer a real destination URL. v2.68: but for a game card, only
         // FOLLOW a link that carries the team slug (the real /watch/<server>/
@@ -3385,8 +3408,16 @@ struct StreamWebView: UIViewRepresentable {
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
       if let url = action.request.url {
-        let u = url.absoluteString.lowercased()
-        if u.contains(".m3u8") || u.contains(".mpd") {
+        // v2.69: only a DIRECT manifest request is the stream — match on the
+        // path, not the whole URL. Embed/redirect wrappers carry the real
+        // manifest inside their query string
+        // (bintv-nett.blogspot.com/?src=…%2Fmaster.m3u8&title=…); the old
+        // whole-URL `contains(".m3u8")` mistook that wrapper for the stream,
+        // cancelled its load, and handed AVPlayer an HTML page (black screen).
+        // Letting the wrapper load lets its player fetch the actual manifest,
+        // whose own request — path ending in .m3u8/.mpd — we catch here next.
+        let p = url.path.lowercased()
+        if p.contains(".m3u8") || p.contains(".mpd") {
           if !found { report(url) }
           decisionHandler(.cancel); return
         }
