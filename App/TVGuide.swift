@@ -90,8 +90,16 @@ enum TVGuideLayout {
     return natural
   }
 
+  /// Calendar pinned to ET so the timeline's half-hour grid lines up with the
+  /// ET game-time labels used throughout the app.
+  private static var etCalendar: Calendar {
+    var c = Calendar(identifier: .gregorian)
+    c.timeZone = TimeZone(identifier: "America/New_York") ?? c.timeZone
+    return c
+  }
+
   static func axis(for games: [Game], now: Date) -> Axis {
-    let cal = Calendar.current
+    let cal = etCalendar
     // Floor "now" to the previous half hour as the natural left edge.
     let flooredNow = floorToHalfHour(now, cal: cal)
     var minStart = flooredNow
@@ -154,10 +162,14 @@ enum TVGuideLayout {
         ))
       }
     }
-    // Order rows chronologically by the next game on each channel (soonest
-    // first), so what's on now / up next sits at the top. Ties break on
-    // popularity then name for stable ordering.
+    // Channels with a live game always sit at the top. Within each group
+    // (live, then upcoming) order chronologically by the next game on the
+    // channel, so what's on now / up next leads. Ties break on popularity
+    // then name for stable ordering.
     return channels.sorted { a, b in
+      let aLive = a.games.contains { $0.isLive }
+      let bLive = b.games.contains { $0.isLive }
+      if aLive != bLive { return aLive }
       let sa = a.games.map { startTime(for: $0, now: now) }.min() ?? .distantFuture
       let sb = b.games.map { startTime(for: $0, now: now) }.min() ?? .distantFuture
       if sa != sb { return sa < sb }
@@ -180,7 +192,7 @@ struct TVGuideView: View {
   let selectedGameID: String?
   let onSelect: (Game) -> Void
 
-  @State private var hasScrolledToNow = false
+  @State private var didInitialScroll = false
 
   private var now: Date { Date() }
   private var channels: [GuideChannel] {
@@ -198,6 +210,16 @@ struct TVGuideView: View {
         ScrollViewReader { proxy in
           ScrollView(.horizontal, showsIndicators: false) {
             VStack(spacing: 0) {
+              // Zero-height layout anchor at the current-time position. Unlike
+              // the visual red line (which uses .offset and therefore has no
+              // real layout frame), this anchor is laid out at x(now) so
+              // ScrollViewReader can actually scroll to it.
+              HStack(spacing: 0) {
+                Color.clear.frame(width: max(0, axis.x(for: now)), height: 0)
+                Color.clear.frame(width: 1, height: 0).id("now")
+                Spacer(minLength: 0)
+              }
+              .frame(width: axis.totalWidth, height: 0)
               GuideTimeHeader(axis: axis)
               ForEach(channels) { channel in
                 GuideTimelineRow(
@@ -210,27 +232,34 @@ struct TVGuideView: View {
                 Divider().overlay(Color.black.opacity(0.25))
               }
             }
-            // Red "now" line spanning the header + all rows.
+            // Red "now" line spanning the header + all rows (visual only).
             .overlay(alignment: .topLeading) {
               Rectangle()
                 .fill(Color.red)
                 .frame(width: 2)
                 .offset(x: axis.x(for: now))
-                .id("now")
                 .allowsHitTesting(false)
             }
           }
-          .onAppear {
-            guard !hasScrolledToNow else { return }
-            hasScrolledToNow = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-              proxy.scrollTo("now", anchor: UnitPoint(x: 0.1, y: 0))
-            }
-          }
+          .onAppear { scrollToNow(proxy) }
+          .onChange(of: channels.count) { _, _ in scrollToNow(proxy) }
         }
       }
     }
     .background(GuideTheme.surface)
+  }
+
+  /// Scroll the timeline so the current time sits near the left edge. Runs
+  /// once, after the first non-empty content lands (the guide loads async,
+  /// so the very first onAppear can fire with no channels yet).
+  private func scrollToNow(_ proxy: ScrollViewProxy) {
+    guard !didInitialScroll, !channels.isEmpty else { return }
+    didInitialScroll = true
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+      withAnimation(.easeInOut(duration: 0.3)) {
+        proxy.scrollTo("now", anchor: UnitPoint(x: 0.12, y: 0))
+      }
+    }
   }
 
   private var dateBar: some View {
@@ -265,6 +294,8 @@ struct TVGuideView: View {
 
   static let dateFormatter: DateFormatter = {
     let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.timeZone = TimeZone(identifier: "America/New_York")
     f.dateFormat = "EEEE, MMMM d, yyyy"
     return f
   }()
@@ -312,6 +343,10 @@ struct GuideTimeHeader: View {
 
   static let timeFormatter: DateFormatter = {
     let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    // Game blocks are labeled in ET (Game.displayTime), so the axis must
+    // match or the timeline reads inconsistently.
+    f.timeZone = TimeZone(identifier: "America/New_York")
     f.dateFormat = "h:mm a"
     return f
   }()

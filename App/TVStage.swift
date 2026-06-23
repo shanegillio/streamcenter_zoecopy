@@ -10,24 +10,12 @@ struct TVStageView: View {
   let onChannelDown: () -> Void
   let onPrev: () -> Void
 
-  @State private var fullScreenGame: Game?
-
   var body: some View {
     HStack(alignment: .top, spacing: 10) {
       tvBox
       controls
     }
     .padding(.horizontal, 14)
-    .fullScreenCover(item: $fullScreenGame) { g in
-      NavigationStack {
-        PlayerView(game: g)
-          .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-              Button("Done") { fullScreenGame = nil }
-            }
-          }
-      }
-    }
   }
 
   private var tvBox: some View {
@@ -35,6 +23,10 @@ struct TVStageView: View {
       RoundedRectangle(cornerRadius: 14)
         .fill(Color.black)
       if let game {
+        // Tapping the video reveals AVKit's native transport controls,
+        // which include a full-screen (expand) button. Going full screen
+        // that way reuses this same AVPlayer instead of spinning up a
+        // second player, so there's never a double-video.
         PlayerView(game: game, embedded: true)
           .id(game.id)
           .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -45,21 +37,6 @@ struct TVStageView: View {
     }
     .frame(height: 200)
     .frame(maxWidth: .infinity)
-    .overlay(alignment: .bottomTrailing) {
-      if let game {
-        Button {
-          fullScreenGame = game
-        } label: {
-          Image(systemName: "arrow.up.left.and.arrow.down.right")
-            .font(.system(size: 13, weight: .bold))
-            .foregroundStyle(.white)
-            .padding(8)
-            .background(.black.opacity(0.55), in: Circle())
-        }
-        .padding(8)
-        .accessibilityLabel("Full screen")
-      }
-    }
   }
 
   private var controls: some View {

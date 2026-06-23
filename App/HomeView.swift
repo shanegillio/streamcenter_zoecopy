@@ -302,6 +302,9 @@ struct HomeView: View {
     }()
     let allGames = gamesWithStreams.filter { game in
       if game.isLive { return true }
+      // Drop games that have already finished — only live + still-upcoming
+      // games belong in the guide.
+      if Self.isFinished(game) { return false }
       guard let st = game.scheduledTime else { return true }
       return st < cutoff
     }
@@ -369,6 +372,31 @@ struct HomeView: View {
       return winner
     }
     return result ?? (source.id, [:])
+  }
+
+  /// Heuristic for "this game is over and should be hidden." Live games are
+  /// never finished. A non-live game is finished when ESPN tagged it with a
+  /// final marker (Final / FT / full time), when it's a completed event
+  /// (no known time but a populated status line), or when it started long
+  /// enough ago that its typical run-time has elapsed.
+  static func isFinished(_ game: Game) -> Bool {
+    if game.isLive { return false }
+    if let s = game.liveStatus?.lowercased(), !s.isEmpty {
+      if s.contains("final") || s.contains("ft") || s.contains("full time")
+        || s.contains("ended") || s.contains("result") {
+        return true
+      }
+      // Completed ESPN event: time is unknown but a status line exists.
+      if game.scheduledTime == nil || !game.timeIsKnown { return true }
+    }
+    if let t = game.scheduledTime, game.timeIsKnown {
+      let elapsed = -t.timeIntervalSinceNow
+      // A non-live game whose typical run-time has fully elapsed is over.
+      // (Anything still actually playing would be flagged `isLive`.)
+      let runtime = Double(game.league.typicalDurationMinutes) * 60
+      if elapsed > runtime { return true }
+    }
+    return false
   }
 
   static func matchesTeamPair(home: String, away: String, target: Game) -> Bool {
