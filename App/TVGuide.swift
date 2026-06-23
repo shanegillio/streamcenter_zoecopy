@@ -22,13 +22,14 @@ enum GuideTheme {
   static let text = Color.white
   static let textDim = Color.white.opacity(0.6)
 
-  /// Points per minute on the timeline. 4 pt/min → 30 min = 120 pt.
-  static let pointsPerMinute: CGFloat = 4
+  /// Points per minute on the timeline. Tuned so a full ~3-hour game fits
+  /// across the timeline area on a phone (≈320 pt ÷ 180 min).
+  static let pointsPerMinute: CGFloat = 1.8
   static let rowHeight: CGFloat = 66
-  static let channelColumnWidth: CGFloat = 76
+  static let channelColumnWidth: CGFloat = 64
   static let headerHeight: CGFloat = 30
   /// Minimum rendered width for a very short event block.
-  static let minBlockWidth: CGFloat = 110
+  static let minBlockWidth: CGFloat = 64
 }
 
 // MARK: - Channel model
@@ -153,7 +154,18 @@ enum TVGuideLayout {
         ))
       }
     }
-    return channels
+    // Order rows chronologically by the next game on each channel (soonest
+    // first), so what's on now / up next sits at the top. Ties break on
+    // popularity then name for stable ordering.
+    return channels.sorted { a, b in
+      let sa = a.games.map { startTime(for: $0, now: now) }.min() ?? .distantFuture
+      let sb = b.games.map { startTime(for: $0, now: now) }.min() ?? .distantFuture
+      if sa != sb { return sa < sb }
+      if a.league.popularityRank != b.league.popularityRank {
+        return a.league.popularityRank < b.league.popularityRank
+      }
+      return a.league.displayName < b.league.displayName
+    }
   }
 }
 
@@ -168,6 +180,8 @@ struct TVGuideView: View {
   let selectedGameID: String?
   let onSelect: (Game) -> Void
 
+  @State private var hasScrolledToNow = false
+
   private var now: Date { Date() }
   private var channels: [GuideChannel] {
     TVGuideLayout.channels(live: live, upcoming: upcoming, now: now)
@@ -181,18 +195,36 @@ struct TVGuideView: View {
       dateBar
       HStack(alignment: .top, spacing: 0) {
         channelColumn
-        ScrollView(.horizontal, showsIndicators: false) {
-          VStack(spacing: 0) {
-            GuideTimeHeader(axis: axis)
-            ForEach(channels) { channel in
-              GuideTimelineRow(
-                channel: channel,
-                axis: axis,
-                now: now,
-                selectedGameID: selectedGameID,
-                onSelect: onSelect
-              )
-              Divider().overlay(Color.black.opacity(0.25))
+        ScrollViewReader { proxy in
+          ScrollView(.horizontal, showsIndicators: false) {
+            VStack(spacing: 0) {
+              GuideTimeHeader(axis: axis)
+              ForEach(channels) { channel in
+                GuideTimelineRow(
+                  channel: channel,
+                  axis: axis,
+                  now: now,
+                  selectedGameID: selectedGameID,
+                  onSelect: onSelect
+                )
+                Divider().overlay(Color.black.opacity(0.25))
+              }
+            }
+            // Red "now" line spanning the header + all rows.
+            .overlay(alignment: .topLeading) {
+              Rectangle()
+                .fill(Color.red)
+                .frame(width: 2)
+                .offset(x: axis.x(for: now))
+                .id("now")
+                .allowsHitTesting(false)
+            }
+          }
+          .onAppear {
+            guard !hasScrolledToNow else { return }
+            hasScrolledToNow = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+              proxy.scrollTo("now", anchor: UnitPoint(x: 0.1, y: 0))
             }
           }
         }
@@ -213,14 +245,15 @@ struct TVGuideView: View {
   private var channelColumn: some View {
     VStack(spacing: 0) {
       // Spacer cell that aligns with the time header.
-      HStack(spacing: 4) {
+      HStack(spacing: 3) {
         Image(systemName: "tv")
-          .font(.system(size: 10, weight: .semibold))
-        Text("Channels")
+          .font(.system(size: 9, weight: .semibold))
+        Text("Ch.")
           .font(.system(size: 10, weight: .semibold))
       }
       .foregroundStyle(GuideTheme.textDim)
-      .frame(width: GuideTheme.channelColumnWidth, height: GuideTheme.headerHeight)
+      .padding(.leading, 8)
+      .frame(width: GuideTheme.channelColumnWidth, height: GuideTheme.headerHeight, alignment: .leading)
       .background(GuideTheme.headerBar)
 
       ForEach(channels) { channel in
@@ -242,17 +275,17 @@ struct GuideChannelCell: View {
   let channel: GuideChannel
 
   var body: some View {
-    HStack(spacing: 6) {
-      LeagueIcon(league: channel.league, size: 30)
+    HStack(spacing: 4) {
+      LeagueIcon(league: channel.league, size: 28)
       if let n = channel.number {
         Text("\(n)")
-          .font(.system(size: 15, weight: .bold))
+          .font(.system(size: 14, weight: .bold))
           .foregroundStyle(GuideTheme.text)
       }
       Spacer(minLength: 0)
     }
-    .padding(.horizontal, 8)
-    .frame(width: GuideTheme.channelColumnWidth, height: GuideTheme.rowHeight)
+    .padding(.leading, 8)
+    .frame(width: GuideTheme.channelColumnWidth, height: GuideTheme.rowHeight, alignment: .leading)
     .background(GuideTheme.panel)
   }
 }
