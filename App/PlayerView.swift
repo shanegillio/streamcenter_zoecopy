@@ -33,6 +33,11 @@ struct PlayerView: View {
   /// v2.38: WebView is visible by default in verification mode. Was
   /// previously gated on "Browse Manually" from the retry UI.
   @State private var showWebFallback = true
+  /// Set when the probe explicitly rejects the first stream URL — the
+  /// stream is playing inside the WebView's embedded player but AVPlayer
+  /// can't fetch it (e.g. session-gated CDN). We lift the loading overlay
+  /// so the WebView IS the player.
+  @State private var webViewFallbackActivated = false
 
   struct SourceAttempt: Identifiable {
     let id = UUID()
@@ -129,6 +134,11 @@ struct PlayerView: View {
                 }
               }
               .ignoresSafeArea(edges: .bottom)
+            } else if webViewFallbackActivated {
+              // Probe-rejected mode: the embedded player inside the WebView
+              // is playing, but AVPlayer can't access the stream directly
+              // (session-gated CDN). Show the WebView as the player.
+              scrapeWebView(current)
             } else {
               // Normal mode: keep the WebView alive AND on-screen so scraping
               // runs, but cover it with an opaque loading screen. v2.67: we
@@ -332,6 +342,14 @@ struct PlayerView: View {
               url: url, cookies: cookies, referer: referer ?? current.pageURL
             )
           }
+        }
+      },
+      onProbeRejected: {
+        Task { @MainActor in
+          // The WebView's embedded player can serve this stream but
+          // AVPlayer can't. Activate WebView-player mode so the user
+          // sees the live video instead of a loading screen.
+          webViewFallbackActivated = true
         }
       },
       onNavigation: { navURL in
@@ -740,6 +758,7 @@ struct PlayerView: View {
     let p = makePlayer(url: cand.url, cookies: cand.cookies, referer: cand.referer)
     avPlayer = p
     p.play()
+    startAVPlayerWatchdog(p)
     // Record success for the source that yielded this candidate. We
     // don't know which attempt index it was from precisely, but for
     // health-stats purposes the current attempt is a reasonable proxy.
@@ -764,6 +783,7 @@ struct PlayerView: View {
     let p = makePlayer(url: url, cookies: cookies, referer: referer)
     avPlayer = p
     p.play()
+    startAVPlayerWatchdog(p)
     if currentAttemptIdx < attempts.count {
       recordSuccess(attempt: attempts[currentAttemptIdx])
     }
@@ -772,6 +792,31 @@ struct PlayerView: View {
         sid, kind: "auto_play",
         info: url.absoluteString
       )
+    }
+  }
+
+  /// After AVPlayer starts, wait 8 s and check whether it has produced any
+  /// video. If the player is still at position 0 (stalled) or reported a
+  /// failure, fall back to the WebView-player mode — the stream is session-
+  /// gated (e.g. ppv.to → indianservers.st) and only works inside the
+  /// WebView's browser context.
+  private func startAVPlayerWatchdog(_ player: AVPlayer) {
+    Task { @MainActor in
+      try? await Task.sleep(nanoseconds: 8_000_000_000)
+      guard avPlayer === player else { return }
+      let item = player.currentItem
+      let hasFailed  = item?.status == .failed || item?.error != nil
+      let isStalled  = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                    && player.currentTime().seconds < 0.1
+      guard hasFailed || isStalled else { return }
+      if let sid = traversalSessionID {
+        TraversalLog.shared.recordEvent(
+          sid, kind: "avplayer_fallback",
+          info: hasFailed ? "item_failed" : "stalled_at_0"
+        )
+      }
+      avPlayer = nil
+      webViewFallbackActivated = true
     }
   }
 
@@ -827,6 +872,7 @@ struct PlayerView: View {
     detectedCards = []
     authWallReason = nil
     noNavStrikes = 0
+    webViewFallbackActivated = false
     currentAttemptIdx += 1
     Task { await startCurrentAttempt() }
   }
@@ -920,6 +966,7 @@ struct PlayerView: View {
           detectedCards = []
           authWallReason = nil
           noNavStrikes = 0
+          webViewFallbackActivated = false
           allFailed = false
           if !attempts.isEmpty {
             SourceHealth.shared.recordAttempt(
@@ -1196,6 +1243,29 @@ final class StreamWebViewBridge: ObservableObject {
       // ("WNBA Streams")? For a game we must NOT force-navigate to a link
       // that doesn't carry the team slug.
       var isPair = /(^|\\s)vs(\\s|$)|@|—|–/.test(t);
+      // v2.69: does the element's text identify the target? The exact
+      // contiguous phrase ("france vs iraq") is the strongest signal, but a
+      // source frequently lists the same game in the OTHER order ("Iraq vs
+      // France") or with a different separator ("France - Iraq", "France @
+      // Iraq"). Our canonical pair string then never appears verbatim, so the
+      // in-page walk identifies the card (it matches teams as independent
+      // tokens) yet this click executor couldn't re-find it — the
+      // CLICKED-BUT-NO-NAV / no-match dead-end. For a pair, fall back to an
+      // order-independent match requiring every team token to be present.
+      // The length cap keeps the order-independent path scoped to a single
+      // game card: a card's text is short ("Iraq vs France 0-0 8' LIVE"),
+      // whereas a multi-game container would collect both tokens from
+      // different cards and match falsely.
+      function labelMatches(b){
+        if (b.indexOf(t) !== -1) return true;
+        if (isPair && toks.length >= 2 && b.length <= 160){
+          for (var k = 0; k < toks.length; k++){
+            if (b.indexOf(toks[k]) === -1) return false;
+          }
+          return true;
+        }
+        return false;
+      }
       var sel = 'a[href],button,[onclick],[data-match],[data-event],[data-game],' +
                 '[role="button"],[class*="card" i],[class*="match" i],[class*="game" i]';
       var els = document.querySelectorAll(sel);
@@ -1206,7 +1276,7 @@ final class StreamWebViewBridge: ObservableObject {
                  (e.getAttribute && (e.getAttribute('aria-label') || '')) + ' ' +
                  (e.getAttribute && (e.getAttribute('title') || '')))
                 .replace(/\\s+/g, ' ').toLowerCase();
-        if (b.indexOf(t) === -1) continue;
+        if (!labelMatches(b)) continue;
         if (!firstMatch) firstMatch = e;
         // Prefer a real destination URL. v2.68: but for a game card, only
         // FOLLOW a link that carries the team slug (the real /watch/<server>/
@@ -1278,6 +1348,11 @@ struct StreamWebView: UIViewRepresentable {
   /// can auto-commit a playable stream directly, without waiting for the
   /// candidate to land in `capturedStreams`.
   var onStreamProbed: ((URL, Bool, [HTTPCookie], URL?) -> Void)? = nil
+  /// Fired when the probe explicitly rejects the first-seen stream URL
+  /// (probe returns false). PlayerView uses this to switch to WebView-
+  /// player mode instead of waiting for the 6 s fallback to commit a
+  /// URL that AVPlayer can't play (e.g. session-gated CDN streams).
+  var onProbeRejected: (() -> Void)? = nil
   /// v2.38: fired on every top-frame navigation commit (initial load,
   /// iframe-drill navigations, redirect chains). Used by PlayerView to
   /// build the breadcrumb the user sees in verification mode.
@@ -1339,6 +1414,7 @@ struct StreamWebView: UIViewRepresentable {
     Coordinator(
       onStreamURLFound: onStreamURLFound,
       onStreamProbed: onStreamProbed,
+      onProbeRejected: onProbeRejected,
       onNavigation: onNavigation,
       onWalkEvent: onWalkEvent,
       onLoadFailed: onLoadFailed,
@@ -3033,6 +3109,7 @@ struct StreamWebView: UIViewRepresentable {
     /// v2.48: fires after each probePlayability finishes so PlayerView
     /// can log the result to the TraversalLog.
     let onStreamProbed: ((URL, Bool, [HTTPCookie], URL?) -> Void)?
+    let onProbeRejected: (() -> Void)?
     /// v2.38: invoked from `webView(_:didCommit:)` so PlayerView can
     /// render the navigation breadcrumb.
     let onNavigation: ((URL) -> Void)?
@@ -3051,6 +3128,10 @@ struct StreamWebView: UIViewRepresentable {
     private var found = false
     private var seenURLs = Set<String>()
     private var firstObservedURL: URL?
+    // When the probe explicitly rejects the first-observed URL (returns
+    // false), block the 6 s fallback commit — the stream isn't playable
+    // in AVPlayer, and the WebView is already showing it.
+    private var probeRejectedFirstURL = false
     weak var webView: WKWebView?
     // v2.37: cross-origin iframe drill-down state. When the JS-shim
     // reports an iframe URL via the streamIframe channel, we navigate
@@ -3122,6 +3203,7 @@ struct StreamWebView: UIViewRepresentable {
 
     init(onStreamURLFound: ((URL, [HTTPCookie]) -> Void)?,
          onStreamProbed: ((URL, Bool, [HTTPCookie], URL?) -> Void)? = nil,
+         onProbeRejected: (() -> Void)? = nil,
          onNavigation: ((URL) -> Void)? = nil,
          onWalkEvent: ((StreamWebView.WalkEvent) -> Void)? = nil,
          onLoadFailed: ((URL, String) -> Void)? = nil,
@@ -3129,6 +3211,7 @@ struct StreamWebView: UIViewRepresentable {
          browseMode: Bool) {
       self.onStreamURLFound = onStreamURLFound
       self.onStreamProbed = onStreamProbed
+      self.onProbeRejected = onProbeRejected
       self.onNavigation = onNavigation
       self.onWalkEvent = onWalkEvent
       self.onLoadFailed = onLoadFailed
@@ -3385,10 +3468,28 @@ struct StreamWebView: UIViewRepresentable {
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
       if let url = action.request.url {
-        let u = url.absoluteString.lowercased()
-        if u.contains(".m3u8") || u.contains(".mpd") {
+        // v2.69: only a DIRECT manifest request is the stream — match on the
+        // path, not the whole URL. Embed/redirect wrappers carry the real
+        // manifest inside their query string
+        // (bintv-nett.blogspot.com/?src=…%2Fmaster.m3u8&title=…); the old
+        // whole-URL `contains(".m3u8")` mistook that wrapper for the stream,
+        // cancelled its load, and handed AVPlayer an HTML page (black screen).
+        // Letting the wrapper load lets its player fetch the actual manifest,
+        // whose own request — path ending in .m3u8/.mpd — we catch here next.
+        let p = url.path.lowercased()
+        if p.contains(".m3u8") || p.contains(".mpd") {
           if !found { report(url) }
           decisionHandler(.cancel); return
+        }
+        // v2.69 (unwrap): the wrapper carries the real manifest inside its
+        // query (bintv-nett.blogspot.com/?src=…%2Fmaster.m3u8). Its nested
+        // player frequently won't self-start headlessly, so the manifest
+        // request never fires on its own. Pull the embedded manifest out and
+        // report it directly. We don't cancel — the wrapper still loads as a
+        // fallback in case the extracted URL is locked and its player ends up
+        // fetching a playable variant we can catch above.
+        if !found, let inner = Self.embeddedManifestURL(in: url) {
+          report(inner)
         }
       }
       if !browseMode,
@@ -3455,6 +3556,8 @@ struct StreamWebView: UIViewRepresentable {
       let referer = webView?.url
       let cookieStore = webView?.configuration.websiteDataStore.httpCookieStore
       let onProbed = self.onStreamProbed
+      let onProbeRejected = self.onProbeRejected
+      let isFirstURL = (firstObservedURL?.absoluteString == url.absoluteString)
       Task { [weak self] in
         let cookies: [HTTPCookie] = await {
           guard let cookieStore else { return [] }
@@ -3467,7 +3570,12 @@ struct StreamWebView: UIViewRepresentable {
         let playable = await Self.probePlayability(url, referer: referer, cookies: cookies)
         await MainActor.run {
           onProbed?(url, playable, cookies, referer)
-          guard let self, !self.found, playable else { return }
+          guard let self else { return }
+          if !playable, isFirstURL {
+            self.probeRejectedFirstURL = true
+            onProbeRejected?()
+          }
+          guard !self.found, playable else { return }
           self.commitURL(url)
         }
       }
@@ -3475,6 +3583,9 @@ struct StreamWebView: UIViewRepresentable {
 
     private func commitFallbackIfNeeded() {
       guard !found, let url = firstObservedURL else { return }
+      // Probe already determined this URL isn't playable by AVPlayer —
+      // don't force-commit it. The WebView continues showing the stream.
+      guard !probeRejectedFirstURL else { return }
       commitURL(url)
     }
 
@@ -3487,6 +3598,38 @@ struct StreamWebView: UIViewRepresentable {
       } else {
         DispatchQueue.main.async { self.onStreamURLFound?(url, []) }
       }
+    }
+
+    /// v2.69: extract the real media manifest a wrapper/embed URL carries in
+    /// its (often multiply percent-encoded) query string. Returns nil when the
+    /// URL is itself a direct manifest, or when no embedded manifest is found.
+    /// Players like bintv chain several redirect hops —
+    /// `…blogspot.com/?src=…%2F%3Fq%3D…%2Fmaster.m3u8` — so we decode a few
+    /// passes and take the innermost (last) manifest URL, which is the real one
+    /// (the outer layers only contain ".m3u8" because they wrap it).
+    static func embeddedManifestURL(in url: URL) -> URL? {
+      let path = url.path.lowercased()
+      if path.contains(".m3u8") || path.contains(".mpd") { return nil }
+      let whole = url.absoluteString.lowercased()
+      guard whole.contains(".m3u8") || whole.contains(".mpd") else { return nil }
+      var s = url.absoluteString
+      for _ in 0..<3 {
+        guard let decoded = s.removingPercentEncoding, decoded != s else { break }
+        s = decoded
+      }
+      let pattern = #"https?://[^\s"'<>&]+\.(?:m3u8|mpd)(?:\?[^\s"'<>&]*)?"#
+      guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+      let range = NSRange(s.startIndex..., in: s)
+      let matches = regex.matches(in: s, range: range)
+      for m in matches.reversed() {
+        guard let r = Range(m.range, in: s) else { continue }
+        let candidate = String(s[r])
+        guard let inner = URL(string: candidate),
+              inner.absoluteString != url.absoluteString else { continue }
+        let ip = inner.path.lowercased()
+        if ip.contains(".m3u8") || ip.contains(".mpd") { return inner }
+      }
+      return nil
     }
 
     private static func probePlayability(_ url: URL,
