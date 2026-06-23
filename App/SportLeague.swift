@@ -191,6 +191,27 @@ enum SportLeague: String, CaseIterable, Identifiable, Codable, Hashable {
     }
   }
 
+  /// Typical broadcast length for one game in this league, in minutes.
+  /// Drives the default width of a game block on the TV-guide timeline.
+  /// Live games that run past this are stretched to their real end time.
+  var typicalDurationMinutes: Int {
+    switch self {
+    case .nfl, .ncaaf: return 210
+    case .mlb: return 180
+    case .nba, .ncaab, .wnba: return 150
+    case .nhl, .iihf: return 150
+    case .mma, .ufc, .boxing, .wwe: return 180
+    case .tennis: return 150
+    case .golf, .cricket: return 240
+    case .f1, .nascar: return 120
+    case .soccer, .premierLeague, .laLiga, .serieA, .bundesliga,
+         .ligue1, .eredivisie, .mls, .ligaMx, .championsLeague, .europaLeague,
+         .worldCup, .clubWorldCup, .euros, .copaAmerica, .nationsLeague:
+      return 120
+    case .other: return 120
+    }
+  }
+
   var accentColor: Color {
     switch self {
     case .nfl: return Color(red: 0.17, green: 0.45, blue: 0.75)

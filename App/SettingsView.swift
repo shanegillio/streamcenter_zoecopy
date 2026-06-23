@@ -15,30 +15,15 @@ struct SettingsView: View {
           HStack(spacing: 12) {
             settingsIcon(systemName: "antenna.radiowaves.left.and.right", color: .blue)
             Text("Sources")
-              .foregroundStyle(Color(.label))
+              .foregroundStyle(GuideTheme.text)
             Spacer()
             Text("\(registry.enabledSources.count)")
               .font(.subheadline)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(GuideTheme.textDim)
           }
           .padding(.vertical, 2)
         }
-        NavigationLink(destination: DiagnosticsView()) {
-          HStack(spacing: 12) {
-            settingsIcon(systemName: "wrench.and.screwdriver.fill", color: .purple)
-            Text("Source Diagnostics")
-              .foregroundStyle(Color(.label))
-          }
-          .padding(.vertical, 2)
-        }
-        NavigationLink(destination: TraversalLogView()) {
-          HStack(spacing: 12) {
-            settingsIcon(systemName: "list.bullet.rectangle.fill", color: .indigo)
-            Text("Traversal Log")
-              .foregroundStyle(Color(.label))
-          }
-          .padding(.vertical, 2)
-        }
+        .listRowBackground(GuideTheme.panel)
       }
 
       // MARK: Favorites
@@ -50,6 +35,7 @@ struct SettingsView: View {
             count: favorites.favoriteSports.count
           )
         }
+        .listRowBackground(GuideTheme.panel)
         NavigationLink(destination: FavoriteLeaguesView()) {
           settingsRow(
             icon: "trophy.fill", color: .yellow,
@@ -57,35 +43,69 @@ struct SettingsView: View {
             count: favorites.favoriteLeagues.count
           )
         }
+        .listRowBackground(GuideTheme.panel)
         NavigationLink(destination: FavoriteTeamsView()) {
           settingsRow(
-            icon: "star.fill", color: .orange,
+            icon: "person.3.fill", color: .teal,
             title: "Teams",
             count: favorites.favoriteTeams.count
           )
         }
+        .listRowBackground(GuideTheme.panel)
+        NavigationLink(destination: AllFavoritesView()) {
+          settingsRow(
+            icon: "star.fill", color: .orange,
+            title: "All favorites",
+            count: 0
+          )
+        }
+        .listRowBackground(GuideTheme.panel)
       } header: {
         Text("Favorites")
       } footer: {
         Text("Favorites surface live games on the home screen and mark tiles with a star.")
       }
 
-      // MARK: Debug
+      // MARK: Debugging
       Section {
         Toggle(isOn: $debugScraping) {
           HStack(spacing: 12) {
             settingsIcon(systemName: "ladybug.fill", color: .pink)
-            Text("Debug Mode")
-              .foregroundStyle(Color(.label))
+            Text("Debugging mode")
+              .foregroundStyle(GuideTheme.text)
           }
         }
+        .listRowBackground(GuideTheme.panel)
+        NavigationLink(destination: DiagnosticsView()) {
+          HStack(spacing: 12) {
+            settingsIcon(systemName: "wrench.and.screwdriver.fill", color: .purple)
+            Text("Source Diagnostics")
+              .foregroundStyle(GuideTheme.text)
+          }
+          .padding(.vertical, 2)
+        }
+        .listRowBackground(GuideTheme.panel)
+        NavigationLink(destination: TraversalLogView()) {
+          HStack(spacing: 12) {
+            settingsIcon(systemName: "list.bullet.rectangle.fill", color: .indigo)
+            Text("Traversal Log")
+              .foregroundStyle(GuideTheme.text)
+          }
+          .padding(.vertical, 2)
+        }
+        .listRowBackground(GuideTheme.panel)
+      } header: {
+        Text("Debugging")
       } footer: {
-        Text("Show the web view while finding a stream. When off, you'll just see a loading screen until playback starts.")
+        Text("Debugging mode shows the web view while finding a stream. When off, you'll just see a loading screen until playback starts.")
       }
     }
     .listStyle(.insetGrouped)
+    .scrollContentBackground(.hidden)
+    .background(GuideTheme.background)
     .navigationTitle("Settings")
     .navigationBarTitleDisplayMode(.large)
+    .preferredColorScheme(.dark)
   }
 
   // MARK: - Helpers
@@ -104,12 +124,12 @@ struct SettingsView: View {
   private func settingsRow(icon: String, color: Color, title: String, count: Int) -> some View {
     HStack(spacing: 12) {
       settingsIcon(systemName: icon, color: color)
-      Text(title).foregroundStyle(Color(.label))
+      Text(title).foregroundStyle(GuideTheme.text)
       Spacer()
       if count > 0 {
         Text("\(count)")
           .font(.subheadline)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(GuideTheme.textDim)
       }
     }
     .padding(.vertical, 2)
@@ -447,5 +467,124 @@ struct LeagueIcon: View {
           .font(.system(size: size * 0.55))
       }
     }
+  }
+}
+
+// MARK: - All favorites
+
+/// One page showing every current favorite across sports, leagues, and teams,
+/// grouped into collapsible sections, with a tap-to-unfavorite star on each
+/// row. Themed to match the TV-guide look.
+struct AllFavoritesView: View {
+  @Environment(FavoritesStore.self) private var favorites
+
+  private var favoriteSports: [Sport] {
+    Sport.allCases.filter { favorites.isSportFavorite($0) }
+  }
+  private var favoriteLeagues: [SportLeague] {
+    SportLeague.allCases.filter { $0 != .other && favorites.favoriteLeagues.contains($0) }
+  }
+  private var favoriteTeams: [String] {
+    favorites.favoriteTeams.sorted()
+  }
+
+  var body: some View {
+    List {
+      if favoriteSports.isEmpty && favoriteLeagues.isEmpty && favoriteTeams.isEmpty {
+        Section {
+          Text("No favorites yet. Star sports, leagues, or teams to see them here.")
+            .font(.subheadline)
+            .foregroundStyle(GuideTheme.textDim)
+            .listRowBackground(GuideTheme.panel)
+        }
+      }
+
+      if !favoriteSports.isEmpty {
+        Section {
+          DisclosureGroup {
+            ForEach(favoriteSports) { sport in
+              HStack(spacing: 12) {
+                ZStack {
+                  Circle().fill(sport.accentColor.opacity(0.18)).frame(width: 30, height: 30)
+                  Image(systemName: sport.sfSymbol)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(sport.accentColor)
+                }
+                Text(sport.displayName).foregroundStyle(GuideTheme.text)
+                Spacer()
+                starButton { favorites.toggleSport(sport) }
+              }
+              .listRowBackground(GuideTheme.panel)
+            }
+          } label: {
+            sectionLabel("Sports", systemImage: "sportscourt.fill", color: .green)
+          }
+          .listRowBackground(GuideTheme.panel)
+        }
+      }
+
+      if !favoriteLeagues.isEmpty {
+        Section {
+          DisclosureGroup {
+            ForEach(favoriteLeagues) { league in
+              HStack(spacing: 12) {
+                LeagueIcon(league: league, size: 30)
+                Text(league.displayName).foregroundStyle(GuideTheme.text)
+                Spacer()
+                starButton { favorites.toggleLeague(league) }
+              }
+              .listRowBackground(GuideTheme.panel)
+            }
+          } label: {
+            sectionLabel("Leagues", systemImage: "trophy.fill", color: .yellow)
+          }
+          .listRowBackground(GuideTheme.panel)
+        }
+      }
+
+      if !favoriteTeams.isEmpty {
+        Section {
+          DisclosureGroup {
+            ForEach(favoriteTeams, id: \.self) { team in
+              HStack(spacing: 12) {
+                Text(team.capitalized).foregroundStyle(GuideTheme.text)
+                Spacer()
+                starButton { favorites.toggleTeam(team) }
+              }
+              .listRowBackground(GuideTheme.panel)
+            }
+          } label: {
+            sectionLabel("Teams", systemImage: "person.3.fill", color: .teal)
+          }
+          .listRowBackground(GuideTheme.panel)
+        }
+      }
+    }
+    .listStyle(.insetGrouped)
+    .scrollContentBackground(.hidden)
+    .background(GuideTheme.background)
+    .navigationTitle("All Favorites")
+    .navigationBarTitleDisplayMode(.large)
+    .preferredColorScheme(.dark)
+  }
+
+  private func sectionLabel(_ title: String, systemImage: String, color: Color) -> some View {
+    HStack(spacing: 12) {
+      ZStack {
+        RoundedRectangle(cornerRadius: 8).fill(color.opacity(0.18)).frame(width: 30, height: 30)
+        Image(systemName: systemImage)
+          .font(.system(size: 14, weight: .semibold))
+          .foregroundStyle(color)
+      }
+      Text(title).font(.body.weight(.semibold)).foregroundStyle(GuideTheme.text)
+    }
+  }
+
+  private func starButton(_ action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      Image(systemName: "star.fill")
+        .foregroundStyle(.yellow)
+    }
+    .buttonStyle(.plain)
   }
 }
