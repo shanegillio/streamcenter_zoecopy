@@ -27,7 +27,7 @@
         {
           "version": "2.48",
           "date": "2026-06-22",
-          "size": 747962,
+          "size": 935583,
           "downloadURL": "https://github.com/shanegillio/altstore-source/releases/download/v2.48/StreamCenter-2.48.ipa",
           "localizedDescription": "ppv.to WebView fallback: when AVPlayer stalls on session-gated CDN streams, the embedded ppv.to player activates automatically after 8 seconds. Fixes bintv pair-order stream matching so home/away team order no longer breaks game link resolution. Unwraps embedded stream links for correct direct playback.",
           "buildVersion": "248",
