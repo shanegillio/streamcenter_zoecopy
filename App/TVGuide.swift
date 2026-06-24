@@ -144,10 +144,23 @@ enum TVGuideLayout {
     return cal.date(from: c) ?? date
   }
 
+  /// The time at which a game's *rendered* block ends. This is its real end,
+  /// but never less than the minimum-block-width's worth of time measured from
+  /// where the block is actually drawn (its start clamped into the window).
+  /// Packing against this — rather than the raw end — guarantees the next game
+  /// on a row can't visually overlap even a tiny or mostly-elapsed block.
+  static func renderEndTime(for game: Game, now: Date, windowStart: Date) -> Date {
+    let drawnStart = max(startTime(for: game, now: now), windowStart)
+    let minMinutes = Double(GuideTheme.minBlockWidth / GuideTheme.pointsPerMinute)
+    let minEnd = drawnStart.addingTimeInterval(minMinutes * 60)
+    return max(endTime(for: game, now: now), minEnd)
+  }
+
   /// Build the channel rows. Leagues are ordered by popularity; within a
   /// league, games are greedily packed into the fewest non-overlapping rows.
   static func channels(live: [Game], upcoming: [Game], now: Date) -> [GuideChannel] {
     let all = live + upcoming
+    let windowStart = floorToHalfHour(now, cal: etCalendar)
     let byLeague = Dictionary(grouping: all, by: { $0.league })
     let orderedLeagues = byLeague.keys.sorted {
       if $0.popularityRank != $1.popularityRank {
@@ -161,18 +174,20 @@ enum TVGuideLayout {
       let games = (byLeague[league] ?? []).sorted {
         startTime(for: $0, now: now) < startTime(for: $1, now: now)
       }
-      // Greedy row packing: place each game in the first row whose last
-      // block ends before this one starts.
+      // Greedy row packing: place each game in the first row whose previous
+      // block has finished rendering before this game's block begins. Both
+      // sides use the clamped/rendered geometry so what the packer considers
+      // "non-overlapping" matches exactly what's drawn.
       var rows: [[Game]] = []
       var rowEnds: [Date] = []
       for g in games {
-        let s = startTime(for: g, now: now)
-        if let idx = rowEnds.firstIndex(where: { $0 <= s }) {
+        let drawnStart = max(startTime(for: g, now: now), windowStart)
+        if let idx = rowEnds.firstIndex(where: { $0 <= drawnStart }) {
           rows[idx].append(g)
-          rowEnds[idx] = endTime(for: g, now: now)
+          rowEnds[idx] = renderEndTime(for: g, now: now, windowStart: windowStart)
         } else {
           rows.append([g])
-          rowEnds.append(endTime(for: g, now: now))
+          rowEnds.append(renderEndTime(for: g, now: now, windowStart: windowStart))
         }
       }
       let multi = rows.count > 1
@@ -366,8 +381,12 @@ struct GuideTimelineRow: View {
       ForEach(channel.games) { game in
         let start = TVGuideLayout.startTime(for: game, now: now)
         let end = TVGuideLayout.endTime(for: game, now: now)
+        // Measure width from the *clamped* left edge. A game that began before
+        // the visible window is drawn at x=0; using the unclamped start here
+        // made the block its full duration wide, so it overshot its real end
+        // and visually overlapped the next (non-overlapping) game on the row.
         let x = max(0, axis.x(for: start))
-        let w = max(GuideTheme.minBlockWidth, axis.x(for: end) - axis.x(for: start))
+        let w = max(GuideTheme.minBlockWidth, axis.x(for: end) - x)
         GuideGameBlock(game: game, isSelected: game.id == selectedGameID)
           .frame(width: w, height: GuideTheme.rowHeight - 10)
           .offset(x: x, y: 5)
