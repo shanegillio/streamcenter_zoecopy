@@ -100,17 +100,16 @@ enum TVGuideLayout {
 
   static func axis(for games: [Game], now: Date) -> Axis {
     let cal = etCalendar
-    // Floor "now" to the previous half hour as the natural left edge.
-    let flooredNow = floorToHalfHour(now, cal: cal)
-    var minStart = flooredNow
+    // The timeline always starts at the current half hour, so "now" sits at
+    // the left edge and live games (which began earlier) are clamped to start
+    // flush against the channel column — no empty pre-now gap.
+    let start = floorToHalfHour(now, cal: cal)
     var maxEnd = now.addingTimeInterval(2 * 60 * 60)
     for g in games {
-      let s = startTime(for: g, now: now)
       let e = endTime(for: g, now: now)
-      if s < minStart { minStart = floorToHalfHour(s, cal: cal) }
       if e > maxEnd { maxEnd = e }
     }
-    return Axis(start: minStart, end: maxEnd)
+    return Axis(start: start, end: maxEnd)
   }
 
   private static func floorToHalfHour(_ date: Date, cal: Calendar) -> Date {
@@ -190,9 +189,11 @@ struct TVGuideView: View {
   let live: [Game]
   let upcoming: [Game]
   let selectedGameID: String?
+  /// Width available to the whole guide (card width). Used to give the inner
+  /// horizontal ScrollView a definite width so it doesn't report an oversized
+  /// ideal width and get centered, which used to inset the channel column.
+  var availableWidth: CGFloat = 0
   let onSelect: (Game) -> Void
-
-  @State private var didInitialScroll = false
 
   private var now: Date { Date() }
   private var channels: [GuideChannel] {
@@ -207,59 +208,34 @@ struct TVGuideView: View {
       dateBar
       HStack(alignment: .top, spacing: 0) {
         channelColumn
-        ScrollViewReader { proxy in
-          ScrollView(.horizontal, showsIndicators: false) {
-            VStack(spacing: 0) {
-              // Zero-height layout anchor at the current-time position. Unlike
-              // the visual red line (which uses .offset and therefore has no
-              // real layout frame), this anchor is laid out at x(now) so
-              // ScrollViewReader can actually scroll to it.
-              HStack(spacing: 0) {
-                Color.clear.frame(width: max(0, axis.x(for: now)), height: 0)
-                Color.clear.frame(width: 1, height: 0).id("now")
-                Spacer(minLength: 0)
-              }
-              .frame(width: axis.totalWidth, height: 0)
-              GuideTimeHeader(axis: axis)
-              ForEach(channels) { channel in
-                GuideTimelineRow(
-                  channel: channel,
-                  axis: axis,
-                  now: now,
-                  selectedGameID: selectedGameID,
-                  onSelect: onSelect
-                )
-                Divider().overlay(Color.black.opacity(0.25))
-              }
-            }
-            // Red "now" line spanning the header + all rows (visual only).
-            .overlay(alignment: .topLeading) {
-              Rectangle()
-                .fill(Color.red)
-                .frame(width: 2)
-                .offset(x: axis.x(for: now))
-                .allowsHitTesting(false)
+        ScrollView(.horizontal, showsIndicators: false) {
+          VStack(spacing: 0) {
+            GuideTimeHeader(axis: axis)
+            ForEach(channels) { channel in
+              GuideTimelineRow(
+                channel: channel,
+                axis: axis,
+                now: now,
+                selectedGameID: selectedGameID,
+                onSelect: onSelect
+              )
+              Divider().overlay(Color.black.opacity(0.25))
             }
           }
-          .onAppear { scrollToNow(proxy) }
-          .onChange(of: channels.count) { _, _ in scrollToNow(proxy) }
+          // Red "now" line spanning the header + all rows (visual only).
+          .overlay(alignment: .topLeading) {
+            Rectangle()
+              .fill(Color.red)
+              .frame(width: 2)
+              .offset(x: axis.x(for: now))
+              .allowsHitTesting(false)
+          }
         }
+        .frame(width: max(0, availableWidth - GuideTheme.channelColumnWidth))
       }
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
     .background(GuideTheme.surface)
-  }
-
-  /// Scroll the timeline so the current time sits near the left edge. Runs
-  /// once, after the first non-empty content lands (the guide loads async,
-  /// so the very first onAppear can fire with no channels yet).
-  private func scrollToNow(_ proxy: ScrollViewProxy) {
-    guard !didInitialScroll, !channels.isEmpty else { return }
-    didInitialScroll = true
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-      withAnimation(.easeInOut(duration: 0.3)) {
-        proxy.scrollTo("now", anchor: UnitPoint(x: 0.12, y: 0))
-      }
-    }
   }
 
   private var dateBar: some View {

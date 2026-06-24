@@ -105,16 +105,19 @@ struct HomeView: View {
     } else if allLiveGames.isEmpty && allUpcomingGames.isEmpty {
       Spacer(); emptyState; Spacer()
     } else {
-      ScrollView(.vertical, showsIndicators: false) {
-        TVGuideView(
-          live: allLiveGames,
-          upcoming: allUpcomingGames,
-          selectedGameID: selectedGame?.id,
-          onSelect: { select($0) }
-        )
+      GeometryReader { geo in
+        ScrollView(.vertical, showsIndicators: false) {
+          TVGuideView(
+            live: allLiveGames,
+            upcoming: allUpcomingGames,
+            selectedGameID: selectedGame?.id,
+            availableWidth: geo.size.width,
+            onSelect: { select($0) }
+          )
+        }
+        .refreshable { await loadLeagues(forceRefresh: true) }
+        .clipShape(RoundedRectangle(cornerRadius: 14))
       }
-      .refreshable { await loadLeagues(forceRefresh: true) }
-      .clipShape(RoundedRectangle(cornerRadius: 14))
       .padding(.horizontal, 14)
       .padding(.bottom, 90)
     }
