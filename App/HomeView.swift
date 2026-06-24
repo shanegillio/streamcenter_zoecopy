@@ -16,15 +16,12 @@ struct HomeView: View {
   @State private var selectedGame: Game? = nil
   /// Stack of previously viewed game IDs, powering the "prev." button.
   @State private var history: [String] = []
-  /// Presents the add-source sheet from the floating "+" button.
-  @State private var showAddSource = false
 
   var body: some View {
     NavigationStack {
-      ZStack(alignment: .bottom) {
+      ZStack {
         GuideTheme.background.ignoresSafeArea()
         content
-        addSourceButton
       }
       .toolbar(.hidden, for: .navigationBar)
     }
@@ -62,8 +59,8 @@ struct HomeView: View {
         Image(systemName: "gearshape.fill")
           .font(.system(size: 18, weight: .semibold))
           .foregroundStyle(GuideTheme.text)
-          .padding(9)
-          .background(GuideTheme.panel, in: Circle())
+          .padding(11)
+          .glassBackground(in: Circle())
       }
       .accessibilityLabel("Settings")
     }
@@ -77,8 +74,8 @@ struct HomeView: View {
   private var content: some View {
     VStack(spacing: 12) {
       header
-      if registry.sources.isEmpty {
-        Spacer(); noSourcesState; Spacer()
+      if registry.enabledSources.isEmpty {
+        noSourcesState
       } else if isLoadingLeagues && availableLeagues.isEmpty {
         Spacer()
         LoadingPhraseView()
@@ -119,32 +116,7 @@ struct HomeView: View {
         .clipShape(RoundedRectangle(cornerRadius: 14))
       }
       .padding(.horizontal, 14)
-      .padding(.bottom, 90)
-    }
-  }
-
-  // MARK: - Add source button (floating)
-
-  private var addSourceButton: some View {
-    Button {
-      showAddSource = true
-    } label: {
-      Image(systemName: "plus")
-        .font(.system(size: 26, weight: .semibold))
-        .foregroundStyle(GuideTheme.text)
-        .frame(width: 60, height: 60)
-        .background(.ultraThinMaterial, in: Circle())
-        .overlay(Circle().stroke(Color.white.opacity(0.25), lineWidth: 1))
-        .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
-    }
-    .padding(.bottom, 24)
-    .accessibilityLabel("Add source")
-    .sheet(isPresented: $showAddSource) {
-      NavigationStack {
-        SourceListView()
-          .environment(registry)
-      }
-      .preferredColorScheme(.dark)
+      .padding(.bottom, 10)
     }
   }
 
@@ -197,20 +169,34 @@ struct HomeView: View {
 
   private var noSourcesState: some View {
     VStack(spacing: 16) {
+      Spacer()
       Image(systemName: "antenna.radiowaves.left.and.right")
-        .font(.system(size: 52))
+        .font(.system(size: 58))
         .foregroundStyle(GuideTheme.textDim)
       Text("No sources yet")
-        .font(.headline)
+        .font(.title3.weight(.semibold))
         .foregroundStyle(GuideTheme.text)
-      Text("Add a sports streaming site to get started.")
+      Text("Add a sports streaming site by pressing Add Source below to get started.")
         .font(.subheadline)
         .foregroundStyle(GuideTheme.textDim)
         .multilineTextAlignment(.center)
-        .padding(.horizontal, 32)
-      Button("Add a Source") { showAddSource = true }
-        .buttonStyle(.borderedProminent)
+        .padding(.horizontal, 40)
+      Spacer()
+      NavigationLink {
+        SourceListView(autoPresentAdd: registry.sources.isEmpty)
+          .environment(registry)
+      } label: {
+        Text("Add Source")
+          .font(.headline)
+          .foregroundStyle(GuideTheme.text)
+          .frame(maxWidth: .infinity)
+          .padding(.vertical, 16)
+          .glassBackground(in: RoundedRectangle(cornerRadius: 16))
+      }
+      .padding(.horizontal, 24)
+      .padding(.bottom, 24)
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
   // MARK: - Empty state

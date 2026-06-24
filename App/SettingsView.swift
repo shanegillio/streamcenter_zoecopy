@@ -144,112 +144,155 @@ struct SettingsView: View {
 struct SourceListView: View {
   @Environment(SourceRegistry.self) private var registry
   @Environment(\.dismiss) private var dismiss
-  @State private var showAddSource = false
-  @State private var newName = ""
-  @State private var newURL  = ""
-  @State private var addError: String? = nil
+  /// When pushed from the empty "no sources" screen we open straight into the
+  /// add dialog so the very first launch is one tap to a working source.
+  var autoPresentAdd: Bool = false
+
+  @State private var showEditor = false
+  /// nil while adding a new source; set to the source being edited otherwise.
+  @State private var editingSource: AnyStreamSource? = nil
+  @State private var draftName = ""
+  @State private var draftURL  = ""
+  @State private var editorError: String? = nil
 
   var body: some View {
     ZStack {
+      GuideTheme.background.ignoresSafeArea()
       List {
         Section {
           ForEach(registry.sources) { source in
-            HStack(spacing: 12) {
-              VStack(alignment: .leading, spacing: 3) {
-                Text(source.name)
-                  .font(.body.weight(.medium))
-                  .foregroundStyle(Color(.label))
-                Text(source.baseURL.host ?? source.baseURL.absoluteString)
-                  .font(.caption)
-                  .foregroundStyle(.blue)
-              }
-              Spacer()
-              // v2.23: multi-toggle pool. Each source has an independent
-              // Enabled state. The bound toggle writes back to
-              // SourceRegistry.enabledSourceIDs which triggers HomeView's
-              // onChange to recompute the merged feed.
-              Toggle("", isOn: Binding(
-                get: { registry.enabledSourceIDs.contains(source.id) },
-                set: { isOn in
-                  if isOn {
-                    registry.enabledSourceIDs.insert(source.id)
-                  } else {
-                    registry.enabledSourceIDs.remove(source.id)
+            sourceRow(source)
+              .listRowBackground(GuideTheme.panel)
+              // Swipe left to reveal Edit (name + URL) and Delete, mirroring
+              // the system Notes-style trailing actions.
+              .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                if !source.isBuiltIn {
+                  Button(role: .destructive) {
+                    registry.removeSource(source)
+                  } label: {
+                    Label("Delete", systemImage: "trash")
                   }
-                }
-              ))
-              .labelsHidden()
-            }
-            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-              if !source.isBuiltIn {
-                Button(role: .destructive) {
-                  registry.removeSource(source)
-                } label: {
-                  Label("Delete", systemImage: "trash")
+                  Button { beginEdit(source) } label: {
+                    Label("Edit", systemImage: "pencil")
+                  }
+                  .tint(.blue)
                 }
               }
-            }
           }
         } footer: {
           Text("Any enabled source may be used to find a stream when you tap a game. Add multiple to improve coverage — ESPN provides the game listings; sources serve the streams.")
             .font(.footnote)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(GuideTheme.textDim)
         }
       }
       .listStyle(.insetGrouped)
-      .navigationTitle("Sources")
-      .navigationBarTitleDisplayMode(.large)
-      .toolbar {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button { withAnimation(.spring(duration: 0.25)) { showAddSource = true } } label: {
-            Label("Add", systemImage: "plus")
-          }
-        }
-      }
-      // Dimming + popup card overlay
-      if showAddSource {
-        Color.black.opacity(0.3)
+      .scrollContentBackground(.hidden)
+      .background(GuideTheme.background)
+
+      // Dimming + popup card overlay (shared between Add and Edit).
+      if showEditor {
+        Color.black.opacity(0.4)
           .ignoresSafeArea()
-          .onTapGesture { dismissAddSource() }
+          .onTapGesture { dismissEditor() }
           .transition(.opacity)
 
         AddSourcePopup(
-          name: $newName,
-          url: $newURL,
-          errorMessage: addError,
-          onCancel: { dismissAddSource() },
-          onAdd: { attemptAdd() }
+          title: editingSource == nil ? "Add Source" : "Edit Source",
+          actionLabel: editingSource == nil ? "Add" : "Save",
+          name: $draftName,
+          url: $draftURL,
+          errorMessage: editorError,
+          onCancel: { dismissEditor() },
+          onAdd: { commitEditor() }
         )
         .padding(.horizontal, 24)
         .transition(.scale(scale: 0.9).combined(with: .opacity))
       }
     }
-    .animation(.spring(duration: 0.25), value: showAddSource)
-  }
-
-  private func dismissAddSource() {
-    showAddSource = false
-    newName = ""
-    newURL  = ""
-    addError = nil
-  }
-
-  private func attemptAdd() {
-    let trimName = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-    let trimURL  = newURL.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimName.isEmpty else { addError = "Please enter a name."; return }
-    guard !trimURL.isEmpty  else { addError = "Please enter a URL."; return }
-    if registry.addSource(name: trimName, urlString: trimURL) {
-      dismissAddSource()
-    } else {
-      addError = "Invalid URL or source already exists."
+    .navigationTitle("Sources")
+    .navigationBarTitleDisplayMode(.large)
+    .preferredColorScheme(.dark)
+    .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        Button { beginAdd() } label: {
+          Label("Add", systemImage: "plus")
+        }
+      }
     }
+    .animation(.spring(duration: 0.25), value: showEditor)
+    .onAppear {
+      if autoPresentAdd && registry.sources.isEmpty && !showEditor { beginAdd() }
+    }
+  }
+
+  private func sourceRow(_ source: AnyStreamSource) -> some View {
+    HStack(spacing: 12) {
+      VStack(alignment: .leading, spacing: 3) {
+        Text(source.name)
+          .font(.body.weight(.medium))
+          .foregroundStyle(GuideTheme.text)
+        Text(source.baseURL.host ?? source.baseURL.absoluteString)
+          .font(.caption)
+          .foregroundStyle(.blue)
+      }
+      Spacer()
+      // v2.23 multi-toggle pool: each source has an independent enabled state.
+      Toggle("", isOn: Binding(
+        get: { registry.enabledSourceIDs.contains(source.id) },
+        set: { isOn in
+          if isOn { registry.enabledSourceIDs.insert(source.id) }
+          else { registry.enabledSourceIDs.remove(source.id) }
+        }
+      ))
+      .labelsHidden()
+    }
+  }
+
+  private func beginAdd() {
+    editingSource = nil
+    draftName = ""
+    draftURL  = ""
+    editorError = nil
+    withAnimation(.spring(duration: 0.25)) { showEditor = true }
+  }
+
+  private func beginEdit(_ source: AnyStreamSource) {
+    editingSource = source
+    draftName = source.name
+    draftURL  = source.baseURL.absoluteString
+    editorError = nil
+    withAnimation(.spring(duration: 0.25)) { showEditor = true }
+  }
+
+  private func dismissEditor() {
+    showEditor = false
+    editingSource = nil
+    draftName = ""
+    draftURL  = ""
+    editorError = nil
+  }
+
+  private func commitEditor() {
+    let trimName = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimURL  = draftURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimName.isEmpty else { editorError = "Please enter a name."; return }
+    guard !trimURL.isEmpty  else { editorError = "Please enter a URL."; return }
+    let ok: Bool
+    if let editing = editingSource {
+      ok = registry.updateSource(editing, name: trimName, urlString: trimURL)
+    } else {
+      ok = registry.addSource(name: trimName, urlString: trimURL)
+    }
+    if ok { dismissEditor() }
+    else { editorError = "Invalid URL or source already exists." }
   }
 }
 
 // MARK: - Add Source popup card
 
 private struct AddSourcePopup: View {
+  var title: String = "Add Source"
+  var actionLabel: String = "Add"
   @Binding var name: String
   @Binding var url: String
   let errorMessage: String?
@@ -259,7 +302,7 @@ private struct AddSourcePopup: View {
   var body: some View {
     VStack(spacing: 0) {
       // Title
-      Text("Add Source")
+      Text(title)
         .font(.headline)
         .padding(.top, 20)
         .padding(.bottom, 16)
@@ -304,7 +347,7 @@ private struct AddSourcePopup: View {
           .fill(Color(.separator))
           .frame(width: 0.5, height: 44)
 
-        Button("Add") { onAdd() }
+        Button(actionLabel) { onAdd() }
           .font(.body.bold())
           .foregroundStyle(.tint)
           .frame(maxWidth: .infinity)
@@ -313,6 +356,28 @@ private struct AddSourcePopup: View {
     }
     .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
   }
+}
+
+// MARK: - Shared favorites styling
+
+extension View {
+  /// Common dark, inset-grouped list chrome shared by every settings/favorites
+  /// sub-page so they all match the overall Settings look.
+  func darkSettingsList() -> some View {
+    self
+      .listStyle(.insetGrouped)
+      .scrollContentBackground(.hidden)
+      .background(GuideTheme.background)
+      .preferredColorScheme(.dark)
+  }
+}
+
+/// Standard tap-to-toggle favorites star, filled-yellow when on.
+@ViewBuilder
+func FavoriteStar(_ on: Bool) -> some View {
+  Image(systemName: on ? "star.fill" : "star")
+    .font(.system(size: 17))
+    .foregroundStyle(on ? AnyShapeStyle(.yellow) : AnyShapeStyle(.white.opacity(0.28)))
 }
 
 // MARK: - Favorite Sports
@@ -324,35 +389,35 @@ struct FavoriteSportsView: View {
     List {
       ForEach(Sport.allCases) { sport in
         Button { favorites.toggleSport(sport) } label: {
-          HStack(spacing: 12) {
+          HStack(spacing: 14) {
             ZStack {
               Circle()
-                .fill(sport.accentColor.opacity(0.12))
-                .frame(width: 36, height: 36)
+                .fill(sport.accentColor.opacity(0.22))
+                .frame(width: 40, height: 40)
               Image(systemName: sport.sfSymbol)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(sport.accentColor)
             }
             VStack(alignment: .leading, spacing: 2) {
-              Text(sport.displayName).foregroundStyle(Color(.label))
+              Text(sport.displayName)
+                .font(.body.weight(.medium))
+                .foregroundStyle(GuideTheme.text)
               Text(sport.leagues.map(\.displayName).joined(separator: ", "))
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(GuideTheme.textDim)
                 .lineLimit(1)
             }
             Spacer()
-            if favorites.isSportFavorite(sport) {
-              Image(systemName: "star.fill").foregroundStyle(Color.yellow)
-            } else {
-              Image(systemName: "star").foregroundStyle(.quaternary)
-            }
+            FavoriteStar(favorites.isSportFavorite(sport))
           }
+          .padding(.vertical, 4)
         }
         .buttonStyle(.plain)
+        .listRowBackground(GuideTheme.panel)
       }
     }
-    .listStyle(.insetGrouped)
     .navigationTitle("Favorite Sports")
     .navigationBarTitleDisplayMode(.large)
+    .darkSettingsList()
   }
 }
 
@@ -360,84 +425,171 @@ struct FavoriteSportsView: View {
 
 struct FavoriteLeaguesView: View {
   @Environment(FavoritesStore.self) private var favorites
+  @State private var search = ""
+
+  private var leagues: [SportLeague] {
+    // Hide `.other` — it's a catch-all bucket, not a real league.
+    let all = SportLeague.allCases.filter { $0 != .other }
+    guard !search.isEmpty else { return all }
+    let q = search.lowercased()
+    return all.filter { $0.displayName.lowercased().contains(q) }
+  }
 
   var body: some View {
     List {
-      // Hide `.other` from favorites — it's a catch-all bucket, not a real league.
-      ForEach(SportLeague.allCases.filter { $0 != .other }) { league in
+      ForEach(leagues) { league in
         Button { favorites.toggleLeague(league) } label: {
-          HStack(spacing: 12) {
-            LeagueIcon(league: league, size: 36)
-            Text(league.displayName).foregroundStyle(Color(.label))
+          HStack(spacing: 14) {
+            LeagueIcon(league: league, size: 40)
+            Text(league.displayName)
+              .font(.body.weight(.medium))
+              .foregroundStyle(GuideTheme.text)
             Spacer()
-            if favorites.isLeagueFavorite(league) {
-              Image(systemName: "star.fill").foregroundStyle(Color.yellow)
-            } else {
-              Image(systemName: "star").foregroundStyle(.quaternary)
-            }
+            FavoriteStar(favorites.isLeagueFavorite(league))
           }
+          .padding(.vertical, 4)
         }
         .buttonStyle(.plain)
+        .listRowBackground(GuideTheme.panel)
       }
     }
-    .listStyle(.insetGrouped)
     .navigationTitle("Favorite Leagues")
     .navigationBarTitleDisplayMode(.large)
+    .searchable(text: $search, prompt: "Search leagues…")
+    .darkSettingsList()
   }
 }
 
-// MARK: - Favorite Teams
+// MARK: - Favorite Teams (league chooser)
 
+/// Top-level Teams page: a list of leagues. Tapping one pushes a dedicated
+/// page of that league's teams (instead of the old inline dropdown).
 struct FavoriteTeamsView: View {
-  @Environment(FavoritesStore.self) private var favorites
-  @State private var teamSearch = ""
-
-  var filteredGroups: [(league: SportLeague, teams: [String])] {
-    if teamSearch.isEmpty { return FavoritesStore.knownTeams }
-    let q = teamSearch.lowercased()
-    return FavoritesStore.knownTeams.compactMap { group in
-      let matched = group.teams.filter { $0.lowercased().contains(q) }
-      return matched.isEmpty ? nil : (group.league, matched)
+  var body: some View {
+    List {
+      ForEach(FavoritesStore.knownTeams, id: \.league) { group in
+        NavigationLink {
+          LeagueTeamsView(league: group.league, teams: group.teams)
+        } label: {
+          HStack(spacing: 14) {
+            LeagueIcon(league: group.league, size: 40)
+            Text(group.league.displayName)
+              .font(.body.weight(.medium))
+              .foregroundStyle(GuideTheme.text)
+          }
+          .padding(.vertical, 4)
+        }
+        .listRowBackground(GuideTheme.panel)
+      }
     }
+    .navigationTitle("Favorite Teams")
+    .navigationBarTitleDisplayMode(.large)
+    .darkSettingsList()
+  }
+}
+
+// MARK: - League teams page (A–Z index + search)
+
+struct LeagueTeamsView: View {
+  let league: SportLeague
+  let teams: [String]
+  @Environment(FavoritesStore.self) private var favorites
+  @State private var search = ""
+
+  private var filtered: [String] {
+    let sorted = teams.sorted()
+    guard !search.isEmpty else { return sorted }
+    let q = search.lowercased()
+    return sorted.filter { $0.lowercased().contains(q) }
+  }
+
+  /// Alphabetic sections, e.g. [("A", ["Astros", "Athletics"]), …].
+  private var sections: [(letter: String, teams: [String])] {
+    let groups = Dictionary(grouping: filtered) { String($0.prefix(1)).uppercased() }
+    return groups.keys.sorted().map { ($0, groups[$0]!.sorted()) }
   }
 
   var body: some View {
-    List {
-      ForEach(filteredGroups, id: \.league) { group in
-        DisclosureGroup {
-          ForEach(group.teams, id: \.self) { team in
-            Button { favorites.toggleTeam(team) } label: {
-              HStack(spacing: 12) {
-                TeamLogo(teamName: team, league: group.league, size: 30)
-                Text(team).foregroundStyle(Color(.label))
-                Spacer()
-                if favorites.isTeamFavorite(team) {
-                  Image(systemName: "star.fill").foregroundStyle(Color.yellow)
-                } else {
-                  Image(systemName: "star").foregroundStyle(.quaternary)
-                }
+    ScrollViewReader { proxy in
+      ZStack(alignment: .trailing) {
+        List {
+          ForEach(sections, id: \.letter) { section in
+            Section {
+              ForEach(section.teams, id: \.self) { team in
+                teamRow(team).listRowBackground(GuideTheme.panel)
               }
-            }
-            .buttonStyle(.plain)
-          }
-        } label: {
-          HStack(spacing: 10) {
-            LeagueIcon(league: group.league, size: 28)
-            Text(group.league.displayName)
-              .font(.subheadline.bold())
-              .foregroundStyle(group.league.accentColor)
-            if !teamSearch.isEmpty {
-              Text("(\(group.teams.count))")
-                .font(.caption).foregroundStyle(.secondary)
+            } header: {
+              Text(section.letter)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(GuideTheme.textDim)
+                .id(section.letter)
             }
           }
         }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(GuideTheme.background)
+
+        // Contacts-style A–Z index — only when not searching and there's
+        // more than one letter to jump between.
+        if search.isEmpty && sections.count > 1 {
+          SectionIndexBar(letters: sections.map(\.letter)) { letter in
+            withAnimation(.easeInOut(duration: 0.2)) {
+              proxy.scrollTo(letter, anchor: .top)
+            }
+          }
+          .padding(.trailing, 1)
+        }
       }
     }
-    .listStyle(.insetGrouped)
-    .navigationTitle("Favorite Teams")
-    .navigationBarTitleDisplayMode(.large)
-    .searchable(text: $teamSearch, prompt: "Search teams…")
+    .navigationTitle("\(league.displayName) Teams")
+    .navigationBarTitleDisplayMode(.inline)
+    .searchable(text: $search, prompt: "Search teams…")
+    .preferredColorScheme(.dark)
+  }
+
+  private func teamRow(_ team: String) -> some View {
+    Button { favorites.toggleTeam(team) } label: {
+      HStack(spacing: 12) {
+        TeamLogo(teamName: team, league: league, size: 32)
+        Text(team).font(.body).foregroundStyle(GuideTheme.text)
+        Spacer()
+        FavoriteStar(favorites.isTeamFavorite(team))
+      }
+      .padding(.vertical, 3)
+    }
+    .buttonStyle(.plain)
+  }
+}
+
+/// Vertical alphabet index on the trailing edge. Tap or drag to jump.
+struct SectionIndexBar: View {
+  let letters: [String]
+  let onSelect: (String) -> Void
+
+  var body: some View {
+    GeometryReader { geo in
+      VStack(spacing: 0) {
+        ForEach(letters, id: \.self) { letter in
+          Text(letter)
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(.blue)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+      }
+      .frame(width: 18)
+      .contentShape(Rectangle())
+      .gesture(
+        DragGesture(minimumDistance: 0)
+          .onChanged { value in
+            guard !letters.isEmpty, geo.size.height > 0 else { return }
+            let slot = geo.size.height / CGFloat(letters.count)
+            let idx = min(letters.count - 1, max(0, Int(value.location.y / slot)))
+            onSelect(letters[idx])
+          }
+      )
+    }
+    .frame(width: 18)
   }
 }
 
@@ -505,15 +657,16 @@ struct AllFavoritesView: View {
             ForEach(favoriteSports) { sport in
               HStack(spacing: 12) {
                 ZStack {
-                  Circle().fill(sport.accentColor.opacity(0.18)).frame(width: 30, height: 30)
+                  Circle().fill(sport.accentColor.opacity(0.22)).frame(width: 34, height: 34)
                   Image(systemName: sport.sfSymbol)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(sport.accentColor)
                 }
                 Text(sport.displayName).foregroundStyle(GuideTheme.text)
                 Spacer()
                 starButton { favorites.toggleSport(sport) }
               }
+              .padding(.vertical, 2)
               .listRowBackground(GuideTheme.panel)
             }
           } label: {
@@ -528,11 +681,12 @@ struct AllFavoritesView: View {
           DisclosureGroup {
             ForEach(favoriteLeagues) { league in
               HStack(spacing: 12) {
-                LeagueIcon(league: league, size: 30)
+                LeagueIcon(league: league, size: 34)
                 Text(league.displayName).foregroundStyle(GuideTheme.text)
                 Spacer()
                 starButton { favorites.toggleLeague(league) }
               }
+              .padding(.vertical, 2)
               .listRowBackground(GuideTheme.panel)
             }
           } label: {
@@ -547,10 +701,19 @@ struct AllFavoritesView: View {
           DisclosureGroup {
             ForEach(favoriteTeams, id: \.self) { team in
               HStack(spacing: 12) {
+                Circle()
+                  .fill(Color.gray.opacity(0.45))
+                  .frame(width: 34, height: 34)
+                  .overlay(
+                    Text(teamInitials(team))
+                      .font(.caption.weight(.bold))
+                      .foregroundStyle(.white)
+                  )
                 Text(team.capitalized).foregroundStyle(GuideTheme.text)
                 Spacer()
                 starButton { favorites.toggleTeam(team) }
               }
+              .padding(.vertical, 2)
               .listRowBackground(GuideTheme.panel)
             }
           } label: {
@@ -571,9 +734,9 @@ struct AllFavoritesView: View {
   private func sectionLabel(_ title: String, systemImage: String, color: Color) -> some View {
     HStack(spacing: 12) {
       ZStack {
-        RoundedRectangle(cornerRadius: 8).fill(color.opacity(0.18)).frame(width: 30, height: 30)
+        RoundedRectangle(cornerRadius: 9).fill(color.opacity(0.22)).frame(width: 34, height: 34)
         Image(systemName: systemImage)
-          .font(.system(size: 14, weight: .semibold))
+          .font(.system(size: 16, weight: .semibold))
           .foregroundStyle(color)
       }
       Text(title).font(.body.weight(.semibold)).foregroundStyle(GuideTheme.text)
@@ -583,8 +746,16 @@ struct AllFavoritesView: View {
   private func starButton(_ action: @escaping () -> Void) -> some View {
     Button(action: action) {
       Image(systemName: "star.fill")
+        .font(.system(size: 17))
         .foregroundStyle(.yellow)
     }
     .buttonStyle(.plain)
   }
+}
+
+/// First-letters initials for a team name, e.g. "Red Sox" → "RS".
+func teamInitials(_ name: String) -> String {
+  let words = name.split(separator: " ").prefix(2)
+  let letters = words.compactMap { $0.first }.map(String.init)
+  return letters.joined().uppercased()
 }

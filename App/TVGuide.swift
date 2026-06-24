@@ -22,14 +22,38 @@ enum GuideTheme {
   static let text = Color.white
   static let textDim = Color.white.opacity(0.6)
 
-  /// Points per minute on the timeline. Tuned so a full ~3-hour game fits
-  /// across the timeline area on a phone (≈320 pt ÷ 180 min).
-  static let pointsPerMinute: CGFloat = 1.8
-  static let rowHeight: CGFloat = 66
+  /// Points per minute on the timeline. Tuned so ~2 hours of programming
+  /// fills the timeline width on a phone (≈300 pt ÷ 120 min), giving the
+  /// half-hour tick labels room to breathe.
+  static let pointsPerMinute: CGFloat = 2.5
+  static let rowHeight: CGFloat = 72
   static let channelColumnWidth: CGFloat = 64
-  static let headerHeight: CGFloat = 30
+  static let headerHeight: CGFloat = 34
   /// Minimum rendered width for a very short event block.
-  static let minBlockWidth: CGFloat = 64
+  static let minBlockWidth: CGFloat = 90
+}
+
+// MARK: - Liquid glass helper
+
+/// Applies an iOS 26 liquid-glass background in the given shape, falling back
+/// to an ultra-thin material on the iOS 17 deployment floor. Used for the
+/// home-screen controls so they match the system nav buttons in Settings.
+private struct GlassBackground<S: Shape>: ViewModifier {
+  let shape: S
+  func body(content: Content) -> some View {
+    if #available(iOS 26.0, *) {
+      content.glassEffect(.regular, in: shape)
+    } else {
+      content.background(.ultraThinMaterial, in: shape)
+    }
+  }
+}
+
+extension View {
+  /// Liquid-glass (iOS 26) / material (earlier) background clipped to `shape`.
+  func glassBackground<S: Shape>(in shape: S) -> some View {
+    modifier(GlassBackground(shape: shape))
+  }
 }
 
 // MARK: - Channel model
@@ -240,10 +264,11 @@ struct TVGuideView: View {
 
   private var dateBar: some View {
     Text(Self.dateFormatter.string(from: now))
-      .font(.caption.weight(.semibold))
-      .foregroundStyle(GuideTheme.textDim)
-      .frame(maxWidth: .infinity)
-      .padding(.vertical, 6)
+      .font(.headline.weight(.semibold))
+      .foregroundStyle(GuideTheme.text)
+      .frame(maxWidth: .infinity, alignment: .center)
+      .multilineTextAlignment(.center)
+      .padding(.vertical, 9)
       .background(GuideTheme.headerBar)
   }
 
@@ -302,15 +327,14 @@ struct GuideTimeHeader: View {
   let axis: TVGuideLayout.Axis
 
   var body: some View {
-    ZStack(alignment: .topLeading) {
+    ZStack(alignment: .leading) {
       Color.clear
       ForEach(axis.ticks, id: \.self) { tick in
         Text(Self.timeFormatter.string(from: tick))
-          .font(.system(size: 10, weight: .medium))
+          .font(.system(size: 11, weight: .medium))
           .foregroundStyle(GuideTheme.textDim)
-          .frame(width: 30 * GuideTheme.pointsPerMinute, alignment: .leading)
-          .padding(.leading, 6)
-          .offset(x: axis.x(for: tick))
+          .fixedSize()
+          .offset(x: axis.x(for: tick) + 6)
       }
     }
     .frame(width: axis.totalWidth, height: GuideTheme.headerHeight, alignment: .leading)
@@ -359,56 +383,91 @@ struct GuideTimelineRow: View {
 struct GuideGameBlock: View {
   let game: Game
   let isSelected: Bool
+  @Environment(FavoritesStore.self) private var favorites
 
   private var usesLeagueFallback: Bool {
     ESPNScoreboardService.apiPath(for: game.league) == nil
   }
+  private var isSingle: Bool {
+    game.isEvent || game.awayTeam.isEmpty || game.awayTeam == "TBD"
+  }
+  private var isFavorited: Bool { favorites.isFavoriteGame(game) }
 
   var body: some View {
-    HStack(spacing: 8) {
+    HStack(spacing: 9) {
       logos
-      VStack(alignment: .leading, spacing: 2) {
-        Text(game.homeTeam)
-          .font(.system(size: 11, weight: .semibold))
-          .lineLimit(1)
-        if !game.isEvent && !game.awayTeam.isEmpty {
-          Text(game.awayTeam)
-            .font(.system(size: 11, weight: .semibold))
-            .lineLimit(1)
-        }
-        if game.isLive {
-          Text("● LIVE")
-            .font(.system(size: 8, weight: .bold))
-            .foregroundStyle(.white)
-        } else {
-          Text(game.displayTime)
-            .font(.system(size: 9, weight: .medium))
-            .foregroundStyle(.white.opacity(0.75))
-        }
-      }
-      .foregroundStyle(.white)
-      Spacer(minLength: 0)
+      teamNames
+      Spacer(minLength: 4)
+      status
     }
-    .padding(.horizontal, 8)
+    .foregroundStyle(.white)
+    .padding(.horizontal, 11)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     .background(
-      RoundedRectangle(cornerRadius: 8)
+      RoundedRectangle(cornerRadius: 10)
         .fill(game.isLive ? GuideTheme.live : GuideTheme.panelBright)
     )
     .overlay(
-      RoundedRectangle(cornerRadius: 8)
-        .stroke(isSelected ? Color.white : Color.clear, lineWidth: 2)
+      RoundedRectangle(cornerRadius: 10)
+        .stroke(isSelected ? Color.white : Color.clear, lineWidth: 2.5)
     )
+    .overlay(alignment: .topLeading) {
+      if isFavorited {
+        Image(systemName: "star.fill")
+          .font(.system(size: 11))
+          .foregroundStyle(.yellow)
+          .padding(5)
+      }
+    }
+    .clipShape(RoundedRectangle(cornerRadius: 10))
+  }
+
+  @ViewBuilder
+  private var teamNames: some View {
+    if isSingle {
+      Text(game.homeTeam)
+        .font(.system(size: 13, weight: .bold))
+        .lineLimit(2)
+        .fixedSize(horizontal: false, vertical: true)
+    } else {
+      VStack(alignment: .center, spacing: 1) {
+        Text(game.homeTeam)
+          .font(.system(size: 13, weight: .bold))
+          .lineLimit(1)
+        Text("vs")
+          .font(.system(size: 9, weight: .semibold))
+          .foregroundStyle(.white.opacity(0.6))
+        Text(game.awayTeam)
+          .font(.system(size: 13, weight: .bold))
+          .lineLimit(1)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var status: some View {
+    if game.isLive {
+      HStack(spacing: 4) {
+        Circle().fill(.white).frame(width: 6, height: 6)
+        Text("LIVE").font(.system(size: 13, weight: .heavy))
+      }
+    } else {
+      Text(game.displayTime)
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(.white.opacity(0.92))
+        .lineLimit(1)
+        .fixedSize()
+    }
   }
 
   @ViewBuilder
   private var logos: some View {
     if game.isEvent || usesLeagueFallback {
-      LeagueIcon(league: game.league, size: 28)
+      LeagueIcon(league: game.league, size: 30)
     } else {
-      VStack(spacing: 2) {
-        TeamLogo(teamName: game.homeTeam, league: game.league, size: 18)
-        TeamLogo(teamName: game.awayTeam, league: game.league, size: 18)
+      VStack(spacing: 3) {
+        TeamLogo(teamName: game.homeTeam, league: game.league, size: 20)
+        TeamLogo(teamName: game.awayTeam, league: game.league, size: 20)
       }
     }
   }

@@ -11,7 +11,7 @@ struct TVStageView: View {
   let onPrev: () -> Void
 
   var body: some View {
-    HStack(alignment: .top, spacing: 10) {
+    HStack(alignment: .center, spacing: 10) {
       tvBox
       controls
     }
@@ -40,7 +40,7 @@ struct TVStageView: View {
   }
 
   private var controls: some View {
-    VStack(spacing: 10) {
+    VStack(spacing: 12) {
       Button(action: onChannelUp) {
         controlIcon("chevron.up")
       }
@@ -51,25 +51,24 @@ struct TVStageView: View {
       .accessibilityLabel("Next channel")
       Button(action: onPrev) {
         Text("prev.")
-          .font(.system(size: 11, weight: .semibold))
+          .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(canGoPrev ? GuideTheme.text : GuideTheme.textDim)
-          .padding(.horizontal, 8)
-          .frame(height: 26)
-          .background(GuideTheme.panel, in: RoundedRectangle(cornerRadius: 7))
+          .padding(.horizontal, 10)
+          .frame(height: 30)
+          .glassBackground(in: Capsule())
       }
       .disabled(!canGoPrev)
       .accessibilityLabel("Previous channel viewed")
     }
     .frame(width: 52)
-    .padding(.top, 4)
   }
 
   private func controlIcon(_ name: String) -> some View {
     Image(systemName: name)
       .font(.system(size: 18, weight: .bold))
       .foregroundStyle(GuideTheme.text)
-      .frame(width: 44, height: 40)
-      .background(GuideTheme.panel, in: RoundedRectangle(cornerRadius: 9))
+      .frame(width: 46, height: 42)
+      .glassBackground(in: RoundedRectangle(cornerRadius: 13))
   }
 }
 

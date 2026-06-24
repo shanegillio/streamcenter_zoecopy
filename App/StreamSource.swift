@@ -161,6 +161,35 @@ final class SourceRegistry {
     return true
   }
 
+  /// Edits an existing custom source's name and URL. Returns false when the
+  /// name is empty, the URL is invalid, or the new host collides with a
+  /// *different* existing source. The source id is derived from the host, so
+  /// changing the host changes the id — we migrate the enabled flag and the
+  /// current selection onto the new id so nothing silently drops out.
+  @discardableResult
+  func updateSource(_ source: AnyStreamSource, name: String, urlString: String) -> Bool {
+    guard let idx = sources.firstIndex(where: { $0.id == source.id }) else { return false }
+    let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedName.isEmpty else { return false }
+    var cleaned = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !cleaned.hasPrefix("http://") && !cleaned.hasPrefix("https://") {
+      cleaned = "https://" + cleaned
+    }
+    guard let parsed = URL(string: cleaned), parsed.host != nil else { return false }
+    let url = GameURLResolver.rootURL(parsed)
+    let newID = url.host ?? url.absoluteString
+    if newID != source.id, sources.contains(where: { $0.id == newID }) { return false }
+    let replacement = AnyStreamSource(CustomStreamSource(name: trimmedName, baseURL: url), builtIn: false)
+    sources[idx] = replacement
+    if source.id != newID, enabledSourceIDs.contains(source.id) {
+      enabledSourceIDs.remove(source.id)
+      enabledSourceIDs.insert(newID)
+    }
+    if selectedSource.id == source.id { selectedSource = replacement }
+    persistCustomSources()
+    return true
+  }
+
   func removeSource(_ source: AnyStreamSource) {
     guard !source.isBuiltIn else { return }
     sources.removeAll { $0.id == source.id }
