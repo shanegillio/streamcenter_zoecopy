@@ -11,6 +11,10 @@ import AVKit
 /// navigation works on real sites, v2.39 brings auto-play back.
 struct PlayerView: View {
   let game: Game
+  /// When true the player is hosted inside the home-screen TV box rather
+  /// than pushed as a full-screen page: the nav toolbar is suppressed and
+  /// AVPlayer plays inline instead of auto-entering full screen.
+  var embedded: Bool = false
   @Environment(SourceRegistry.self) private var registry
   @State private var ruleList: WKContentRuleList? = nil
   @State private var avPlayer: AVPlayer? = nil
@@ -165,7 +169,7 @@ struct PlayerView: View {
           }
         }
         if let avPlayer {
-          VideoPlayerView(player: avPlayer).ignoresSafeArea()
+          VideoPlayerView(player: avPlayer, entersFullScreen: !embedded).ignoresSafeArea()
         }
       } else {
         StreamLoadingOverlay(attemptIndex: 0, totalAttempts: 0, sourceName: "")
@@ -173,18 +177,20 @@ struct PlayerView: View {
     }
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
-      ToolbarItem(placement: .principal) {
-        VStack(spacing: 2) {
-          Text(game.title)
-            .font(.system(size: 13, weight: .semibold))
-            .multilineTextAlignment(.center)
-            .lineLimit(2)
-            .foregroundStyle(.white)
-          Text(game.league.displayName)
-            .font(.caption2)
-            .foregroundStyle(.white.opacity(0.5))
+      if !embedded {
+        ToolbarItem(placement: .principal) {
+          VStack(spacing: 2) {
+            Text(game.title)
+              .font(.system(size: 13, weight: .semibold))
+              .multilineTextAlignment(.center)
+              .lineLimit(2)
+              .foregroundStyle(.white)
+            Text(game.league.displayName)
+              .font(.caption2)
+              .foregroundStyle(.white.opacity(0.5))
+          }
+          .frame(width: 240)
         }
-        .frame(width: 240)
       }
     }
     .toolbarColorScheme(.dark, for: .navigationBar)
@@ -1038,13 +1044,15 @@ private struct StreamLoadingOverlay: View {
 
 struct VideoPlayerView: UIViewControllerRepresentable {
   let player: AVPlayer
+  /// Embedded TV playback stays inline; full-screen pushes go full screen.
+  var entersFullScreen: Bool = true
   func makeUIViewController(context: Context) -> AVPlayerViewController {
     let vc = AVPlayerViewController()
     vc.player = player
     vc.showsPlaybackControls = true
     vc.videoGravity = .resizeAspect
-    vc.entersFullScreenWhenPlaybackBegins = true
-    vc.exitsFullScreenWhenPlaybackEnds = true
+    vc.entersFullScreenWhenPlaybackBegins = entersFullScreen
+    vc.exitsFullScreenWhenPlaybackEnds = entersFullScreen
     return vc
   }
   func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
