@@ -53,9 +53,6 @@
 /* Begin PBXNativeTarget section */
 		573BBAAE2E288D84F374E141 /* StreamCenter */ = {
 			isa = PBXNativeTarget;
-			fileSystemSynchronizedGroups = (
-				1F2DE413CF2CB54988158172 /* App */,
-			);
 			buildConfigurationList = 350A99F3610F37C8DEF5E6B8 /* Build configuration list for PBXNativeTarget "StreamCenter" */;
 			buildPhases = (
 				034F0885A8D11A4319C92A07 /* Sources */,
@@ -64,6 +61,9 @@
 			buildRules = (
 			);
 			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				1F2DE413CF2CB54988158172 /* App */,
 			);
 			name = StreamCenter;
 			packageProductDependencies = (
@@ -184,7 +184,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 759CM33667;
+				DEVELOPMENT_TEAM = D6FFQ5WH79;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -192,7 +192,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "app.bitrig.new.b3037d94-1a52-4185-b143-1daa8fdcafe1";
+				PRODUCT_BUNDLE_IDENTIFIER = app.zoestreamcenter;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
@@ -270,7 +270,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 759CM33667;
+				DEVELOPMENT_TEAM = D6FFQ5WH79;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -278,7 +278,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "app.bitrig.new.b3037d94-1a52-4185-b143-1daa8fdcafe1";
+				PRODUCT_BUNDLE_IDENTIFIER = app.zoestreamcenter;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;

@@ -60,6 +60,20 @@ struct Game: Identifiable, Equatable, Hashable {
 
   var title: String { isEvent || awayTeam.isEmpty ? homeTeam : "\(homeTeam) vs \(awayTeam)" }
 
+  /// True when the source flagged the game live, or when its known start time
+  /// has already passed but the game hasn't yet run past its league's typical
+  /// duration. Some sources list an in-progress game with only a start time and
+  /// never set `isLive`; this treats such a game as live so the guide shows it
+  /// as on-the-air rather than as an upcoming start time.
+  var isCurrentlyLive: Bool {
+    if isLive { return true }
+    guard let start = scheduledTime, timeIsKnown else { return false }
+    let now = Date()
+    guard start <= now else { return false }
+    let dur = TimeInterval(league.typicalDurationMinutes * 60)
+    return now < start.addingTimeInterval(dur)
+  }
+
   // Day label: nil for today, "Tomorrow", or short weekday name for further out.
   var displayDay: String? {
     guard !isLive, let time = scheduledTime else { return nil }

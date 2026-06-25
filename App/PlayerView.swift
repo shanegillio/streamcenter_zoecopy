@@ -1071,10 +1071,37 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     vc.videoGravity = .resizeAspect
     vc.entersFullScreenWhenPlaybackBegins = entersFullScreen
     vc.exitsFullScreenWhenPlaybackEnds = entersFullScreen
+    vc.delegate = context.coordinator
     return vc
   }
   func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
     vc.player = player
+  }
+
+  func makeCoordinator() -> Coordinator { Coordinator() }
+
+  /// Rotates the scene to landscape when the player goes full screen (e.g. the
+  /// user taps the full-screen button) and back to portrait when it exits, so
+  /// video fills the screen the way people expect from a video player.
+  final class Coordinator: NSObject, AVPlayerViewControllerDelegate {
+    func playerViewController(
+      _ playerViewController: AVPlayerViewController,
+      willBeginFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator
+    ) {
+      requestOrientation(.landscape, from: playerViewController)
+    }
+
+    func playerViewController(
+      _ playerViewController: AVPlayerViewController,
+      willEndFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator
+    ) {
+      requestOrientation(.portrait, from: playerViewController)
+    }
+
+    private func requestOrientation(_ mask: UIInterfaceOrientationMask, from vc: UIViewController) {
+      guard let scene = vc.view.window?.windowScene else { return }
+      scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask))
+    }
   }
 }
 
