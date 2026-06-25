@@ -7,12 +7,12 @@
   "website": "https://shanegillio.github.io/altstore-source",
   "tintColor": "#E03030",
   "featuredApps": [
-    "app.bitrig.new.b3037d94-1a52-4185-b143-1daa8fdcafe1"
+    "app.zoestreamcenter"
   ],
   "apps": [
     {
       "name": "StreamCenter",
-      "bundleIdentifier": "app.bitrig.new.b3037d94-1a52-4185-b143-1daa8fdcafe1",
+      "bundleIdentifier": "app.zoestreamcenter",
       "developerName": "Out of Credits",
       "subtitle": "Live sports streams, zero ads.",
       "localizedDescription": "StreamCenter is your all-in-one hub for live sports streaming.\n\nWatch NFL, NBA, MLB, NHL, soccer, MMA, boxing, and more \u2014 pulled straight from the web, with no ads interrupting the action.\n\n\u2022 Add any sports streaming site as a custom source\n\u2022 Browse live and upcoming games across every league\n\u2022 Favorite your teams and leagues for instant access\n\u2022 Ad-free playback powered by a built-in content blocker\n\u2022 Supports m3u8 and DASH streams with native AVPlayer quality\n\u2022 No account required. No subscription. Completely free.",
@@ -24,6 +24,39 @@
         "https://shanegillio.github.io/altstore-source/images/screenshot_settings.png"
       ],
       "versions": [
+        {
+          "version": "2.51",
+          "date": "2026-06-25",
+          "localizedDescription": "Internal stability fixes: resolved Swift 6 concurrency issues in the team database, scraper, and match-helpers, plus a Settings build fix. No user-facing changes.",
+          "downloadURL": "https://github.com/shanegillio/altstore-source/releases/download/v2.51/StreamCenter-2.51.ipa",
+          "size": 2416352,
+          "sha256": "706ceb0d08336c0bbbeae122b79efa7f1efe8dc103cc818381cfc6e905131179"
+        },
+        {
+          "version": "2.50",
+          "date": "2026-06-25",
+          "localizedDescription": "TV guide: in-progress and overtime games now show full team names and logos in wider, non-overlapping blocks. Channel up/down now follows the on-screen channel listing and pages the guide to keep the tuned-in channel in view.",
+          "downloadURL": "https://github.com/shanegillio/altstore-source/releases/download/v2.50/StreamCenter-2.50.ipa",
+          "size": 2390919,
+          "sha256": "f0c1ab902743b1e06fb41d1b8c214673d6ec85d39e296d2b078bab6f321a4f0b"
+        },
+        {
+          "version": "2.49",
+          "date": "2026-06-24",
+          "localizedDescription": "Major redesign: new TV-guide home screen. A built-in TV plays the best live game while a channel-style grid lays out live and upcoming games on a horizontally scrollable timeline (channels = leagues/sports, sized to each game's length). Tap any game to load it in place, channel-surf with the up/down controls, and go full screen natively. Finished games are now hidden, live games sort to the top, and the guide opens at the current time with a red now-line. Reorganized, TV-themed Settings with a new All Favorites page.",
+          "downloadURL": "https://github.com/shanegillio/altstore-source/releases/download/v2.49/StreamCenter-2.49.ipa",
+          "size": 2317963,
+          "sha256": "ed7f746341b8a74199fe78eb049174fc5be83e2aa929b09be0425a8401cc7b1a"
+        },
+        {
+          "version": "2.48",
+          "date": "2026-06-22",
+          "size": 935583,
+          "downloadURL": "https://github.com/shanegillio/altstore-source/releases/download/v2.48/StreamCenter-2.48.ipa",
+          "localizedDescription": "ppv.to WebView fallback: when AVPlayer stalls on session-gated CDN streams, the embedded ppv.to player activates automatically after 8 seconds. Fixes bintv pair-order stream matching so home/away team order no longer breaks game link resolution. Unwraps embedded stream links for correct direct playback.",
+          "buildVersion": "248",
+          "minOSVersion": "17.0"
+        },
         {
           "version": "1.0",
           "date": "2026-05-15",
@@ -52,7 +85,7 @@
       "date": "2026-05-14",
       "tintColor": "#E03030",
       "notify": true,
-      "appID": "app.bitrig.new.b3037d94-1a52-4185-b143-1daa8fdcafe1"
+      "appID": "app.zoestreamcenter"
     }
   ]
 }
