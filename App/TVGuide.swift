@@ -32,6 +32,16 @@ enum GuideTheme {
   /// Header bars (date row, time row).
   static let headerBar = Color(light: Color(red: 0.90, green: 0.90, blue: 0.92),
                               dark: Color(red: 0.17, green: 0.17, blue: 0.18))
+  /// Chrome framing the guide, in two tiers: the top date/time header is the
+  /// darkest, and the left channel column sits a step lighter, with the game
+  /// blocks (`panelBright` = the accent) lightest of all.
+  /// Top date bar + time header — the darkest tier (#3B4664).
+  static let chromeHeader = Color(red: 0x3B / 255, green: 0x46 / 255, blue: 0x64 / 255)
+  /// Left channel column — a step lighter than the header (#485687).
+  static let chromeColumn = Color(red: 0x48 / 255, green: 0x56 / 255, blue: 0x87 / 255)
+  /// Primary / secondary text drawn on top of the chrome shades.
+  static let onChrome = Color.white
+  static let onChromeDim = Color.white.opacity(0.7)
   /// Live game block tint (reads well on both appearances).
   static let live = Color(red: 0.80, green: 0.22, blue: 0.24)
   /// Hairline separators between rows / channels.
@@ -40,6 +50,11 @@ enum GuideTheme {
   static let text = Color(light: .black, dark: .white)
   static let textDim = Color(light: Color.black.opacity(0.55),
                             dark: Color.white.opacity(0.6))
+  /// Outline around the currently-watched game's block. White reads well on
+  /// dark mode, but disappears against the light-mode background and pale
+  /// blocks, so light mode uses a lighter red for a noticeable contrast.
+  static let selectionStroke = Color(light: Color(red: 0.98, green: 0.60, blue: 0.62),
+                                     dark: .white)
 
   /// Points per minute on the timeline. Tuned so ~2 hours of programming
   /// fills the timeline width on a phone (≈300 pt ÷ 120 min), giving the
@@ -58,7 +73,7 @@ enum GuideTheme {
   /// concurrent games onto additional channel rows instead of overlapping.
   static let minBlockWidth: CGFloat = 175
   /// Horizontal gutter trimmed from each block so adjacent games don't touch.
-  static let blockGap: CGFloat = 6
+  static let blockGap: CGFloat = 3
 }
 
 // MARK: - Liquid glass helper
@@ -138,8 +153,15 @@ enum TVGuideLayout {
     let natural = s.addingTimeInterval(dur)
     // A live game that has already run past its typical length keeps growing
     // until "now" so the block reflects that it's still on the air.
-    if game.isLive, now > natural { return now.addingTimeInterval(30 * 60) }
-    return natural
+    let raw = (game.isLive && now > natural) ? now.addingTimeInterval(30 * 60) : natural
+    // The guide only covers today, so a block never extends past midnight.
+    return min(raw, endOfDay(now, cal: etCalendar))
+  }
+
+  /// Midnight at the end of the day containing `date`, in the guide's calendar.
+  private static func endOfDay(_ date: Date, cal: Calendar) -> Date {
+    let startOfDay = cal.startOfDay(for: date)
+    return cal.date(byAdding: .day, value: 1, to: startOfDay) ?? date
   }
 
   /// Calendar pinned to ET so the timeline's half-hour grid lines up with the
@@ -156,12 +178,9 @@ enum TVGuideLayout {
     // the left edge and live games (which began earlier) are clamped to start
     // flush against the channel column — no empty pre-now gap.
     let start = floorToHalfHour(now, cal: cal)
-    var maxEnd = now.addingTimeInterval(2 * 60 * 60)
-    for g in games {
-      let e = endTime(for: g, now: now)
-      if e > maxEnd { maxEnd = e }
-    }
-    return Axis(start: start, end: maxEnd)
+    // The timeline always ends at midnight of the current day; games are
+    // clamped to the same boundary in endTime(for:now:).
+    return Axis(start: start, end: endOfDay(now, cal: cal))
   }
 
   private static func floorToHalfHour(_ date: Date, cal: Calendar) -> Date {
@@ -187,8 +206,12 @@ enum TVGuideLayout {
   /// Build the channel rows. Leagues are ordered by popularity; within a
   /// league, games are greedily packed into the fewest non-overlapping rows.
   static func channels(live: [Game], upcoming: [Game], now: Date) -> [GuideChannel] {
-    let all = live + upcoming
     let windowStart = floorToHalfHour(now, cal: etCalendar)
+    // The guide only covers today (the timeline ends at midnight), so drop any
+    // game that starts at or after midnight. Otherwise its block is positioned
+    // past the axis end and renders off-screen, leaving an empty-looking row.
+    let dayEnd = endOfDay(now, cal: etCalendar)
+    let all = (live + upcoming).filter { startTime(for: $0, now: now) < dayEnd }
     let byLeague = Dictionary(grouping: all, by: { $0.league })
     let orderedLeagues = byLeague.keys.sorted {
       if $0.popularityRank != $1.popularityRank {
@@ -308,11 +331,11 @@ struct TVGuideView: View {
   private var dateBar: some View {
     Text(Self.dateFormatter.string(from: now))
       .font(.headline.weight(.semibold))
-      .foregroundStyle(GuideTheme.text)
+      .foregroundStyle(GuideTheme.onChrome)
       .frame(maxWidth: .infinity, alignment: .center)
       .multilineTextAlignment(.center)
       .padding(.vertical, 9)
-      .background(GuideTheme.headerBar)
+      .background(GuideTheme.chromeHeader)
   }
 
   private var channelColumn: some View {
@@ -324,10 +347,9 @@ struct TVGuideView: View {
         Text("Ch.")
           .font(.system(size: 10, weight: .semibold))
       }
-      .foregroundStyle(GuideTheme.textDim)
-      .padding(.leading, 8)
-      .frame(width: GuideTheme.channelColumnWidth, height: GuideTheme.headerHeight, alignment: .leading)
-      .background(GuideTheme.headerBar)
+      .foregroundStyle(GuideTheme.onChromeDim)
+      .frame(width: GuideTheme.channelColumnWidth, height: GuideTheme.headerHeight, alignment: .center)
+      .background(GuideTheme.chromeHeader)
 
       ForEach(channels) { channel in
         GuideChannelCell(channel: channel)
@@ -352,6 +374,11 @@ struct TVGuideView: View {
 /// Left-column cell: league logo + optional channel number.
 struct GuideChannelCell: View {
   let channel: GuideChannel
+  @Environment(FavoritesStore.self) private var favorites
+
+  /// A channel is "favorited" when its league (or the league's parent sport)
+  /// is a favorite — the channel-level counterpart to a game's team favorite.
+  private var isFavorited: Bool { favorites.isLeagueFavorite(channel.league) }
 
   var body: some View {
     HStack(spacing: 4) {
@@ -359,13 +386,21 @@ struct GuideChannelCell: View {
       if let n = channel.number {
         Text("\(n)")
           .font(.system(size: 14, weight: .bold))
-          .foregroundStyle(GuideTheme.text)
+          .foregroundStyle(GuideTheme.onChrome)
       }
       Spacer(minLength: 0)
     }
     .padding(.leading, 8)
     .frame(width: GuideTheme.channelColumnWidth, height: GuideTheme.rowHeight, alignment: .leading)
-    .background(GuideTheme.panel)
+    .background(GuideTheme.chromeColumn)
+    .overlay(alignment: .topLeading) {
+      if isFavorited {
+        Image(systemName: "star.fill")
+          .font(.system(size: 11))
+          .foregroundStyle(.yellow)
+          .padding(4)
+      }
+    }
   }
 }
 
@@ -379,13 +414,13 @@ struct GuideTimeHeader: View {
       ForEach(axis.ticks, id: \.self) { tick in
         Text(Self.timeFormatter.string(from: tick))
           .font(.system(size: 11, weight: .medium))
-          .foregroundStyle(GuideTheme.textDim)
+          .foregroundStyle(GuideTheme.onChromeDim)
           .fixedSize()
           .offset(x: axis.x(for: tick) + 6)
       }
     }
     .frame(width: axis.totalWidth, height: GuideTheme.headerHeight, alignment: .leading)
-    .background(GuideTheme.headerBar)
+    .background(GuideTheme.chromeHeader)
   }
 
   static let timeFormatter: DateFormatter = {
@@ -417,7 +452,11 @@ struct GuideTimelineRow: View {
         // the visible window is drawn at x=0; using the unclamped start here
         // made the block its full duration wide, so it overshot its real end
         // and visually overlapped the next (non-overlapping) game on the row.
-        let x = max(0, axis.x(for: start))
+        // Keep a small leading gap so a block clamped to the window's left
+        // edge (a game already in progress) doesn't butt against the channel
+        // column.
+        let leadingInset: CGFloat = 5
+        let x = max(leadingInset, axis.x(for: start))
         let w = max(GuideTheme.minBlockWidth, axis.x(for: end) - x)
         // Trim a few points off each block's width so consecutive games on a
         // row never visually touch — a small gutter between cards.
@@ -449,22 +488,20 @@ struct GuideGameBlock: View {
   var body: some View {
     HStack(spacing: 9) {
       logos
-      VStack(alignment: .leading, spacing: 2) {
-        teamNames
-        status
-      }
-      Spacer(minLength: 0)
+      teamNames
+      Spacer(minLength: 6)
+      status
     }
     .foregroundStyle(.white)
     .padding(.horizontal, 11)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     .background(
       RoundedRectangle(cornerRadius: 10)
-        .fill(game.isLive ? GuideTheme.live : GuideTheme.panelBright)
+        .fill(game.isCurrentlyLive ? GuideTheme.live : GuideTheme.panelBright)
     )
     .overlay(
       RoundedRectangle(cornerRadius: 10)
-        .stroke(isSelected ? Color.white : Color.clear, lineWidth: 2.5)
+        .stroke(isSelected ? GuideTheme.selectionStroke : Color.clear, lineWidth: 4)
     )
     .overlay(alignment: .topLeading) {
       if isFavorited {
@@ -477,6 +514,9 @@ struct GuideGameBlock: View {
     .clipShape(RoundedRectangle(cornerRadius: 10))
   }
 
+  // Team names sit left-aligned next to the logos. Two-team games stack the
+  // home team, a "vs." separator, and the away team. Names may wrap to a second
+  // line; the trailing status keeps its width so the names wrap, not it.
   @ViewBuilder
   private var teamNames: some View {
     if isSingle {
@@ -490,32 +530,43 @@ struct GuideGameBlock: View {
       VStack(alignment: .leading, spacing: 1) {
         Text(game.homeTeam)
           .font(.system(size: 13, weight: .bold))
-          .lineLimit(1)
+          .lineLimit(2)
           .minimumScaleFactor(0.6)
+          .fixedSize(horizontal: false, vertical: true)
+        Text("vs.")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(.white.opacity(0.8))
         Text(game.awayTeam)
           .font(.system(size: 13, weight: .bold))
-          .lineLimit(1)
+          .lineLimit(2)
           .minimumScaleFactor(0.6)
+          .fixedSize(horizontal: false, vertical: true)
       }
+      .multilineTextAlignment(.leading)
     }
   }
 
-  // Status sits on its own line beneath the names so it never competes with
-  // them for horizontal space — the full block width is available for names.
+  // Status pins to the trailing edge: a "• LIVE" indicator for in-progress
+  // games, or the game's start time for upcoming ones.
   @ViewBuilder
   private var status: some View {
-    if game.isLive {
-      HStack(spacing: 4) {
-        Circle().fill(.white).frame(width: 5, height: 5)
-        Text("LIVE").font(.system(size: 11, weight: .heavy))
+    Group {
+      if game.isCurrentlyLive {
+        HStack(spacing: 4) {
+          Circle().fill(.white).frame(width: 5, height: 5)
+          Text("LIVE").font(.system(size: 11, weight: .heavy))
+        }
+      } else {
+        Text(game.displayTime)
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(.white.opacity(0.92))
       }
-    } else {
-      Text(game.displayTime)
-        .font(.system(size: 11, weight: .semibold))
-        .foregroundStyle(.white.opacity(0.92))
-        .lineLimit(1)
-        .minimumScaleFactor(0.8)
     }
+    // Keep the status on one line at its natural width and give it layout
+    // priority, so when team names are long it's the names that wrap, not this.
+    .lineLimit(1)
+    .fixedSize()
+    .layoutPriority(1)
   }
 
   @ViewBuilder

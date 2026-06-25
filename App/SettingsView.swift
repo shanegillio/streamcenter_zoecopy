@@ -28,6 +28,14 @@ struct SettingsView: View {
 
       // MARK: Favorites
       Section {
+        NavigationLink(destination: AllFavoritesView()) {
+          settingsRow(
+            icon: "star.fill",
+            title: "All favorites",
+            count: 0
+          )
+        }
+        .listRowBackground(GuideTheme.panel)
         NavigationLink(destination: FavoriteSportsView()) {
           settingsRow(
             icon: "sportscourt.fill",
@@ -49,14 +57,6 @@ struct SettingsView: View {
             icon: "person.3.fill",
             title: "Teams",
             count: favorites.favoriteTeams.count
-          )
-        }
-        .listRowBackground(GuideTheme.panel)
-        NavigationLink(destination: AllFavoritesView()) {
-          settingsRow(
-            icon: "star.fill",
-            title: "All favorites",
-            count: 0
           )
         }
         .listRowBackground(GuideTheme.panel)
@@ -155,6 +155,10 @@ struct SourceListView: View {
   @State private var draftName = ""
   @State private var draftURL  = ""
   @State private var editorError: String? = nil
+  /// ID of the source whose swipe actions are currently revealed. That row's
+  /// background rounds its corners (Notes-style) while the rest of the list
+  /// stays a continuous group. iOS 27+ only (uses `onPresentationChanged`).
+  @State private var revealedSourceID: AnyStreamSource.ID? = nil
 
   var body: some View {
     ZStack {
@@ -162,23 +166,7 @@ struct SourceListView: View {
       List {
         Section {
           ForEach(registry.sources) { source in
-            sourceRow(source)
-              .listRowBackground(GuideTheme.panel)
-              // Swipe left to reveal Edit (name + URL) and Delete, mirroring
-              // the system Notes-style trailing actions.
-              .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                if !source.isBuiltIn {
-                  Button(role: .destructive) {
-                    registry.removeSource(source)
-                  } label: {
-                    Label("Delete", systemImage: "trash")
-                  }
-                  Button { beginEdit(source) } label: {
-                    Label("Edit", systemImage: "pencil")
-                  }
-                  .tint(.blue)
-                }
-              }
+            swipeableSourceRow(source)
           }
         } footer: {
           Text("Any enabled source may be used to find a stream when you tap a game. Add multiple to improve coverage — ESPN provides the game listings; sources serve the streams.")
@@ -222,6 +210,61 @@ struct SourceListView: View {
     .animation(.spring(duration: 0.25), value: showEditor)
     .onAppear {
       if autoPresentAdd && registry.sources.isEmpty && !showEditor { beginAdd() }
+    }
+  }
+
+  // Composes a source row with its rounded-on-swipe background and trailing
+  // swipe actions. On iOS 27+ the `onPresentationChanged` callback tracks which
+  // row is open so only that row rounds; older OSes keep the prior behavior.
+  @ViewBuilder
+  private func swipeableSourceRow(_ source: AnyStreamSource) -> some View {
+    let base = sourceRow(source)
+      .listRowBackground(rowBackground(for: source))
+    if #available(iOS 27.0, *) {
+      base.swipeActions(edge: .trailing, allowsFullSwipe: false) {
+        swipeButtons(source)
+      } onPresentationChanged: { presented in
+        withAnimation(.easeInOut(duration: 0.2)) {
+          if presented {
+            revealedSourceID = source.id
+          } else if revealedSourceID == source.id {
+            revealedSourceID = nil
+          }
+        }
+      }
+    } else {
+      base.swipeActions(edge: .trailing, allowsFullSwipe: false) {
+        swipeButtons(source)
+      }
+    }
+  }
+
+  // Swipe-left actions: Edit (name + URL) and Delete, mirroring the system
+  // Notes-style trailing actions. Built-in sources can't be edited or removed.
+  @ViewBuilder
+  private func swipeButtons(_ source: AnyStreamSource) -> some View {
+    if !source.isBuiltIn {
+      Button(role: .destructive) {
+        registry.removeSource(source)
+      } label: {
+        Label("Delete", systemImage: "trash")
+      }
+      Button { beginEdit(source) } label: {
+        Label("Edit", systemImage: "pencil")
+      }
+      .tint(.blue)
+    }
+  }
+
+  // The swiped row gets fully rounded corners so it reads as a lifted card;
+  // every other row stays square, letting the list render as one continuous
+  // group at rest.
+  @ViewBuilder
+  private func rowBackground(for source: AnyStreamSource) -> some View {
+    if revealedSourceID == source.id {
+      RoundedRectangle(cornerRadius: 10, style: .continuous).fill(GuideTheme.panel)
+    } else {
+      Rectangle().fill(GuideTheme.panel)
     }
   }
 
@@ -377,6 +420,8 @@ func FavoriteStar(_ on: Bool) -> some View {
   Image(systemName: on ? "star.fill" : "star")
     .font(.system(size: 17))
     .foregroundStyle(on ? AnyShapeStyle(.yellow) : AnyShapeStyle(Color(.tertiaryLabel)))
+    // Nudge the star inward so it doesn't crowd the trailing A–Z index bar.
+    .padding(.trailing, 6)
 }
 
 // MARK: - Favorite Sports
@@ -384,9 +429,15 @@ func FavoriteStar(_ on: Bool) -> some View {
 struct FavoriteSportsView: View {
   @Environment(FavoritesStore.self) private var favorites
 
+  private var sports: [Sport] {
+    Sport.allCases.sorted {
+      $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+    }
+  }
+
   var body: some View {
     List {
-      ForEach(Sport.allCases) { sport in
+      ForEach(sports) { sport in
         Button { favorites.toggleSport(sport) } label: {
           HStack(spacing: 14) {
             ZStack {
@@ -414,7 +465,7 @@ struct FavoriteSportsView: View {
         .listRowBackground(GuideTheme.panel)
       }
     }
-    .navigationTitle("Favorite Sports")
+    .navigationTitle("All Sports")
     .navigationBarTitleDisplayMode(.large)
     .darkSettingsList()
   }
@@ -429,33 +480,74 @@ struct FavoriteLeaguesView: View {
   private var leagues: [SportLeague] {
     // Hide `.other` — it's a catch-all bucket, not a real league.
     let all = SportLeague.allCases.filter { $0 != .other }
-    guard !search.isEmpty else { return all }
+    let sorted = all.sorted {
+      $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+    }
+    guard !search.isEmpty else { return sorted }
     let q = search.lowercased()
-    return all.filter { $0.displayName.lowercased().contains(q) }
+    return sorted.filter { $0.displayName.lowercased().contains(q) }
+  }
+
+  /// Alphabetic sections, e.g. [("M", [MLB, MLS]), …].
+  private var sections: [(letter: String, leagues: [SportLeague])] {
+    let groups = Dictionary(grouping: leagues) { String($0.displayName.prefix(1)).uppercased() }
+    return groups.keys.sorted().map { ($0, groups[$0]!) }
   }
 
   var body: some View {
-    List {
-      ForEach(leagues) { league in
-        Button { favorites.toggleLeague(league) } label: {
-          HStack(spacing: 14) {
-            LeagueIcon(league: league, size: 40)
-            Text(league.displayName)
-              .font(.body.weight(.medium))
-              .foregroundStyle(GuideTheme.text)
-            Spacer()
-            FavoriteStar(favorites.isLeagueFavorite(league))
+    ScrollViewReader { proxy in
+      ZStack(alignment: .trailing) {
+        List {
+          ForEach(sections, id: \.letter) { section in
+            Section {
+              ForEach(section.leagues) { league in
+                leagueRow(league)
+              }
+            } header: {
+              Text(section.letter)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(GuideTheme.textDim)
+                .id(section.letter)
+            }
           }
-          .padding(.vertical, 4)
         }
-        .buttonStyle(.plain)
-        .listRowBackground(GuideTheme.panel)
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(GuideTheme.background)
+
+        // Contacts-style A–Z index — only when not searching and there's
+        // more than one letter to jump between.
+        if search.isEmpty && sections.count > 1 {
+          let sectionLetters = sections.map(\.letter)
+          SectionIndexBar(letters: LeagueTeamsView.alphabet, available: Set(sectionLetters)) { letter in
+            let target = sectionLetters.first { $0 >= letter } ?? sectionLetters.last
+            if let target {
+              proxy.scrollTo(target, anchor: .top)
+            }
+          }
+          .padding(.trailing, 4)
+        }
       }
     }
-    .navigationTitle("Favorite Leagues")
+    .navigationTitle("All Leagues")
     .navigationBarTitleDisplayMode(.large)
     .searchable(text: $search, prompt: "Search leagues…")
-    .darkSettingsList()
+  }
+
+  private func leagueRow(_ league: SportLeague) -> some View {
+    Button { favorites.toggleLeague(league) } label: {
+      HStack(spacing: 14) {
+        LeagueIcon(league: league, size: 40)
+        Text(league.displayName)
+          .font(.body.weight(.medium))
+          .foregroundStyle(GuideTheme.text)
+        Spacer()
+        FavoriteStar(favorites.isLeagueFavorite(league))
+      }
+      .padding(.vertical, 4)
+    }
+    .buttonStyle(.plain)
+    .listRowBackground(GuideTheme.panel)
   }
 }
 
@@ -464,9 +556,15 @@ struct FavoriteLeaguesView: View {
 /// Top-level Teams page: a list of leagues. Tapping one pushes a dedicated
 /// page of that league's teams (instead of the old inline dropdown).
 struct FavoriteTeamsView: View {
+  private var groups: [(league: SportLeague, teams: [String])] {
+    FavoritesStore.knownTeams.sorted {
+      $0.league.displayName.localizedCaseInsensitiveCompare($1.league.displayName) == .orderedAscending
+    }
+  }
+
   var body: some View {
     List {
-      ForEach(FavoritesStore.knownTeams, id: \.league) { group in
+      ForEach(groups, id: \.league) { group in
         NavigationLink {
           LeagueTeamsView(league: group.league, teams: group.teams)
         } label: {
@@ -481,7 +579,7 @@ struct FavoriteTeamsView: View {
         .listRowBackground(GuideTheme.panel)
       }
     }
-    .navigationTitle("Favorite Teams")
+    .navigationTitle("Select a league")
     .navigationBarTitleDisplayMode(.large)
     .darkSettingsList()
   }
@@ -501,6 +599,10 @@ struct LeagueTeamsView: View {
     let q = search.lowercased()
     return sorted.filter { $0.lowercased().contains(q) }
   }
+
+  /// The full A–Z index shown on the trailing edge, regardless of which
+  /// letters currently have teams.
+  static let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".map(String.init)
 
   /// Alphabetic sections, e.g. [("A", ["Astros", "Athletics"]), …].
   private var sections: [(letter: String, teams: [String])] {
@@ -532,17 +634,23 @@ struct LeagueTeamsView: View {
         // Contacts-style A–Z index — only when not searching and there's
         // more than one letter to jump between.
         if search.isEmpty && sections.count > 1 {
-          SectionIndexBar(letters: sections.map(\.letter)) { letter in
-            withAnimation(.easeInOut(duration: 0.2)) {
-              proxy.scrollTo(letter, anchor: .top)
+          let sectionLetters = sections.map(\.letter)
+          SectionIndexBar(letters: Self.alphabet, available: Set(sectionLetters)) { letter in
+            // Empty letters jump to the next section at or after them, so the
+            // full A–Z index stays usable even where a letter has no teams.
+            let target = sectionLetters.first { $0 >= letter } ?? sectionLetters.last
+            if let target {
+              // Snap straight to the section (no animation) so dragging the
+              // index tracks the finger instantly, like Contacts.
+              proxy.scrollTo(target, anchor: .top)
             }
           }
           .padding(.trailing, 4)
         }
       }
     }
-    .navigationTitle("\(league.displayName) Teams")
-    .navigationBarTitleDisplayMode(.inline)
+    .navigationTitle("All \(league.displayName) Teams")
+    .navigationBarTitleDisplayMode(.large)
     .searchable(text: $search, prompt: "Search teams…")
   }
 
@@ -565,16 +673,20 @@ struct LeagueTeamsView: View {
 /// edge, with breathing room on either side.
 struct SectionIndexBar: View {
   let letters: [String]
+  /// Letters that actually have a section to jump to; others render dimmed.
+  let available: Set<String>
   let onSelect: (String) -> Void
 
   var body: some View {
     VStack(spacing: 2) {
       ForEach(letters, id: \.self) { letter in
         Text(letter)
-          .font(.system(size: 10, weight: .semibold))
+          .font(.system(size: 11, weight: .semibold))
           .foregroundStyle(.tint)
+          .opacity(available.contains(letter) ? 1 : 0.3)
       }
     }
+    .frame(maxHeight: .infinity)
     .padding(.vertical, 8)
     .padding(.horizontal, 7)
     .contentShape(Rectangle())
