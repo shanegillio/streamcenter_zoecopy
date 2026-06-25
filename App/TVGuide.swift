@@ -310,6 +310,10 @@ struct TVGuideView: View {
 
       ForEach(channels) { channel in
         GuideChannelCell(channel: channel)
+          // Scroll anchor for channel surfing. Lives in the channel column
+          // (outside the horizontal timeline scroll view) so scrolling to it
+          // only moves the guide vertically, never sideways.
+          .id("ch-\(channel.id)")
         Divider().overlay(Color.black.opacity(0.25))
       }
     }

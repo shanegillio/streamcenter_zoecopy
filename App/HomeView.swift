@@ -103,17 +103,31 @@ struct HomeView: View {
       Spacer(); emptyState; Spacer()
     } else {
       GeometryReader { geo in
-        ScrollView(.vertical, showsIndicators: false) {
-          TVGuideView(
-            live: allLiveGames,
-            upcoming: allUpcomingGames,
-            selectedGameID: selectedGame?.id,
-            availableWidth: geo.size.width,
-            onSelect: { select($0) }
-          )
+        ScrollViewReader { proxy in
+          ScrollView(.vertical, showsIndicators: false) {
+            TVGuideView(
+              live: allLiveGames,
+              upcoming: allUpcomingGames,
+              selectedGameID: selectedGame?.id,
+              availableWidth: geo.size.width,
+              onSelect: { select($0) }
+            )
+          }
+          .refreshable { await loadLeagues(forceRefresh: true) }
+          .clipShape(RoundedRectangle(cornerRadius: 14))
+          // Keep the tuned-in channel on screen. A nil anchor scrolls the
+          // minimum amount, so the guide only "pages" when the selected
+          // channel is off-screen and stays put when it's already visible.
+          .onChange(of: selectedGame) { _, game in
+            guard let game,
+                  let channel = surfChannels.first(where: { ch in
+                    ch.games.contains { $0.id == game.id }
+                  }) else { return }
+            withAnimation(.easeInOut(duration: 0.3)) {
+              proxy.scrollTo("ch-\(channel.id)", anchor: nil)
+            }
+          }
         }
-        .refreshable { await loadLeagues(forceRefresh: true) }
-        .clipShape(RoundedRectangle(cornerRadius: 14))
       }
       .padding(.horizontal, 14)
       .padding(.bottom, 10)
