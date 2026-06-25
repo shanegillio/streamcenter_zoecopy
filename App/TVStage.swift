@@ -74,15 +74,9 @@ struct TVStageView: View {
 
 /// Idle "no signal" pattern shown in the TV when no game is selected.
 struct TestPatternView: View {
-  private let bars: [Color] = [.white, .yellow, .cyan, .green, .red, .blue, .purple]
-
   var body: some View {
     ZStack {
-      HStack(spacing: 0) {
-        ForEach(0..<bars.count, id: \.self) { i in
-          bars[i].frame(maxWidth: .infinity)
-        }
-      }
+      TVColorBarsView()
       VStack(spacing: 6) {
         Image(systemName: "antenna.radiowaves.left.and.right")
           .font(.system(size: 26, weight: .semibold))
@@ -92,7 +86,60 @@ struct TestPatternView: View {
       .foregroundStyle(.white)
       .padding(.horizontal, 14)
       .padding(.vertical, 10)
-      .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 10))
+      .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 10))
     }
+  }
+}
+
+// MARK: - Shared "broadcast" visuals (color bars + static)
+
+/// SMPTE-style color-bar test pattern. The bar order rotates on a timer so the
+/// pattern reads as a live, animated signal rather than a static image.
+struct TVColorBarsView: View {
+  private static let bars: [Color] = [
+    Color(white: 0.78), .yellow, .cyan, .green,
+    Color(red: 1, green: 0, blue: 1), .red, .blue
+  ]
+  private static let period: TimeInterval = 0.5
+
+  var body: some View {
+    TimelineView(.periodic(from: .now, by: Self.period)) { context in
+      let step = Int(context.date.timeIntervalSinceReferenceDate / Self.period)
+      let shift = ((step % Self.bars.count) + Self.bars.count) % Self.bars.count
+      HStack(spacing: 0) {
+        ForEach(0..<Self.bars.count, id: \.self) { i in
+          Self.bars[(i + shift) % Self.bars.count]
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+      }
+      .animation(.easeInOut(duration: 0.35), value: shift)
+    }
+  }
+}
+
+/// Animated TV "snow" / static. Drawn as a grid of random-gray cells that
+/// refresh each tick — cheap enough to run continuously behind an error state.
+struct TVStaticView: View {
+  private let cols = 46
+  private let rows = 28
+
+  var body: some View {
+    TimelineView(.periodic(from: .now, by: 0.08)) { context in
+      Canvas { ctx, size in
+        _ = context.date
+        let w = size.width / CGFloat(cols)
+        let h = size.height / CGFloat(rows)
+        var rng = SystemRandomNumberGenerator()
+        for r in 0..<rows {
+          for c in 0..<cols {
+            let v = Double.random(in: 0...1, using: &rng)
+            let rect = CGRect(x: CGFloat(c) * w, y: CGFloat(r) * h,
+                              width: w + 0.5, height: h + 0.5)
+            ctx.fill(Path(rect), with: .color(Color(white: v)))
+          }
+        }
+      }
+    }
+    .background(Color.black)
   }
 }

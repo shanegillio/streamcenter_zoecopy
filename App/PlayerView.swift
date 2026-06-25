@@ -962,33 +962,24 @@ struct PlayerView: View {
   }
 
   private var retryUI: some View {
-    VStack(spacing: 18) {
-      Image(systemName: "exclamationmark.triangle")
-        .font(.system(size: 44))
-        .foregroundStyle(.white.opacity(0.7))
-      Text("No stream found")
-        .font(.title3.weight(.semibold))
-        .foregroundStyle(.white)
-      Text(attempts.isEmpty
-           ? "No sources are enabled for this game."
-           : "Tried \(attempts.count) source\(attempts.count == 1 ? "" : "s") without finding a playable stream.")
-        .font(.subheadline)
-        .foregroundStyle(.white.opacity(0.6))
-        .multilineTextAlignment(.center)
-        .padding(.horizontal, 32)
-      VStack(alignment: .leading, spacing: 6) {
-        ForEach(attempts) { att in
-          HStack(spacing: 8) {
-            Image(systemName: "xmark.circle.fill")
-              .foregroundStyle(.red.opacity(0.7))
-            Text(sourceName(for: att.sourceID))
-              .font(.subheadline)
-              .foregroundStyle(.white.opacity(0.85))
-          }
-        }
-      }
-      .padding(.vertical, 8)
-      HStack(spacing: 14) {
+    ZStack {
+      // "Lost signal" TV static behind the error slate.
+      TVStaticView()
+      VStack(spacing: 14) {
+        Image(systemName: "antenna.radiowaves.left.and.right.slash")
+          .font(.system(size: 40, weight: .semibold))
+          .foregroundStyle(.white)
+        Text("Error: could not load stream")
+          .font(.headline)
+          .foregroundStyle(.white)
+          .multilineTextAlignment(.center)
+        Text(attempts.isEmpty
+             ? "No sources are enabled for this game."
+             : "Tried \(attempts.count) source\(attempts.count == 1 ? "" : "s") without finding a playable stream.")
+          .font(.subheadline)
+          .foregroundStyle(.white.opacity(0.75))
+          .multilineTextAlignment(.center)
+          .padding(.horizontal, 8)
         Button {
           // v2.38: just rebuild attempts and let verification mode
           // re-load the first attempt's page from scratch.
@@ -1011,14 +1002,18 @@ struct PlayerView: View {
           }
         } label: {
           Label("Try Again", systemImage: "arrow.clockwise")
-            .padding(.horizontal, 16).padding(.vertical, 10)
-            .background(Color.white.opacity(0.15), in: Capsule())
+            .font(.subheadline.weight(.semibold))
+            .padding(.horizontal, 18).padding(.vertical, 11)
+            .background(Color.white.opacity(0.18), in: Capsule())
             .foregroundStyle(.white)
         }
+        .padding(.top, 2)
       }
-      .padding(.top, 4)
+      .padding(28)
+      .frame(maxWidth: 360)
+      .background(Color.black.opacity(0.82), in: RoundedRectangle(cornerRadius: 18))
+      .padding(.horizontal, 24)
     }
-    .padding(.horizontal, 24)
   }
 
   private func makePlayer(url: URL, cookies: [HTTPCookie], referer: URL) -> AVPlayer {
@@ -1037,35 +1032,29 @@ private struct StreamLoadingOverlay: View {
   let attemptIndex: Int
   let totalAttempts: Int
   let sourceName: String
-  @State private var pulse = false
 
   var body: some View {
-    VStack(spacing: 16) {
-      ZStack {
-        Circle()
-          .fill(Color.white.opacity(0.06))
-          .frame(width: 80, height: 80)
-          .scaleEffect(pulse ? 1.25 : 1.0)
-          .opacity(pulse ? 0 : 0.6)
-          .animation(.easeOut(duration: 1.2).repeatForever(autoreverses: false), value: pulse)
-        Image(systemName: "antenna.radiowaves.left.and.right")
-          .font(.system(size: 28, weight: .semibold))
-          .foregroundStyle(.white.opacity(0.85))
+    ZStack {
+      TVColorBarsView()
+      // Black broadcast band with the loading label, like a channel slate.
+      VStack(spacing: 3) {
+        Text("Loading…")
+          .font(.system(size: 22, weight: .bold))
+          .foregroundStyle(.white)
+        if totalAttempts > 0 {
+          Text(totalAttempts > 1
+               ? "\(sourceName) (\(attemptIndex + 1) of \(totalAttempts))"
+               : sourceName)
+            .font(.subheadline)
+            .foregroundStyle(.white.opacity(0.7))
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 24)
+        }
       }
-      Text("Loading…")
-        .font(.headline)
-        .foregroundStyle(.white)
-      if totalAttempts > 0 {
-        Text(totalAttempts > 1
-             ? "\(sourceName) (\(attemptIndex + 1) of \(totalAttempts))"
-             : sourceName)
-          .font(.subheadline)
-          .foregroundStyle(.white.opacity(0.6))
-          .multilineTextAlignment(.center)
-          .padding(.horizontal, 32)
-      }
+      .frame(maxWidth: .infinity)
+      .padding(.vertical, 14)
+      .background(Color.black.opacity(0.88))
     }
-    .onAppear { pulse = true }
   }
 }
 
