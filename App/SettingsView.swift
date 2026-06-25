@@ -155,11 +155,6 @@ struct SourceListView: View {
   @State private var draftName = ""
   @State private var draftURL  = ""
   @State private var editorError: String? = nil
-  /// ID of the source whose swipe actions are currently revealed. That row's
-  /// background rounds its corners (Notes-style) while the rest of the list
-  /// stays a continuous group. iOS 27+ only (uses `onPresentationChanged`).
-  @State private var revealedSourceID: AnyStreamSource.ID? = nil
-
   var body: some View {
     ZStack {
       GuideTheme.background.ignoresSafeArea()
@@ -218,25 +213,11 @@ struct SourceListView: View {
   // row is open so only that row rounds; older OSes keep the prior behavior.
   @ViewBuilder
   private func swipeableSourceRow(_ source: AnyStreamSource) -> some View {
-    let base = sourceRow(source)
+    sourceRow(source)
       .listRowBackground(rowBackground(for: source))
-    if #available(iOS 27.0, *) {
-      base.swipeActions(edge: .trailing, allowsFullSwipe: false) {
-        swipeButtons(source)
-      } onPresentationChanged: { presented in
-        withAnimation(.easeInOut(duration: 0.2)) {
-          if presented {
-            revealedSourceID = source.id
-          } else if revealedSourceID == source.id {
-            revealedSourceID = nil
-          }
-        }
-      }
-    } else {
-      base.swipeActions(edge: .trailing, allowsFullSwipe: false) {
+      .swipeActions(edge: .trailing, allowsFullSwipe: false) {
         swipeButtons(source)
       }
-    }
   }
 
   // Swipe-left actions: Edit (name + URL) and Delete, mirroring the system
@@ -256,16 +237,10 @@ struct SourceListView: View {
     }
   }
 
-  // The swiped row gets fully rounded corners so it reads as a lifted card;
-  // every other row stays square, letting the list render as one continuous
-  // group at rest.
+  // Rows render as one continuous group, matching the grouped list look.
   @ViewBuilder
   private func rowBackground(for source: AnyStreamSource) -> some View {
-    if revealedSourceID == source.id {
-      RoundedRectangle(cornerRadius: 10, style: .continuous).fill(GuideTheme.panel)
-    } else {
-      Rectangle().fill(GuideTheme.panel)
-    }
+    Rectangle().fill(GuideTheme.panel)
   }
 
   private func sourceRow(_ source: AnyStreamSource) -> some View {

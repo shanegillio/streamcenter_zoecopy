@@ -56,12 +56,22 @@ actor TeamDatabase {
 
   init() {
     // Synchronous baseline load so the first query after construction
-    // returns useful data without awaiting a network round-trip.
+    // returns useful data without awaiting a network round-trip. Assigning
+    // the parsed tables directly (rather than calling an isolated method)
+    // keeps the nonisolated actor initializer valid under Swift 6.
     if let bundled = Self.loadBundled() {
-      ingest(bundled)
+      let parsed = Self.parse(bundled)
+      entries = parsed.entries
+      exact = parsed.exact
     }
-    // Kick off background refresh — silently no-ops if last refresh was
-    // recent enough.
+  }
+
+  /// Lazily starts the background refresh on first lookup. Kicking the task
+  /// off here (rather than in `init`) avoids referencing actor-isolated state
+  /// from the nonisolated initializer. Silently no-ops if a refresh is
+  /// already in flight or completed.
+  private func kickOffRefreshIfNeeded() {
+    guard refreshTask == nil else { return }
     refreshTask = Task { [weak self] in
       await self?.refreshIfStale()
     }
@@ -74,6 +84,7 @@ actor TeamDatabase {
   /// `for (teamName, league) in teamLeagueMap where teamCombined.contains(teamName)`
   /// loop in `CustomStreamSource.mapDiscovered`. Lowercases the input.
   func league(for teamCombined: String) -> SportLeague? {
+    kickOffRefreshIfNeeded()
     let needle = teamCombined.lowercased()
     if let exactMatch = exact[needle.trimmingCharacters(in: .whitespaces)] {
       return exactMatch
@@ -89,7 +100,8 @@ actor TeamDatabase {
   /// Direct exact-name lookup. Used by callers that already know they have
   /// a single team name (e.g., ESPN reconciliation reverse lookup).
   func leagueForExactTeam(_ name: String) -> SportLeague? {
-    exact[name.lowercased().trimmingCharacters(in: .whitespaces)]
+    kickOffRefreshIfNeeded()
+    return exact[name.lowercased().trimmingCharacters(in: .whitespaces)]
   }
 
   /// Used by the legacy `teamLeagueMap` static initializer to seed itself
@@ -98,7 +110,8 @@ actor TeamDatabase {
   /// long names first so "Manchester United" beats "Manchester City" on
   /// ambiguous input.
   func allEntriesByLengthDescending() -> [(name: String, league: SportLeague)] {
-    entries.sorted { $0.name.count > $1.name.count }
+    kickOffRefreshIfNeeded()
+    return entries.sorted { $0.name.count > $1.name.count }
   }
 
   /// Forces a refresh now (used by retry / pull-to-refresh paths in the UI).
@@ -129,7 +142,9 @@ actor TeamDatabase {
     // Use the on-disk cache first if it's not yet expired.
     if let cached = Self.loadDiskCache(),
        Date().timeIntervalSince(cached.timestamp) < Self.refreshTTL {
-      ingest(cached.schema)
+      let parsed = Self.parse(cached.schema)
+      entries = parsed.entries
+      exact = parsed.exact
       lastRefreshAt = cached.timestamp
       return
     }
@@ -145,7 +160,9 @@ actor TeamDatabase {
           let schema = try? JSONDecoder().decode(Schema.self, from: data) else {
       return
     }
-    ingest(schema)
+    let parsed = Self.parse(schema)
+    entries = parsed.entries
+    exact = parsed.exact
     lastRefreshAt = Date()
     Self.persistDiskCache(data: data, timestamp: Date())
   }
@@ -202,7 +219,9 @@ actor TeamDatabase {
     .soccer, .other,
   ]
 
-  private func ingest(_ schema: Schema) {
+  nonisolated private static func parse(
+    _ schema: Schema
+  ) -> (entries: [(name: String, league: SportLeague)], exact: [String: SportLeague]) {
     var newEntries: [(name: String, league: SportLeague)] = []
     var newExact: [String: SportLeague] = [:]
     // Walk in priority order so domestic leagues claim teams before
@@ -246,7 +265,6 @@ actor TeamDatabase {
         }
       }
     }
-    entries = newEntries
-    exact = newExact
+    return (newEntries, newExact)
   }
 }

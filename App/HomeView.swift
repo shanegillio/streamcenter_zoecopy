@@ -415,19 +415,19 @@ struct HomeView: View {
     return false
   }
 
-  static func matchesTeamPair(home: String, away: String, target: Game) -> Bool {
+  nonisolated static func matchesTeamPair(home: String, away: String, target: Game) -> Bool {
     let lhs = pairKeyForMatching(home: home, away: away)
     let rhs = pairKeyForMatching(home: target.homeTeam, away: target.awayTeam)
     return lhs == rhs
   }
 
-  static func pairKeyForMatching(home: String, away: String) -> String {
+  nonisolated static func pairKeyForMatching(home: String, away: String) -> String {
     let h = normalizeForMatch(home)
     let a = normalizeForMatch(away)
     return h <= a ? "\(h)|\(a)" : "\(a)|\(h)"
   }
 
-  static func normalizeForMatch(_ s: String) -> String {
+  nonisolated static func normalizeForMatch(_ s: String) -> String {
     s.lowercased()
       .folding(options: .diacriticInsensitive, locale: Locale(identifier: "en_US"))
       .replacingOccurrences(of: "[^a-z0-9 ]", with: " ", options: .regularExpression)

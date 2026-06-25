@@ -54,9 +54,6 @@ struct ScrapeDiagnostic {
 final class WebViewScraper: NSObject {
   // MARK: - Shared resources
 
-  /// Shared across every scraper instance so cookies — especially Cloudflare's
-  /// `cf_clearance` set after a successful challenge — persist between probes.
-  private static let sharedProcessPool = WKProcessPool()
   /// Persistent (disk-backed) data store so cf_clearance / cf_bm cookies
   /// also survive app relaunches.
   private static let sharedDataStore: WKWebsiteDataStore = .default()
@@ -112,7 +109,9 @@ final class WebViewScraper: NSObject {
 
       let config = WKWebViewConfiguration()
       config.allowsInlineMediaPlayback = false
-      config.processPool = Self.sharedProcessPool
+      // Cookie persistence (incl. Cloudflare cf_clearance) is handled entirely
+      // by the shared, disk-backed data store. WKProcessPool no longer affects
+      // cookie sharing, so it's intentionally omitted.
       config.websiteDataStore = Self.sharedDataStore
       if let adBlockList {
         config.userContentController.add(adBlockList)
