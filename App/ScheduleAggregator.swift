@@ -18,8 +18,9 @@ protocol ListingProducer: Sendable {
   var coveredLeagues: Set<SportLeague> { get }
 
   /// Returns Games for today + tomorrow. Each producer manages its own
-  /// caching / TTL internally; this call may return cached results.
-  func todaysGames() async -> [Game]
+  /// caching / TTL internally; this call may return cached results unless
+  /// `forceRefresh` is set (e.g. pull-to-refresh), which bypasses the cache.
+  func todaysGames(forceRefresh: Bool) async -> [Game]
 }
 
 /// Wraps the existing `ESPNScheduleService` as a `ListingProducer`. Kept
@@ -31,10 +32,6 @@ struct ESPNListingProducer: ListingProducer {
      .eredivisie, .ligaMx, .championsLeague, .europaLeague,
      .worldCup, .clubWorldCup, .euros, .copaAmerica, .nationsLeague,
      .f1, .nascar, .ufc, .mma]
-  }
-
-  func todaysGames() async -> [Game] {
-    await ESPNScheduleService.shared.todaysGames()
   }
 
   func todaysGames(forceRefresh: Bool) async -> [Game] {
@@ -54,18 +51,16 @@ actor ScheduleAggregator {
   ]
 
   func todaysGames(forceRefresh: Bool = false) async -> [Game] {
-    // Run all producers in parallel. Each manages its own cache.
-    var results: [[Game]] = []
-    await withTaskGroup(of: [Game].self) { group in
-      for producer in producers {
-        group.addTask {
-          if let espn = producer as? ESPNListingProducer {
-            return await espn.todaysGames(forceRefresh: forceRefresh)
-          }
-          return await producer.todaysGames()
-        }
+    // Run all producers in parallel. Each manages its own cache. Results
+    // are slotted by producer index so merge order is deterministic
+    // regardless of which task finishes first (task-group completion order
+    // is otherwise nondeterministic).
+    var results = [[Game]](repeating: [], count: producers.count)
+    await withTaskGroup(of: (Int, [Game]).self) { group in
+      for (index, producer) in producers.enumerated() {
+        group.addTask { (index, await producer.todaysGames(forceRefresh: forceRefresh)) }
       }
-      for await games in group { results.append(games) }
+      for await (index, games) in group { results[index] = games }
     }
 
     // Merge. First producer wins on Game.id collision (ESPN first).

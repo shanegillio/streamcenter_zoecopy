@@ -629,6 +629,17 @@ struct PlayerView: View {
     case "auth_wall":
       authWallReason = event.info
       lastWalkEvent = event
+      // v2.69: an auth/login wall (streameast's SSO frame is the textbook
+      // case) means this source can't serve the stream without credentials.
+      // Bail immediately instead of re-scanning the login page until the
+      // budget expires — advance to the next source (or surface retry).
+      abortTerminal()
+    case "dead_page":
+      // v2.69: the page explicitly says the game/page is gone
+      // (crackstreams.ms "…doesn't exist or the event has ended."). No point
+      // re-scanning it; treat exactly like a dead end and move on.
+      lastWalkEvent = event
+      abortTerminal()
     case "target":
       lastWalkEvent = event
       autoFollowTarget(event.info)
@@ -693,6 +704,15 @@ struct PlayerView: View {
       // A fresh match attempt or an arrival — not a dead end.
       noNavStrikes = 0
     }
+  }
+
+  /// v2.69: a terminal page (auth wall, or an explicit "doesn't exist / event
+  /// has ended" page) was detected. There's nothing to recover here, so stop
+  /// the walk and move on. No-op once a stream is already playing or the
+  /// WebView-player fallback is active — those mean we found something.
+  private func abortTerminal() {
+    guard avPlayer == nil, !webViewFallbackActivated else { return }
+    handleDeadEnd()
   }
 
   /// The current source can identify the game but can't open it. Mark it
@@ -814,7 +834,16 @@ struct PlayerView: View {
       let hasFailed  = item?.status == .failed || item?.error != nil
       let isStalled  = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
                     && player.currentTime().seconds < 0.1
-      guard hasFailed || isStalled else { return }
+      guard hasFailed || isStalled else {
+        // v2.69: 8 s of healthy playback (progressed past position 0, no
+        // failure) is a strong signal the stream actually works. Auto-mark
+        // the traversal session "worked" so the log's success metric reflects
+        // reality instead of always 0 — outcomes were never marked by hand.
+        if let sid = traversalSessionID {
+          TraversalLog.shared.markOutcome(sid, .worked)
+        }
+        return
+      }
       if let sid = traversalSessionID {
         TraversalLog.shared.recordEvent(
           sid, kind: "avplayer_fallback",
@@ -2115,6 +2144,45 @@ struct StreamWebView: UIViewRepresentable {
         }
       }
 
+      // v2.69: detect terminal "this game/page is gone" pages so the walk
+      // can abort fast instead of re-scanning a dead page until the budget
+      // expires (crackstreams.ms returns "the page you're looking for
+      // doesn't exist or the event has ended."). Mirrors detectAuthWall:
+      // main frame only, fire once per page, gate on document.readyState
+      // complete (so a mid-load empty body never trips it), and require a
+      // SMALL DOM so the phrase appearing in a footer/FAQ of a real content
+      // page can never be mistaken for a dead page.
+      var _deadPageReported = false;
+      function detectDeadPage() {
+        if (window.top !== window) return;
+        if (_deadPageReported) return;
+        if (document.readyState !== 'complete') return;
+        var domSize = 0;
+        try { domSize = document.querySelectorAll('*').length; } catch(e){}
+        if (domSize > 800) return;
+        var body = '';
+        try { body = (document.body && (document.body.innerText || document.body.textContent) || ''); } catch(e){}
+        body = body.toLowerCase().replace(/[‘’]/g, "'");
+        if (!body) return;
+        var phrases = [
+          "page you're looking for doesn't exist",
+          "page you are looking for doesn't exist",
+          "the event has ended",
+          "event has ended",
+          "stream has ended",
+          "page not found",
+          "404 not found",
+          "no longer available"
+        ];
+        for (var i = 0; i < phrases.length; i++) {
+          if (body.indexOf(phrases[i]) !== -1) {
+            _deadPageReported = true;
+            postWalkEvent('dead_page', phrases[i]);
+            return;
+          }
+        }
+      }
+
       // v2.45: many modern JS frameworks (React, Vue, Svelte) attach
       // their click handlers via addEventListener for pointer/mouse
       // events rather than the inline onclick that .click() synthesizes.
@@ -2997,6 +3065,7 @@ struct StreamWebView: UIViewRepresentable {
         // Bounded by _maxWalkClicks; no-op once we've clicked enough.
         try { tryAdvance(); } catch(e){}
         try { detectAuthWall(); } catch(e){}
+        try { detectDeadPage(); } catch(e){}
 
         var mirrorSelectors = [
           '.vjs-big-play-button', '.jw-icon-display', '.jw-display-icon-display',

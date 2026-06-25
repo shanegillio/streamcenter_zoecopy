@@ -25,8 +25,8 @@ actor TheSportsDBProducer: ListingProducer {
   }
   private var cache: CacheEntry?
 
-  func todaysGames() async -> [Game] {
-    if let cached = cache, Date() < cached.expiry {
+  func todaysGames(forceRefresh: Bool = false) async -> [Game] {
+    if !forceRefresh, let cached = cache, Date() < cached.expiry {
       return cached.games
     }
 
