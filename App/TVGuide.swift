@@ -2,25 +2,44 @@ import SwiftUI
 
 // MARK: - Theme
 //
-// The redesign themes the whole app around a dark "TV guide" look: a slate
-// background with periwinkle/indigo panels and rows. Colors are centralized
-// here so the home screen, guide grid, and settings all match.
+// The app now follows the system light/dark appearance, styled like standard
+// iOS (grouped backgrounds + white/dark cards) with the app's indigo accent
+// running through it. Colors are centralized here so the home screen, guide
+// grid, and settings all match and all adapt to the active color scheme.
+
+/// Builds a color that resolves differently in light vs dark mode.
+extension Color {
+  init(light: Color, dark: Color) {
+    self = Color(uiColor: UIColor { traits in
+      traits.userInterfaceStyle == .dark ? UIColor(dark) : UIColor(light)
+    })
+  }
+}
 
 enum GuideTheme {
-  /// App background — dark slate.
-  static let background = Color(red: 0.16, green: 0.20, blue: 0.27)
-  /// Slightly lifted slate for the guide body.
-  static let surface = Color(red: 0.19, green: 0.24, blue: 0.32)
-  /// Periwinkle/indigo panel used for cards, rows, and the channel column.
-  static let panel = Color(red: 0.29, green: 0.34, blue: 0.53)
-  /// Brighter panel for selected / interactive cells.
-  static let panelBright = Color(red: 0.36, green: 0.42, blue: 0.66)
+  /// App background — system grouped background (light gray / true black).
+  static let background = Color(light: Color(red: 0.95, green: 0.95, blue: 0.97),
+                               dark: .black)
+  /// Guide body lane behind the game blocks. Matches the app background so the
+  /// accent-colored blocks float on top like a calendar.
+  static let surface = Color(light: Color(red: 0.95, green: 0.95, blue: 0.97),
+                            dark: .black)
+  /// Card / row fill — white in light mode, elevated dark gray in dark mode.
+  static let panel = Color(light: .white,
+                          dark: Color(red: 0.11, green: 0.11, blue: 0.12))
+  /// Accent panel used for game blocks and selected / interactive cells.
+  static let panelBright = Color.accentColor
   /// Header bars (date row, time row).
-  static let headerBar = Color(red: 0.23, green: 0.28, blue: 0.40)
-  /// Live game block tint.
-  static let live = Color(red: 0.78, green: 0.20, blue: 0.22)
-  static let text = Color.white
-  static let textDim = Color.white.opacity(0.6)
+  static let headerBar = Color(light: Color(red: 0.90, green: 0.90, blue: 0.92),
+                              dark: Color(red: 0.17, green: 0.17, blue: 0.18))
+  /// Live game block tint (reads well on both appearances).
+  static let live = Color(red: 0.80, green: 0.22, blue: 0.24)
+  /// Hairline separators between rows / channels.
+  static let separator = Color(light: Color.black.opacity(0.12),
+                              dark: Color.white.opacity(0.12))
+  static let text = Color(light: .black, dark: .white)
+  static let textDim = Color(light: Color.black.opacity(0.55),
+                            dark: Color.white.opacity(0.6))
 
   /// Points per minute on the timeline. Tuned so ~2 hours of programming
   /// fills the timeline width on a phone (≈300 pt ÷ 120 min), giving the
@@ -38,6 +57,8 @@ enum GuideTheme {
   /// row-packer measures against this same width, so wider blocks just push
   /// concurrent games onto additional channel rows instead of overlapping.
   static let minBlockWidth: CGFloat = 175
+  /// Horizontal gutter trimmed from each block so adjacent games don't touch.
+  static let blockGap: CGFloat = 6
 }
 
 // MARK: - Liquid glass helper
@@ -265,7 +286,7 @@ struct TVGuideView: View {
                 selectedGameID: selectedGameID,
                 onSelect: onSelect
               )
-              Divider().overlay(Color.black.opacity(0.25))
+              Divider().overlay(GuideTheme.separator)
             }
           }
           // Red "now" line spanning the header + all rows (visual only).
@@ -398,8 +419,10 @@ struct GuideTimelineRow: View {
         // and visually overlapped the next (non-overlapping) game on the row.
         let x = max(0, axis.x(for: start))
         let w = max(GuideTheme.minBlockWidth, axis.x(for: end) - x)
+        // Trim a few points off each block's width so consecutive games on a
+        // row never visually touch — a small gutter between cards.
         GuideGameBlock(game: game, isSelected: game.id == selectedGameID)
-          .frame(width: w, height: GuideTheme.rowHeight - 10)
+          .frame(width: max(40, w - GuideTheme.blockGap), height: GuideTheme.rowHeight - 10)
           .offset(x: x, y: 5)
           .onTapGesture { onSelect(game) }
       }

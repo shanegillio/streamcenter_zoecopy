@@ -13,7 +13,7 @@ struct SettingsView: View {
       Section("Sources") {
         NavigationLink(destination: SourceListView()) {
           HStack(spacing: 12) {
-            settingsIcon(systemName: "antenna.radiowaves.left.and.right", color: .blue)
+            settingsIcon(systemName: "antenna.radiowaves.left.and.right")
             Text("Sources")
               .foregroundStyle(GuideTheme.text)
             Spacer()
@@ -30,7 +30,7 @@ struct SettingsView: View {
       Section {
         NavigationLink(destination: FavoriteSportsView()) {
           settingsRow(
-            icon: "sportscourt.fill", color: .green,
+            icon: "sportscourt.fill",
             title: "Sports",
             count: favorites.favoriteSports.count
           )
@@ -38,7 +38,7 @@ struct SettingsView: View {
         .listRowBackground(GuideTheme.panel)
         NavigationLink(destination: FavoriteLeaguesView()) {
           settingsRow(
-            icon: "trophy.fill", color: .yellow,
+            icon: "trophy.fill",
             title: "Leagues",
             count: favorites.favoriteLeagues.count
           )
@@ -46,7 +46,7 @@ struct SettingsView: View {
         .listRowBackground(GuideTheme.panel)
         NavigationLink(destination: FavoriteTeamsView()) {
           settingsRow(
-            icon: "person.3.fill", color: .teal,
+            icon: "person.3.fill",
             title: "Teams",
             count: favorites.favoriteTeams.count
           )
@@ -54,7 +54,7 @@ struct SettingsView: View {
         .listRowBackground(GuideTheme.panel)
         NavigationLink(destination: AllFavoritesView()) {
           settingsRow(
-            icon: "star.fill", color: .orange,
+            icon: "star.fill",
             title: "All favorites",
             count: 0
           )
@@ -70,7 +70,7 @@ struct SettingsView: View {
       Section {
         Toggle(isOn: $debugScraping) {
           HStack(spacing: 12) {
-            settingsIcon(systemName: "ladybug.fill", color: .pink)
+            settingsIcon(systemName: "ladybug.fill")
             Text("Debugging mode")
               .foregroundStyle(GuideTheme.text)
           }
@@ -78,7 +78,7 @@ struct SettingsView: View {
         .listRowBackground(GuideTheme.panel)
         NavigationLink(destination: DiagnosticsView()) {
           HStack(spacing: 12) {
-            settingsIcon(systemName: "wrench.and.screwdriver.fill", color: .purple)
+            settingsIcon(systemName: "wrench.and.screwdriver.fill")
             Text("Source Diagnostics")
               .foregroundStyle(GuideTheme.text)
           }
@@ -87,7 +87,7 @@ struct SettingsView: View {
         .listRowBackground(GuideTheme.panel)
         NavigationLink(destination: TraversalLogView()) {
           HStack(spacing: 12) {
-            settingsIcon(systemName: "list.bullet.rectangle.fill", color: .indigo)
+            settingsIcon(systemName: "list.bullet.rectangle.fill")
             Text("Traversal Log")
               .foregroundStyle(GuideTheme.text)
           }
@@ -105,25 +105,26 @@ struct SettingsView: View {
     .background(GuideTheme.background)
     .navigationTitle("Settings")
     .navigationBarTitleDisplayMode(.large)
-    .preferredColorScheme(.dark)
   }
 
   // MARK: - Helpers
 
-  private func settingsIcon(systemName: String, color: Color) -> some View {
-    ZStack {
-      RoundedRectangle(cornerRadius: 8)
-        .fill(color.opacity(0.15))
-        .frame(width: 32, height: 32)
-      Image(systemName: systemName)
-        .font(.system(size: 14, weight: .semibold))
-        .foregroundStyle(color)
-    }
+  /// Standard iOS-style settings glyph: a filled accent square with a white
+  /// symbol. Every row uses the same accent so the list reads as one app.
+  private func settingsIcon(systemName: String) -> some View {
+    RoundedRectangle(cornerRadius: 7, style: .continuous)
+      .fill(Color.accentColor)
+      .frame(width: 30, height: 30)
+      .overlay(
+        Image(systemName: systemName)
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(.white)
+      )
   }
 
-  private func settingsRow(icon: String, color: Color, title: String, count: Int) -> some View {
+  private func settingsRow(icon: String, title: String, count: Int) -> some View {
     HStack(spacing: 12) {
-      settingsIcon(systemName: icon, color: color)
+      settingsIcon(systemName: icon)
       Text(title).foregroundStyle(GuideTheme.text)
       Spacer()
       if count > 0 {
@@ -211,7 +212,6 @@ struct SourceListView: View {
     }
     .navigationTitle("Sources")
     .navigationBarTitleDisplayMode(.large)
-    .preferredColorScheme(.dark)
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {
         Button { beginAdd() } label: {
@@ -368,7 +368,6 @@ extension View {
       .listStyle(.insetGrouped)
       .scrollContentBackground(.hidden)
       .background(GuideTheme.background)
-      .preferredColorScheme(.dark)
   }
 }
 
@@ -377,7 +376,7 @@ extension View {
 func FavoriteStar(_ on: Bool) -> some View {
   Image(systemName: on ? "star.fill" : "star")
     .font(.system(size: 17))
-    .foregroundStyle(on ? AnyShapeStyle(.yellow) : AnyShapeStyle(.white.opacity(0.28)))
+    .foregroundStyle(on ? AnyShapeStyle(.yellow) : AnyShapeStyle(Color(.tertiaryLabel)))
 }
 
 // MARK: - Favorite Sports
@@ -538,14 +537,13 @@ struct LeagueTeamsView: View {
               proxy.scrollTo(letter, anchor: .top)
             }
           }
-          .padding(.trailing, 1)
+          .padding(.trailing, 4)
         }
       }
     }
     .navigationTitle("\(league.displayName) Teams")
     .navigationBarTitleDisplayMode(.inline)
     .searchable(text: $search, prompt: "Search teams…")
-    .preferredColorScheme(.dark)
   }
 
   private func teamRow(_ team: String) -> some View {
@@ -562,34 +560,39 @@ struct LeagueTeamsView: View {
   }
 }
 
-/// Vertical alphabet index on the trailing edge. Tap or drag to jump.
+/// Vertical alphabet index on the trailing edge. Tap or drag to jump. Sized to
+/// its letters (compact) and centered vertically rather than stretched edge to
+/// edge, with breathing room on either side.
 struct SectionIndexBar: View {
   let letters: [String]
   let onSelect: (String) -> Void
 
   var body: some View {
-    GeometryReader { geo in
-      VStack(spacing: 0) {
-        ForEach(letters, id: \.self) { letter in
-          Text(letter)
-            .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(.blue)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
+    VStack(spacing: 2) {
+      ForEach(letters, id: \.self) { letter in
+        Text(letter)
+          .font(.system(size: 10, weight: .semibold))
+          .foregroundStyle(.tint)
       }
-      .frame(width: 18)
-      .contentShape(Rectangle())
-      .gesture(
-        DragGesture(minimumDistance: 0)
-          .onChanged { value in
-            guard !letters.isEmpty, geo.size.height > 0 else { return }
-            let slot = geo.size.height / CGFloat(letters.count)
-            let idx = min(letters.count - 1, max(0, Int(value.location.y / slot)))
-            onSelect(letters[idx])
-          }
-      )
     }
-    .frame(width: 18)
+    .padding(.vertical, 8)
+    .padding(.horizontal, 7)
+    .contentShape(Rectangle())
+    .overlay {
+      GeometryReader { geo in
+        Color.clear
+          .contentShape(Rectangle())
+          .gesture(
+            DragGesture(minimumDistance: 0)
+              .onChanged { value in
+                guard !letters.isEmpty, geo.size.height > 0 else { return }
+                let slot = geo.size.height / CGFloat(letters.count)
+                let idx = min(letters.count - 1, max(0, Int(value.location.y / slot)))
+                onSelect(letters[idx])
+              }
+          )
+      }
+    }
   }
 }
 
@@ -670,7 +673,7 @@ struct AllFavoritesView: View {
               .listRowBackground(GuideTheme.panel)
             }
           } label: {
-            sectionLabel("Sports", systemImage: "sportscourt.fill", color: .green)
+            sectionLabel("Sports", systemImage: "sportscourt.fill")
           }
           .listRowBackground(GuideTheme.panel)
         }
@@ -690,7 +693,7 @@ struct AllFavoritesView: View {
               .listRowBackground(GuideTheme.panel)
             }
           } label: {
-            sectionLabel("Leagues", systemImage: "trophy.fill", color: .yellow)
+            sectionLabel("Leagues", systemImage: "trophy.fill")
           }
           .listRowBackground(GuideTheme.panel)
         }
@@ -701,14 +704,13 @@ struct AllFavoritesView: View {
           DisclosureGroup {
             ForEach(favoriteTeams, id: \.self) { team in
               HStack(spacing: 12) {
-                Circle()
-                  .fill(Color.gray.opacity(0.45))
-                  .frame(width: 34, height: 34)
-                  .overlay(
-                    Text(teamInitials(team))
-                      .font(.caption.weight(.bold))
-                      .foregroundStyle(.white)
-                  )
+                // Real crest when we can resolve the team's league; TeamLogo
+                // falls back to a colored initials circle when no logo exists.
+                TeamLogo(
+                  teamName: team.capitalized,
+                  league: FavoritesStore.league(forTeamNamed: team) ?? .other,
+                  size: 34
+                )
                 Text(team.capitalized).foregroundStyle(GuideTheme.text)
                 Spacer()
                 starButton { favorites.toggleTeam(team) }
@@ -717,7 +719,7 @@ struct AllFavoritesView: View {
               .listRowBackground(GuideTheme.panel)
             }
           } label: {
-            sectionLabel("Teams", systemImage: "person.3.fill", color: .teal)
+            sectionLabel("Teams", systemImage: "person.3.fill")
           }
           .listRowBackground(GuideTheme.panel)
         }
@@ -728,17 +730,18 @@ struct AllFavoritesView: View {
     .background(GuideTheme.background)
     .navigationTitle("All Favorites")
     .navigationBarTitleDisplayMode(.large)
-    .preferredColorScheme(.dark)
   }
 
-  private func sectionLabel(_ title: String, systemImage: String, color: Color) -> some View {
+  private func sectionLabel(_ title: String, systemImage: String) -> some View {
     HStack(spacing: 12) {
-      ZStack {
-        RoundedRectangle(cornerRadius: 9).fill(color.opacity(0.22)).frame(width: 34, height: 34)
-        Image(systemName: systemImage)
-          .font(.system(size: 16, weight: .semibold))
-          .foregroundStyle(color)
-      }
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .fill(Color.accentColor)
+        .frame(width: 32, height: 32)
+        .overlay(
+          Image(systemName: systemImage)
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(.white)
+        )
       Text(title).font(.body.weight(.semibold)).foregroundStyle(GuideTheme.text)
     }
   }
@@ -748,14 +751,11 @@ struct AllFavoritesView: View {
       Image(systemName: "star.fill")
         .font(.system(size: 17))
         .foregroundStyle(.yellow)
+        // Fixed width + trailing inset so every row's star lines up in the
+        // same column, pulled slightly in from the edge.
+        .frame(width: 28, alignment: .center)
+        .padding(.trailing, 4)
     }
     .buttonStyle(.plain)
   }
-}
-
-/// First-letters initials for a team name, e.g. "Red Sox" → "RS".
-func teamInitials(_ name: String) -> String {
-  let words = name.split(separator: " ").prefix(2)
-  let letters = words.compactMap { $0.first }.map(String.init)
-  return letters.joined().uppercased()
 }

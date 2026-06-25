@@ -25,7 +25,6 @@ struct HomeView: View {
       }
       .toolbar(.hidden, for: .navigationBar)
     }
-    .preferredColorScheme(.dark)
     .task { await loadLeagues() }
     .task(id: registry.selectedSource.id) {
       guard !registry.sources.isEmpty else { return }
@@ -97,7 +96,7 @@ struct HomeView: View {
   private var guideArea: some View {
     if isLoadingLive && allLiveGames.isEmpty && allUpcomingGames.isEmpty {
       Spacer()
-      ProgressView().tint(.white).scaleEffect(1.3)
+      ProgressView().tint(.secondary).scaleEffect(1.3)
       Spacer()
     } else if allLiveGames.isEmpty && allUpcomingGames.isEmpty {
       Spacer(); emptyState; Spacer()
@@ -129,8 +128,8 @@ struct HomeView: View {
           }
         }
       }
-      .padding(.horizontal, 14)
-      .padding(.bottom, 10)
+      .padding(.horizontal, 16)
+      .padding(.bottom, 12)
     }
   }
 
@@ -249,7 +248,7 @@ struct HomeView: View {
       }
       .disabled(isRetrying)
       .buttonStyle(.bordered)
-      .tint(.white)
+      .tint(.accentColor)
     }
   }
 
@@ -555,7 +554,7 @@ struct LoadingPhraseView: View {
 
   var body: some View {
     VStack(spacing: 14) {
-      ProgressView().scaleEffect(1.3).tint(.white)
+      ProgressView().scaleEffect(1.3).tint(.secondary)
       Text(Self.phrases[index % Self.phrases.count] + "…")
         .font(.subheadline)
         .foregroundStyle(GuideTheme.textDim)

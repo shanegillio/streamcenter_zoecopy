@@ -150,6 +150,17 @@ final class FavoritesStore {
     isTeamFavorite(game.homeTeam) || isTeamFavorite(game.awayTeam)
   }
 
+  /// Best-guess league for a stored team name, used to fetch its logo on the
+  /// All Favorites page (where only the name is persisted). Matches against the
+  /// known-teams table case-insensitively; returns nil when unknown.
+  static func league(forTeamNamed name: String) -> SportLeague? {
+    let lower = name.lowercased()
+    for group in knownTeams {
+      if group.teams.contains(where: { $0.lowercased() == lower }) { return group.league }
+    }
+    return nil
+  }
+
   // All known teams grouped by league, drawn from the static ESPN table
   static let knownTeams: [(league: SportLeague, teams: [String])] = [
     (.nfl, ["Cardinals","Falcons","Ravens","Bills","Panthers","Bears","Bengals","Browns",
