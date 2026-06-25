@@ -122,10 +122,16 @@ struct HomeView: View {
 
   // MARK: - Selection / channel surfing
 
-  /// Games the up/down controls cycle through: live first, then upcoming as
-  /// a fallback so the controls always do something.
-  private var surfList: [Game] {
-    allLiveGames.isEmpty ? allUpcomingGames : allLiveGames
+  /// The guide's channel rows in the exact order they're drawn on screen, so
+  /// the up/down controls walk the listing top-to-bottom like a TV remote.
+  private var surfChannels: [GuideChannel] {
+    TVGuideLayout.channels(live: allLiveGames, upcoming: allUpcomingGames, now: Date())
+  }
+
+  /// The game a channel row "tunes to": the live game if one is on, otherwise
+  /// the next game up on that channel.
+  private func tunedGame(for channel: GuideChannel) -> Game? {
+    channel.games.first(where: { $0.isLive }) ?? channel.games.first
   }
 
   private func select(_ game: Game) {
@@ -135,17 +141,25 @@ struct HomeView: View {
     selectedGame = game
   }
 
+  /// Move up (-1) or down (+1) the channel listing, wrapping around. This walks
+  /// channels in display order rather than jumping through the live-games list,
+  /// so pressing down always lands on the next channel shown in the guide.
   private func surf(by delta: Int) {
-    let list = surfList
-    guard !list.isEmpty else { return }
-    let currentIdx = list.firstIndex(where: { $0.id == selectedGame?.id })
+    let channels = surfChannels
+    guard !channels.isEmpty else { return }
+    // Find the channel that currently holds the selected game.
+    let currentIdx = channels.firstIndex { ch in
+      ch.games.contains { $0.id == selectedGame?.id }
+    }
     let nextIdx: Int
     if let i = currentIdx {
-      nextIdx = (i + delta + list.count) % list.count
+      nextIdx = (i + delta + channels.count) % channels.count
     } else {
-      nextIdx = 0
+      nextIdx = delta >= 0 ? 0 : channels.count - 1
     }
-    select(list[nextIdx])
+    if let game = tunedGame(for: channels[nextIdx]) {
+      select(game)
+    }
   }
 
   private func goToPreviousChannel() {

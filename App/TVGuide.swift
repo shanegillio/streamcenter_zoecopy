@@ -29,8 +29,15 @@ enum GuideTheme {
   static let rowHeight: CGFloat = 72
   static let channelColumnWidth: CGFloat = 64
   static let headerHeight: CGFloat = 34
-  /// Minimum rendered width for a very short event block.
-  static let minBlockWidth: CGFloat = 90
+  /// Minimum rendered width for a block, regardless of how little time the
+  /// game has left. The guide is styled like a TV listing, so a game that's
+  /// nearly over (or in overtime) still gets a full, readable card rather than
+  /// shrinking to an unreadable sliver — at the cost of the block no longer
+  /// matching the game's literal remaining time. 175 pt ≈ 70 minutes at the
+  /// current scale, enough to show both team names and the status line. The
+  /// row-packer measures against this same width, so wider blocks just push
+  /// concurrent games onto additional channel rows instead of overlapping.
+  static let minBlockWidth: CGFloat = 175
 }
 
 // MARK: - Liquid glass helper
@@ -415,9 +422,11 @@ struct GuideGameBlock: View {
   var body: some View {
     HStack(spacing: 9) {
       logos
-      teamNames
-      Spacer(minLength: 4)
-      status
+      VStack(alignment: .leading, spacing: 2) {
+        teamNames
+        status
+      }
+      Spacer(minLength: 0)
     }
     .foregroundStyle(.white)
     .padding(.horizontal, 11)
@@ -447,35 +456,38 @@ struct GuideGameBlock: View {
       Text(game.homeTeam)
         .font(.system(size: 13, weight: .bold))
         .lineLimit(2)
+        .minimumScaleFactor(0.7)
+        .multilineTextAlignment(.leading)
         .fixedSize(horizontal: false, vertical: true)
     } else {
-      VStack(alignment: .center, spacing: 1) {
+      VStack(alignment: .leading, spacing: 1) {
         Text(game.homeTeam)
           .font(.system(size: 13, weight: .bold))
           .lineLimit(1)
-        Text("vs")
-          .font(.system(size: 9, weight: .semibold))
-          .foregroundStyle(.white.opacity(0.6))
+          .minimumScaleFactor(0.6)
         Text(game.awayTeam)
           .font(.system(size: 13, weight: .bold))
           .lineLimit(1)
+          .minimumScaleFactor(0.6)
       }
     }
   }
 
+  // Status sits on its own line beneath the names so it never competes with
+  // them for horizontal space — the full block width is available for names.
   @ViewBuilder
   private var status: some View {
     if game.isLive {
       HStack(spacing: 4) {
-        Circle().fill(.white).frame(width: 6, height: 6)
-        Text("LIVE").font(.system(size: 13, weight: .heavy))
+        Circle().fill(.white).frame(width: 5, height: 5)
+        Text("LIVE").font(.system(size: 11, weight: .heavy))
       }
     } else {
       Text(game.displayTime)
-        .font(.system(size: 13, weight: .semibold))
+        .font(.system(size: 11, weight: .semibold))
         .foregroundStyle(.white.opacity(0.92))
         .lineLimit(1)
-        .fixedSize()
+        .minimumScaleFactor(0.8)
     }
   }
 
