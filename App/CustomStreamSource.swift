@@ -43,27 +43,53 @@ struct CustomStreamSource: StreamSource {
 
   /// For each game in `games`, return the URL on this source's homepage
   /// that matches (text or href contains both normalized team names).
-  /// Falls back to a single LLM call when plain matching produces zero
-  /// hits — the user's "LLM/scraper hybrid" verbatim.
+  /// When the homepage yields nothing, follows up to 2 "matches/live/
+  /// schedule" section links in case games live on a subpage (e.g. ntv.cx
+  /// whose homepage is a server-selector; games are at /matches/kobra).
+  /// Falls back to a single LLM call when plain matching produces zero hits.
   func matchedGameURLs(amongCanonical games: [Game]) async -> [String: URL] {
-    let links = await scrapeLinks()
-    guard !links.isEmpty else { return [:] }
+    let rootLinks = await scrapeLinks()
+    guard !rootLinks.isEmpty else { return [:] }
 
+    var allLinks = rootLinks
     var matches: [String: URL] = [:]
     for game in games {
-      if let url = findLink(in: links, matching: game) {
+      if let url = findLink(in: allLinks, matching: game) {
         matches[game.id] = url
       }
     }
 
-    // v2.34: LLM fills gaps. With Pass 1.8 JSON-LD and accessibility-
-    // attribute capture in v2.34 WebViewScraper, plain matching covers
-    // the common case. The LLM only fires on the unmatched remainder
-    // (one call per source per refresh, max), and only when something
-    // actually slipped through plain matching.
+    // If nothing matched on the homepage, follow up to 2 "section" links
+    // (paths containing matches/live/schedule/fixtures) and merge their
+    // scraped links. Runs only when the homepage was genuinely empty of
+    // game links — no extra latency for sites that work normally.
+    if matches.isEmpty {
+      let sections = Array(sectionURLs(in: rootLinks).prefix(2))
+      if !sections.isEmpty {
+        let extra = await withTaskGroup(of: [ScrapedLink].self) { group in
+          for url in sections {
+            group.addTask {
+              let s = await MainActor.run { WebViewScraper() }
+              return await s.scrapeWithDiagnostic(url: url, timeout: 10).links
+            }
+          }
+          var out: [ScrapedLink] = []
+          for await batch in group { out.append(contentsOf: batch) }
+          return out
+        }
+        allLinks.append(contentsOf: extra)
+        for game in games {
+          if let url = findLink(in: allLinks, matching: game) {
+            matches[game.id] = url
+          }
+        }
+      }
+    }
+
+    // LLM fills remaining gaps. Fires at most once per source per refresh.
     let unmatched = games.filter { matches[$0.id] == nil }
     if !unmatched.isEmpty, FoundationModelScraper.isSupported {
-      if let llmMatches = await llmFallback(links: links, games: unmatched) {
+      if let llmMatches = await llmFallback(links: allLinks, games: unmatched) {
         for (id, url) in llmMatches where matches[id] == nil {
           matches[id] = url
         }
@@ -72,21 +98,69 @@ struct CustomStreamSource: StreamSource {
     return matches
   }
 
+  /// Returns same-domain links from `rootLinks` whose path or text contains
+  /// a "matches/live/schedule/fixtures" keyword — these are candidate
+  /// game-listing subpages when the homepage itself has no game links.
+  private func sectionURLs(in rootLinks: [ScrapedLink]) -> [URL] {
+    let keywords = ["matches", "live", "schedule", "fixtures", "streams"]
+    var seen = Set<String>()
+    var result: [URL] = []
+    for link in rootLinks {
+      guard !link.href.isEmpty, link.href != "/" else { continue }
+      let hay = link.href.lowercased() + " " + link.text.lowercased()
+      guard keywords.contains(where: { hay.contains($0) }) else { continue }
+      guard let url = URL(string: link.href, relativeTo: baseURL)?.absoluteURL,
+            url.host == baseURL.host else { continue }
+      let key = url.absoluteString
+      guard !seen.contains(key) else { continue }
+      seen.insert(key)
+      result.append(url)
+    }
+    return result
+  }
+
   // MARK: Matching
 
-  /// Plain substring match: both team names (normalized) must appear in
-  /// the link's text or href. Solo events (empty awayTeam) match on home
-  /// only. Normalization mirrors `HomeView.normalizeForMatch` — diacritic-
-  /// fold + lowercase + punctuation-strip.
+  /// Match a link to a game using TeamAliasIndex — handles both full-name
+  /// slugs (buffstreams.plus: `/mlb/houston-astros-detroit-tigers/123`) and
+  /// abbreviation-routed URLs (ppv.to: `/live/mlb/2026-06-07/wsh-ari`).
+  /// Checks href first (URL slug is the strongest signal), then link text.
+  /// Falls back to plain substring when neither team is in the index.
   private func findLink(in links: [ScrapedLink], matching game: Game) -> URL? {
+    let index = TeamAliasIndex.shared
+    let soloEvent = HomeView.normalizeForMatch(game.awayTeam).isEmpty
+    let useIndex = index.hasTokens(forTeam: game.homeTeam) &&
+                   (soloEvent || index.hasTokens(forTeam: game.awayTeam))
+
+    if useIndex {
+      // href first — URL slugs are the most reliable signal.
+      for link in links {
+        let key = " " + HomeView.normalizeForMatch(link.href) + " "
+        if index.matches(team: game.homeTeam, inPadded: key),
+           soloEvent || index.matches(team: game.awayTeam, inPadded: key),
+           let url = URL(string: link.href, relativeTo: baseURL)?.absoluteURL {
+          return url
+        }
+      }
+      // link text second.
+      for link in links {
+        let key = " " + HomeView.normalizeForMatch(link.text) + " "
+        if index.matches(team: game.homeTeam, inPadded: key),
+           soloEvent || index.matches(team: game.awayTeam, inPadded: key),
+           let url = URL(string: link.href, relativeTo: baseURL)?.absoluteURL {
+          return url
+        }
+      }
+      return nil
+    }
+
+    // Plain substring fallback for teams not in the database.
     let homeKey = HomeView.normalizeForMatch(game.homeTeam)
     let awayKey = HomeView.normalizeForMatch(game.awayTeam)
     guard !homeKey.isEmpty else { return nil }
     for link in links {
       let blob = HomeView.normalizeForMatch(link.text + " " + link.href)
-      let hasHome = blob.contains(homeKey)
-      let hasAway = awayKey.isEmpty || blob.contains(awayKey)
-      if hasHome && hasAway,
+      if blob.contains(homeKey), awayKey.isEmpty || blob.contains(awayKey),
          let url = URL(string: link.href, relativeTo: baseURL)?.absoluteURL {
         return url
       }
