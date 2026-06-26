@@ -25,6 +25,15 @@
       ],
       "versions": [
         {
+          "version": "2.60",
+          "date": "2026-06-26",
+          "size": 1666262,
+          "downloadURL": "https://github.com/shanegillio/streamcenter_zoecopy/releases/download/v2.60/StreamCenter-2.60.ipa",
+          "localizedDescription": "Redesigned TV guide: taller channel rows with a logo beside each team name, the LIVE/start time on its own line, and a light-red treatment for live games so the red 'now' line stays visible. Channel column now shows a 'CODE N' label (e.g. MLB 1) with stylized icons. Settings and all the favorites pages get a dark-purple theme with amber icons to match the guide.",
+          "buildVersion": "260",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "2.59",
           "date": "2026-06-26",
           "size": 1641160,
