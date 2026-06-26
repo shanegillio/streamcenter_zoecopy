@@ -418,7 +418,19 @@ struct HomeView: View {
   nonisolated static func matchesTeamPair(home: String, away: String, target: Game) -> Bool {
     let lhs = pairKeyForMatching(home: home, away: away)
     let rhs = pairKeyForMatching(home: target.homeTeam, away: target.awayTeam)
-    return lhs == rhs
+    if lhs == rhs { return true }
+    // Fuzzy fallback: the candidate's two teams resemble the target's two teams
+    // (in either home/away orientation) by name similarity. Catches spelling
+    // and cross-language variants that an exact key compare misses.
+    func compact(_ s: String) -> String {
+      normalizeForMatch(s).replacingOccurrences(of: " ", with: "")
+    }
+    let cHome = compact(home), cAway = compact(away)
+    let tHome = compact(target.homeTeam), tAway = compact(target.awayTeam)
+    guard !cHome.isEmpty, !cAway.isEmpty, !tHome.isEmpty, !tAway.isEmpty else { return false }
+    let direct = min(StringSimilarity.dice(cHome, tHome), StringSimilarity.dice(cAway, tAway))
+    let swapped = min(StringSimilarity.dice(cHome, tAway), StringSimilarity.dice(cAway, tHome))
+    return max(direct, swapped) >= 0.8
   }
 
   nonisolated static func pairKeyForMatching(home: String, away: String) -> String {

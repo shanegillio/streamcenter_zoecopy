@@ -58,13 +58,17 @@ enum ColorBarsVideo {
   // MARK: - Generation
 
   nonisolated private static func generateClip(barComponents: [[CGFloat]]) -> URL? {
-    let width = 960
-    let height = 540
+    let width = 640
+    let height = 360
     let bars = barComponents.map {
       UIColor(red: $0[0], green: $0[1], blue: $0[2], alpha: $0[3])
     }
     let count = bars.count
     let fps: Int32 = 2  // each frame held 0.5 s, matching the guide's shift rate
+    // Repeat the short scroll cycle to fill a long clip so a single load never
+    // reaches the loop boundary — avoids a visible playback-timer reset on the
+    // AirPlay screen. ~2 minutes comfortably outlasts a normal load.
+    let totalSeconds = 120
 
     let url = FileManager.default.temporaryDirectory
       .appendingPathComponent("streamcenter-colorbars.mp4")
@@ -91,18 +95,26 @@ enum ColorBarsVideo {
     guard writer.startWriting() else { return nil }
     writer.startSession(atSourceTime: .zero)
 
-    // One frame per shift step = one full scroll cycle.
+    // Render the unique scroll-cycle frames once, then repeat them to fill the
+    // long clip (cheap — only `count` distinct frames are ever rendered).
+    var cycle: [CVPixelBuffer] = []
     for step in 0..<count {
       guard let image = renderFrame(width: width, height: height, shift: step, bars: bars),
             let buffer = pixelBuffer(from: image, width: width, height: height)
       else { continue }
+      cycle.append(buffer)
+    }
+    guard !cycle.isEmpty else { return nil }
+
+    let totalFrames = totalSeconds * Int(fps)
+    for i in 0..<totalFrames {
       while !input.isReadyForMoreMediaData { usleep(2000) }
-      adaptor.append(buffer, withPresentationTime: CMTime(value: CMTimeValue(step), timescale: fps))
+      adaptor.append(cycle[i % cycle.count], withPresentationTime: CMTime(value: CMTimeValue(i), timescale: fps))
     }
 
     input.markAsFinished()
     let done = DispatchSemaphore(value: 0)
-    writer.endSession(atSourceTime: CMTime(value: CMTimeValue(count), timescale: fps))
+    writer.endSession(atSourceTime: CMTime(value: CMTimeValue(totalFrames), timescale: fps))
     writer.finishWriting { done.signal() }
     done.wait()
     return writer.status == .completed ? url : nil
@@ -176,10 +188,6 @@ enum ColorBarsVideo {
         | CGBitmapInfo.byteOrder32Little.rawValue
     ) else { return nil }
 
-    // Flip to compensate for CGContext's bottom-left origin so the rendered
-    // image (and its "Loading…" text) is stored upright in the pixel buffer.
-    ctx.translateBy(x: 0, y: CGFloat(height))
-    ctx.scaleBy(x: 1, y: -1)
     ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
     return buffer
   }
