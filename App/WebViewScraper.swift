@@ -7,6 +7,9 @@ struct ScrapedLink {
   let text: String
   /// Text scraped from a nearby status/score/badge element in the DOM (e.g. "Bottom 6th", "3-1")
   let status: String
+  /// CSS class string of the nearest ancestor container element (up to 120 chars).
+  /// Lets the model distinguish game-card links from navigation without seeing the full DOM.
+  let containerClass: String
 }
 
 /// Why a scrape finished. Surfaced via `ScrapeDiagnostic` so the in-app
@@ -223,7 +226,7 @@ final class WebViewScraper: NSObject {
     let finalURL = finalURLStr.flatMap { URL(string: $0) }
     let links = rawLinks.compactMap { d -> ScrapedLink? in
       guard let href = d["href"], let text = d["text"] else { return nil }
-      return ScrapedLink(href: href, text: text, status: d["status"] ?? "")
+      return ScrapedLink(href: href, text: text, status: d["status"] ?? "", containerClass: d["containerClass"] ?? "")
     }
     let reason: ScrapeFinishReason = links.isEmpty ? .noLinks : .success
     let msg = links.isEmpty
@@ -404,6 +407,19 @@ final class WebViewScraper: NSObject {
         return statusText;
       }
 
+      // Walk up from el to find the nearest element with a non-empty className.
+      // Returns up to 120 chars, helping the model distinguish game cards from nav.
+      function findContainerClass(el) {
+        if (!el) return '';
+        var p = el;
+        for (var i = 0; i < 6 && p; i++) {
+          var cls = (p.className || '').trim();
+          if (cls && cls.length > 0) return cls.slice(0, 120);
+          p = p.parentElement;
+        }
+        return '';
+      }
+
       function isReady() {
         var tl = (document.title || '').toLowerCase().trim();
         if (tl === 'page not found' ||
@@ -511,7 +527,7 @@ final class WebViewScraper: NSObject {
           var href = a.href;
           if (href && !seen[href] && href.indexOf('http') === 0) {
             seen[href] = 1;
-            links.push({ href: href, text: readableTextFor(a), status: findStatus(a) });
+            links.push({ href: href, text: readableTextFor(a), status: findStatus(a), containerClass: findContainerClass(a) });
           }
         }
 
@@ -525,7 +541,7 @@ final class WebViewScraper: NSObject {
             var resolved = abs(el.getAttribute(attr));
             if (!resolved || resolved.indexOf('http') !== 0 || seen[resolved]) continue;
             seen[resolved] = 1;
-            links.push({ href: resolved, text: readableTextFor(el), status: findStatus(el) });
+            links.push({ href: resolved, text: readableTextFor(el), status: findStatus(el), containerClass: findContainerClass(el) });
           }
         }
 
@@ -540,7 +556,7 @@ final class WebViewScraper: NSObject {
           var resolved2 = abs(m[1]);
           if (!resolved2 || resolved2.indexOf('http') !== 0 || seen[resolved2]) continue;
           seen[resolved2] = 1;
-          links.push({ href: resolved2, text: readableTextFor(el2), status: findStatus(el2) });
+          links.push({ href: resolved2, text: readableTextFor(el2), status: findStatus(el2), containerClass: findContainerClass(el2) });
         }
 
         // Pass 1.7 (v2.35): card containers — with OR without inner <a href>.
@@ -580,7 +596,7 @@ final class WebViewScraper: NSObject {
             if (seen[href2]) continue;
           }
           seen[href2] = 1;
-          links.push({ href: href2, text: readableTextFor(card), status: findStatus(card) });
+          links.push({ href: href2, text: readableTextFor(card), status: findStatus(card), containerClass: (card.className || '').trim().slice(0, 120) });
         }
 
         // Pass 1.8 (v2.34): JSON-LD SportsEvent / BroadcastEvent / Event.
@@ -613,7 +629,7 @@ final class WebViewScraper: NSObject {
           if (away) parts.push(String(away));
           if (home && away) parts.push(home + ' vs ' + away);
           var text = parts.join(' | ').slice(0, 500);
-          links.push({ href: url, text: text, status: '' });
+          links.push({ href: url, text: text, status: '', containerClass: '' });
         }
         var ldScripts = document.querySelectorAll('script[type="application/ld+json"]');
         for (var ls = 0; ls < ldScripts.length; ls++) {
@@ -664,7 +680,7 @@ final class WebViewScraper: NSObject {
           seen[href3] = 1;
           var statusText3 = (timerEl.innerText || '').replace(/\s+/g, ' ').trim();
           if (statusText3.length > 60) statusText3 = statusText3.slice(0, 60);
-          links.push({ href: href3, text: text3, status: statusText3 });
+          links.push({ href: href3, text: text3, status: statusText3, containerClass: findContainerClass(card3) });
         }
 
         var metaDesc = '';

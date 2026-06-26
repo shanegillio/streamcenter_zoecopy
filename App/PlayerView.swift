@@ -21,6 +21,11 @@ struct PlayerView: View {
   @State private var rulesReady = false
   @State private var attempts: [SourceAttempt] = []
   @State private var currentAttemptIdx: Int = 0
+  /// Per-attempt watchdog: if a source neither produces a playable stream nor
+  /// trips an abort condition within `perSourceBudget`, it auto-advances to the
+  /// next source (or surfaces the retry UI) so the loading screen can never hang
+  /// forever. Cancelled the moment playback starts or the attempt changes.
+  @State private var budgetTask: Task<Void, Never>? = nil
   /// When on, shows the live scraping WebView + diagnostics. When off
   /// (default), the user sees only a loading screen until playback starts.
   @AppStorage("debugScrapingView") private var debugScraping = false
@@ -29,11 +34,12 @@ struct PlayerView: View {
   /// WebView never briefly loads (and walks) the homepage first.
   @State private var resolving = false
   @State private var allFailed: Bool = false
-  /// Per-source budget. v2.38: relaxed to 20 s because we no longer
-  /// auto-advance — the user manually picks "Try next source" if they
-  /// want to abandon. 20 s gives the walk + iframe drill-down time to
-  /// reach the discovered destination on slow sites.
-  private static let perSourceBudget: TimeInterval = 20
+  /// Per-source budget. The walk + iframe drill-down get this long to reach a
+  /// playable stream on slow sites (Cloudflare interstitials, lazy aggregators)
+  /// before the attempt is abandoned. v2.57: this is now an enforced watchdog
+  /// (`startBudgetTimer`) that auto-advances to the next source — previously it
+  /// was advisory only, so a silently-stuck source could load forever.
+  private static let perSourceBudget: TimeInterval = 30
   /// v2.38: WebView is visible by default in verification mode. Was
   /// previously gated on "Browse Manually" from the retry UI.
   @State private var showWebFallback = true
@@ -196,6 +202,18 @@ struct PlayerView: View {
     .toolbarColorScheme(.dark, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
     .task {
+      // Configure the audio session so AVPlayer can AirPlay video (not just
+      // audio) to an Apple TV, and start tracking the external route.
+      AirPlayController.shared.configureAudioSession()
+      // Claim the shared player for this channel so a previous channel's
+      // late-finishing scrape can't load the wrong game over the top of ours.
+      PlaybackEngine.shared.activate(game.id)
+      // While casting, show the retro color-bars test pattern on the TV until
+      // this channel's stream is found (the previous game would otherwise hang
+      // on screen, or — worse — the TV would go blank).
+      if AirPlayController.shared.isExternalActive {
+        PlaybackEngine.shared.showFiller(for: game.id)
+      }
       ruleList = await AdBlockRules.compile()
       rulesReady = true
       buildAttempts()
@@ -211,9 +229,17 @@ struct PlayerView: View {
       }
     }
     .onDisappear {
+      cancelBudgetTimer()
       if let sid = traversalSessionID {
         TraversalLog.shared.endSession(sid)
         traversalSessionID = nil
+      }
+      // When casting, leave the shared player running so the current game keeps
+      // playing on the TV while the next channel's stream is scraped — the new
+      // PlayerView will hot-swap the item in. When *not* casting, stop it so the
+      // old channel's audio doesn't bleed into the next channel's loading screen.
+      if !AirPlayController.shared.isExternalActive {
+        PlaybackEngine.shared.stop()
       }
     }
   }
@@ -355,6 +381,7 @@ struct PlayerView: View {
           // The WebView's embedded player can serve this stream but
           // AVPlayer can't. Activate WebView-player mode so the user
           // sees the live video instead of a loading screen.
+          cancelBudgetTimer()
           webViewFallbackActivated = true
         }
       },
@@ -735,6 +762,8 @@ struct PlayerView: View {
         TraversalLog.shared.endSession(sid)
         traversalSessionID = nil
       }
+      cancelBudgetTimer()
+      PlaybackEngine.shared.stop()
       allFailed = true
     }
   }
@@ -781,7 +810,9 @@ struct PlayerView: View {
   }
 
   private func playCandidate(_ cand: StreamCandidate) {
-    let p = makePlayer(url: cand.url, cookies: cand.cookies, referer: cand.referer)
+    guard let p = makePlayer(url: cand.url, cookies: cand.cookies, referer: cand.referer)
+    else { return }  // stale channel — user surfed away
+    cancelBudgetTimer()
     avPlayer = p
     p.play()
     startAVPlayerWatchdog(p)
@@ -806,7 +837,9 @@ struct PlayerView: View {
   /// but logs a different event kind so we can distinguish auto-play
   /// from user-tap-play in the timeline.
   private func autoPlayCapturedStream(url: URL, cookies: [HTTPCookie], referer: URL) {
-    let p = makePlayer(url: url, cookies: cookies, referer: referer)
+    guard let p = makePlayer(url: url, cookies: cookies, referer: referer)
+    else { return }  // stale channel — user surfed away
+    cancelBudgetTimer()
     avPlayer = p
     p.play()
     startAVPlayerWatchdog(p)
@@ -827,9 +860,13 @@ struct PlayerView: View {
   /// gated (e.g. ppv.to → indianservers.st) and only works inside the
   /// WebView's browser context.
   private func startAVPlayerWatchdog(_ player: AVPlayer) {
+    // The player is shared across channels, so identity can't tell us whether
+    // this watchdog still owns the playback — compare the *item* it started on.
+    // If a later channel already swapped in a new item, this watchdog is stale.
+    let watchedItem = player.currentItem
     Task { @MainActor in
       try? await Task.sleep(nanoseconds: 8_000_000_000)
-      guard avPlayer === player else { return }
+      guard avPlayer != nil, player.currentItem === watchedItem else { return }
       let item = player.currentItem
       let hasFailed  = item?.status == .failed || item?.error != nil
       let isStalled  = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
@@ -850,6 +887,9 @@ struct PlayerView: View {
           info: hasFailed ? "item_failed" : "stalled_at_0"
         )
       }
+      // Release the stalled item from the shared player so it doesn't keep
+      // buffering a dead stream; the WebView becomes the player from here.
+      PlaybackEngine.shared.stop()
       avPlayer = nil
       webViewFallbackActivated = true
     }
@@ -886,6 +926,52 @@ struct PlayerView: View {
       TraversalLog.shared.recordEvent(
         sid, kind: "resolved", info: attempts[currentAttemptIdx].pageURL.absoluteString
       )
+    }
+    startBudgetTimer()
+  }
+
+  /// Arms the per-attempt watchdog for the current source. Cancels any prior
+  /// timer first. In Debug Mode the user drives advancement manually, so we
+  /// don't auto-advance there.
+  private func startBudgetTimer() {
+    budgetTask?.cancel()
+    guard !debugScraping, currentAttemptIdx < attempts.count else { return }
+    let attemptID = attempts[currentAttemptIdx].id
+    budgetTask = Task { @MainActor in
+      try? await Task.sleep(nanoseconds: UInt64(Self.perSourceBudget * 1_000_000_000))
+      guard !Task.isCancelled,
+            avPlayer == nil, !webViewFallbackActivated, !allFailed,
+            currentAttemptIdx < attempts.count,
+            attempts[currentAttemptIdx].id == attemptID else { return }
+      handleBudgetExpired()
+    }
+  }
+
+  private func cancelBudgetTimer() {
+    budgetTask?.cancel()
+    budgetTask = nil
+  }
+
+  /// The current source ran out its budget without playing. Treat it like a
+  /// dead end: mark it failed and move on, or surface retry if it was the last.
+  private func handleBudgetExpired() {
+    if let sid = traversalSessionID {
+      TraversalLog.shared.recordEvent(
+        sid, kind: "budget_timeout",
+        info: "no playable stream within \(Int(Self.perSourceBudget))s"
+      )
+    }
+    guard currentAttemptIdx < attempts.count else { return }
+    attempts[currentAttemptIdx].status = .failed
+    if currentAttemptIdx + 1 < attempts.count {
+      advanceAttempt()
+    } else {
+      if let sid = traversalSessionID {
+        TraversalLog.shared.endSession(sid)
+        traversalSessionID = nil
+      }
+      PlaybackEngine.shared.stop()
+      allFailed = true
     }
   }
 
@@ -1016,13 +1102,19 @@ struct PlayerView: View {
     }
   }
 
-  private func makePlayer(url: URL, cookies: [HTTPCookie], referer: URL) -> AVPlayer {
+  private func makePlayer(url: URL, cookies: [HTTPCookie], referer: URL) -> AVPlayer? {
     var headers = HTTPCookie.requestHeaderFields(with: cookies)
     headers["User-Agent"] = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
     headers["Referer"] = referer.absoluteString
     headers["Origin"]  = (referer.scheme ?? "https") + "://" + (referer.host ?? "")
     let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
-    return AVPlayer(playerItem: AVPlayerItem(asset: asset))
+    // Reuse the one long-lived player so switching channels swaps the item
+    // in place instead of tearing down the player (which would drop AirPlay).
+    // Returns nil when this channel is no longer active — a stale scrape that
+    // finished after the user surfed away must not hijack the screen.
+    let item = AVPlayerItem(asset: asset)
+    guard PlaybackEngine.shared.load(item, for: game.id) else { return nil }
+    return PlaybackEngine.shared.player
   }
 }
 

@@ -48,7 +48,10 @@ final class TeamAliasIndex {
   func tokens(forTeam displayName: String) -> Tokens {
     let key = Self.normalize(displayName)
     guard !key.isEmpty else { return Tokens(long: [], abbr: []) }
-    let raw = aliasesByName[key] ?? [displayName]
+    // Database aliases (or the name itself) plus cross-language / alternate
+    // spellings so a site listing "Türkiye" or "España" still matches.
+    let raw = (aliasesByName[key] ?? [displayName])
+      + TeamNameVariants.variants(forNormalized: key)
     var long = Set<String>()
     var abbr = Set<String>()
     for alias in raw {

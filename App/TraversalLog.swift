@@ -188,6 +188,24 @@ final class TraversalLog: ObservableObject {
     saveNow()
   }
 
+  /// Writes the full session log as pretty JSON to a temp file and returns its
+  /// URL, so it can be shared/exported (e.g. AirDropped to a developer to debug
+  /// a wrong-stream or stuck-loading report). Returns nil on failure.
+  func exportFileURL() -> URL? {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    encoder.dateEncodingStrategy = .iso8601
+    guard let data = try? encoder.encode(sessions) else { return nil }
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("streamcenter-traversal-log.json")
+    do {
+      try data.write(to: url, options: [.atomic])
+      return url
+    } catch {
+      return nil
+    }
+  }
+
   // MARK: Aggregate stats
 
   struct AggregateStats {

@@ -24,7 +24,13 @@ enum GameURLResolver {
     if let direct = matchGame(in: rootLinks, game: game, base: root) {
       return direct
     }
-    for section in sectionLinks(in: rootLinks, game: game, base: root).prefix(maxSections) {
+
+    // Use any cached site structure to prioritize section links that match
+    // the site's known game URL pattern over generic league keywords.
+    let domain = root.host ?? ""
+    let structure = await FoundationModelScraper.shared.cachedSiteStructure(forDomain: domain)
+
+    for section in sectionLinks(in: rootLinks, game: game, base: root, structure: structure).prefix(maxSections) {
       let subLinks = await scrape(section, timeout: timeout)
       if let direct = matchGame(in: subLinks, game: game, base: section) {
         return direct
@@ -66,23 +72,71 @@ enum GameURLResolver {
         return url
       }
     }
-    return nil
+    // No exact token hit. Fall back to the link that's most *name-similar* to
+    // both teams — catches spelling / transliteration variants the alias list
+    // doesn't enumerate. Conservative thresholds avoid following a wrong game.
+    return fuzzyMatchGame(in: links, game: game, base: base, soloEvent: soloEvent)
+  }
+
+  /// Picks the link whose text/href most closely resembles both team names by
+  /// character-bigram similarity. Requires a strong match on each team so a
+  /// loose coincidence can't win.
+  private static func fuzzyMatchGame(
+    in links: [ScrapedLink], game: Game, base: URL, soloEvent: Bool
+  ) -> URL? {
+    let minPerTeam = 0.78
+    var best: (url: URL, score: Double)?
+    for link in links {
+      guard let url = absolute(link.href, base: base) else { continue }
+      let hay = HomeView.normalizeForMatch(link.text + " " + link.href)
+      let tokens = hay.split(separator: " ").map(String.init).filter { $0.count >= 3 }
+      guard !tokens.isEmpty else { continue }
+      let homeScore = teamSimilarity(game.homeTeam, tokens: tokens)
+      let awayScore = soloEvent ? 1.0 : teamSimilarity(game.awayTeam, tokens: tokens)
+      guard homeScore >= minPerTeam, awayScore >= minPerTeam else { continue }
+      let score = homeScore + awayScore
+      if score > (best?.score ?? 0) { best = (url, score) }
+    }
+    return best?.url
+  }
+
+  /// Best similarity between a team's name (whole, compacted, and per word) and
+  /// any token in the candidate link.
+  private static func teamSimilarity(_ team: String, tokens: [String]) -> Double {
+    let name = HomeView.normalizeForMatch(team)
+    guard !name.isEmpty else { return 0 }
+    let compact = name.replacingOccurrences(of: " ", with: "")
+    let words = name.split(separator: " ").map(String.init).filter { $0.count >= 4 }
+    var best = 0.0
+    for token in tokens {
+      best = max(best, StringSimilarity.dice(compact, token))
+      for word in words {
+        best = max(best, StringSimilarity.dice(word, token))
+      }
+    }
+    return best
   }
 
   /// League/section links worth following when the game isn't on the root,
-  /// best (most specific) first. Matches the league's keywords against the
-  /// link's text + href. League keywords are universal sports terms, not
-  /// site config.
-  private static func sectionLinks(in links: [ScrapedLink], game: Game, base: URL) -> [URL] {
+  /// best (most specific) first. When a cached SiteStructure is available, links
+  /// matching its gameURLPattern are ranked above generic league-keyword matches.
+  private static func sectionLinks(in links: [ScrapedLink], game: Game, base: URL,
+                                   structure: SiteStructure? = nil) -> [URL] {
     let keys = leagueKeys(game.league)
-    guard !keys.isEmpty else { return [] }
+    let gameURLPattern = structure?.gameURLPattern.lowercased() ?? ""
+    guard !keys.isEmpty || !gameURLPattern.isEmpty else { return [] }
     var scored: [(url: URL, rank: Int)] = []
     var seen = Set<String>()
     for link in links {
       let hay = " " + HomeView.normalizeForMatch(link.text + " " + link.href) + " "
       var rank = Int.max
+      // Rank 0: explicit site structure URL pattern match (highest confidence)
+      if !gameURLPattern.isEmpty && link.href.lowercased().contains(gameURLPattern) {
+        rank = 0
+      }
+      // Rank 1+: league keyword matches (league-specific terms first)
       for (i, key) in keys.enumerated() where hay.contains(" \(key) ") || hay.contains(key) {
-        rank = min(rank, i)
+        rank = min(rank, i + 1)
       }
       guard rank != Int.max, let url = absolute(link.href, base: base) else { continue }
       let key = url.absoluteString

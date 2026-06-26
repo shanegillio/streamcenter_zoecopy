@@ -27,6 +27,9 @@ struct AppDefinition: App {
         }
       }
     }
+    // Pre-generate the AirPlay color-bars loading clip at launch so it's ready
+    // before the first cast — no first-play "generating" hitch.
+    Task { @MainActor in ColorBarsVideo.prewarm() }
   }
 
   var body: some Scene {

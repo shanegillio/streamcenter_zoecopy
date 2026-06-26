@@ -96,7 +96,7 @@ struct CustomStreamSource: StreamSource {
 
   /// LLM fallback: hand the scraped links to FoundationModelScraper and
   /// see if it can map any of them to one of the canonical games.
-  /// Bounded at 10 s so a slow LLM doesn't stall the refresh.
+  /// Bounded at 12 s so a slow LLM doesn't stall the refresh.
   private func llmFallback(links: [ScrapedLink],
                            games: [Game]) async -> [String: URL]? {
     let extracted: [ExtractedGame]? = await withTaskGroup(of: [ExtractedGame]?.self) { group in
@@ -106,7 +106,7 @@ struct CustomStreamSource: StreamSource {
         )
       }
       group.addTask {
-        try? await Task.sleep(nanoseconds: 10_000_000_000)
+        try? await Task.sleep(nanoseconds: 12_000_000_000)
         return nil
       }
       let winner = await group.next() ?? nil
@@ -116,18 +116,34 @@ struct CustomStreamSource: StreamSource {
     guard let extracted else { return nil }
     var out: [String: URL] = [:]
     for game in games {
-      for cand in extracted {
-        if HomeView.matchesTeamPair(
-          home: cand.homeTeam,
-          away: cand.awayTeam,
-          target: game
-        ) {
+      for cand in extracted where out[game.id] == nil {
+        if llmCandidateMatchesGame(cand, game) {
           out[game.id] = cand.pageURL
-          break
         }
       }
     }
     return out
+  }
+
+  /// Matches a model-extracted candidate to a canonical game using TeamAliasIndex
+  /// so abbreviated outputs like "TOR"/"PHI" resolve correctly alongside full names.
+  /// This is strictly more permissive than the former matchesTeamPair which required
+  /// the model to have already expanded abbreviations.
+  private func llmCandidateMatchesGame(_ cand: ExtractedGame, _ game: Game) -> Bool {
+    let index = TeamAliasIndex.shared
+    let soloEvent = HomeView.normalizeForMatch(game.awayTeam).isEmpty
+    let homeHay = " " + HomeView.normalizeForMatch(cand.homeTeam) + " "
+    let awayHay = " " + HomeView.normalizeForMatch(cand.awayTeam) + " "
+
+    let candHomeIsGameHome = index.matches(team: game.homeTeam, inPadded: homeHay)
+    let candHomeIsGameAway = !soloEvent && index.matches(team: game.awayTeam, inPadded: homeHay)
+    let candAwayIsGameHome = index.matches(team: game.homeTeam, inPadded: awayHay)
+    let candAwayIsGameAway = !soloEvent && index.matches(team: game.awayTeam, inPadded: awayHay)
+
+    if soloEvent { return candHomeIsGameHome || candHomeIsGameAway }
+    // Accept both orderings (some sites list home/away differently)
+    return (candHomeIsGameHome && candAwayIsGameAway) ||
+           (candHomeIsGameAway && candAwayIsGameHome)
   }
 
   // MARK: Scraping

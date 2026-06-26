@@ -9,6 +9,7 @@ import AVKit
 /// manual outcome marking.
 struct TraversalLogView: View {
   @StateObject private var log = TraversalLog.shared
+  @State private var exportURL: URL?
 
   var body: some View {
     List {
@@ -35,6 +36,13 @@ struct TraversalLogView: View {
     .navigationTitle("Traversal Log")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
+      if let exportURL {
+        ToolbarItem(placement: .topBarTrailing) {
+          ShareLink(item: exportURL) {
+            Label("Export log", systemImage: "square.and.arrow.up")
+          }
+        }
+      }
       if !log.sessions.isEmpty {
         ToolbarItem(placement: .topBarTrailing) {
           Menu {
@@ -44,11 +52,15 @@ struct TraversalLogView: View {
               Label("Clear all sessions", systemImage: "trash")
             }
           } label: {
-            Image(systemName: "ellipsis.circle")
+            Image(systemName: "ellipsis")
           }
         }
       }
     }
+    // Regenerate the export file on appear and whenever a new session lands so
+    // the share sheet always reflects the latest reproduction.
+    .task { exportURL = log.exportFileURL() }
+    .onChange(of: log.sessions.count) { _, _ in exportURL = log.exportFileURL() }
   }
 
   // MARK: Aggregate stats
