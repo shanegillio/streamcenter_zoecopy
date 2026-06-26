@@ -468,6 +468,15 @@ final class WebViewScraper: NSObject {
           if (txt && txt.length > 12) cardCount++;
           if (cardCount >= 3) return true;
         }
+        // v2.36: also recognize non-anchor elements with "vs" in their text
+        // (e.g. ntv.cx renders game rows as clickable divs/lis with no <a href>,
+        // so vsCount above stays 0 even when games are fully loaded).
+        var vsElCount = 0;
+        var vsEls = document.querySelectorAll('li,tr,[role="listitem"],[role="row"]');
+        for (var ve = 0; ve < Math.min(vsEls.length, 100); ve++) {
+          if (vsRE.test(vsEls[ve].textContent || '')) vsElCount++;
+          if (vsElCount >= 3) return true;
+        }
         return false;
       }
 
@@ -598,6 +607,59 @@ final class WebViewScraper: NSObject {
           seen[href2] = 1;
           links.push({ href: href2, text: readableTextFor(card), status: findStatus(card), containerClass: (card.className || '').trim().slice(0, 120) });
         }
+
+        // Pass 1.75 (v2.36): vs-pattern — any clickable element whose text
+        // contains " vs " but whose class name wasn't matched by Pass 1.7.
+        // Catches SPAs like ntv.cx that render game rows with non-standard
+        // class names and Vue/React @click handlers (no DOM onclick attr).
+        // Checks: li/tr/list-role elements + children of multi-child
+        // containers, filtered by cursor:pointer CSS. Capped at 500
+        // candidates so DOM scanning stays bounded.
+        (function() {
+          var vsRE = /\bvs\b/i;
+          var cands = [], seenEls = [];
+          function pushCand(e) {
+            if (seenEls.indexOf(e) !== -1) return;
+            seenEls.push(e);
+            cands.push(e);
+          }
+          // Structural list items first (most reliable).
+          var listItems = document.querySelectorAll('li,tr,[role="listitem"],[role="row"]');
+          for (var li = 0; li < Math.min(listItems.length, 300); li++) pushCand(listItems[li]);
+          // Children of list-like containers (SPA virtual-list pattern).
+          var containers = document.querySelectorAll('ul,ol,section,main,[role="list"],[role="feed"]');
+          for (var pi = 0; pi < Math.min(containers.length, 20); pi++) {
+            var ch = containers[pi].children;
+            if (ch.length < 3) continue;
+            for (var ci = 0; ci < Math.min(ch.length, 60); ci++) pushCand(ch[ci]);
+          }
+          // Also scan direct div/span children of elements with ≥3 same-tag kids.
+          var wraps = document.querySelectorAll('div > div:first-child,div > a:first-child');
+          for (var wi = 0; wi < Math.min(wraps.length, 60); wi++) {
+            var par = wraps[wi].parentElement;
+            if (!par || par.children.length < 3) continue;
+            for (var wci = 0; wci < Math.min(par.children.length, 60); wci++) pushCand(par.children[wci]);
+          }
+          for (var vi = 0; vi < Math.min(cands.length, 500); vi++) {
+            var el = cands[vi];
+            var txt = (el.innerText || el.textContent || '').trim();
+            if (!vsRE.test(txt) || txt.length < 5 || txt.length > 500) continue;
+            var inner = el.querySelector('a[href]');
+            var href3;
+            if (inner && inner.href && inner.href.indexOf('http') === 0) {
+              if (seen[inner.href]) continue;
+              href3 = inner.href;
+            } else {
+              try { if (window.getComputedStyle(el).cursor !== 'pointer') continue; }
+              catch(e) { continue; }
+              href3 = location.href.split('#')[0] + '#sc-card-' + simpleCardHash(txt);
+              if (seen[href3]) continue;
+            }
+            seen[href3] = 1;
+            links.push({ href: href3, text: readableTextFor(el), status: findStatus(el),
+                         containerClass: (el.className || '').trim().slice(0, 120) });
+          }
+        })();
 
         // Pass 1.8 (v2.34): JSON-LD SportsEvent / BroadcastEvent / Event.
         // Many modern sports sites publish structured data for SEO; when
