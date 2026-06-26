@@ -3,6 +3,9 @@ import SwiftUI
 struct HomeView: View {
   @Environment(SourceRegistry.self) private var registry
   @Environment(FavoritesStore.self) private var favorites
+  /// Compact height = landscape on iPhone. In that case the stream takes over
+  /// the whole screen (guide + header hidden) with the channel controls beside.
+  @Environment(\.verticalSizeClass) private var verticalSizeClass
   @State private var availableLeagues: [SportLeague] = []
   @State private var allLiveGames: [Game] = []
   @State private var allUpcomingGames: [Game] = []
@@ -71,8 +74,9 @@ struct HomeView: View {
 
   @ViewBuilder
   private var content: some View {
-    VStack(spacing: 12) {
-      header
+    let isLandscape = verticalSizeClass == .compact
+    VStack(spacing: isLandscape ? 0 : 12) {
+      if !isLandscape { header }
       if registry.enabledSources.isEmpty {
         noSourcesState
       } else if isLoadingLeagues && availableLeagues.isEmpty {
@@ -85,11 +89,18 @@ struct HomeView: View {
           canGoPrev: !history.isEmpty,
           onChannelUp: { surf(by: -1) },
           onChannelDown: { surf(by: 1) },
-          onPrev: { goToPreviousChannel() }
+          onPrev: { goToPreviousChannel() },
+          isLandscape: isLandscape
         )
-        guideArea
+        // Landscape is a full-screen viewer: hide the guide so only the stream
+        // and its channel controls show. The controls keep their portrait
+        // behavior (surf up/down, prev).
+        if !isLandscape { guideArea }
       }
     }
+    // Let the stage fill the screen in landscape so the TV frame can size to
+    // the full height; portrait keeps its natural top-down layout.
+    .frame(maxWidth: .infinity, maxHeight: isLandscape ? .infinity : nil)
   }
 
   @ViewBuilder
