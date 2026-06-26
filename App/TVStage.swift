@@ -77,13 +77,6 @@ struct TVStageView: View {
 
   private var controls: some View {
     VStack(spacing: 12) {
-      AirPlayRoutePicker(
-        tint: GuideTheme.text,
-        activeTint: .accentColor
-      )
-      .frame(width: 46, height: 42)
-      .glassBackground(in: RoundedRectangle(cornerRadius: 13))
-      .accessibilityLabel("AirPlay")
       Button(action: onChannelUp) {
         controlIcon("chevron.up")
       }

@@ -56,25 +56,3 @@ final class AirPlayController {
     }
   }
 }
-
-/// SwiftUI wrapper around `AVRoutePickerView` — the system AirPlay button.
-/// `prioritizesVideoDevices` makes it surface video-capable destinations (Apple
-/// TV, AirPlay-2 TVs) so the user picks a screen, not just speakers.
-struct AirPlayRoutePicker: UIViewRepresentable {
-  var tint: Color = GuideTheme.text
-  var activeTint: Color = .accentColor
-
-  func makeUIView(context: Context) -> AVRoutePickerView {
-    let picker = AVRoutePickerView()
-    picker.prioritizesVideoDevices = true
-    picker.backgroundColor = .clear
-    picker.tintColor = UIColor(tint)
-    picker.activeTintColor = UIColor(activeTint)
-    return picker
-  }
-
-  func updateUIView(_ uiView: AVRoutePickerView, context: Context) {
-    uiView.tintColor = UIColor(tint)
-    uiView.activeTintColor = UIColor(activeTint)
-  }
-}
