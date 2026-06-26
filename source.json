@@ -27,7 +27,7 @@
         {
           "version": "2.59",
           "date": "2026-06-26",
-          "size": 0,
+          "size": 1641160,
           "downloadURL": "https://github.com/shanegillio/altstore-source/releases/download/v2.59/StreamCenter-2.59.ipa",
           "localizedDescription": "Landscape widescreen viewer: rotate your phone and the stream takes over the screen in a flat-screen TV frame on a stand, with the channel up/down/prev controls beside it. Guide improvements: the timeline now extends to the last game of the day instead of cutting off at midnight, and game blocks are wide enough to keep team names on one line (long names truncate with an ellipsis). The \"could not load stream\" error is now a compact slate over the TV static.",
           "buildVersion": "259",
