@@ -19,47 +19,47 @@
   "swiftCommands" : {
     "C.scrape-cli-arm64-apple-macosx26.0-debug.module" : {
       "executable" : "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
-      "fileList" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/sources",
-      "importPath" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/Modules",
+      "fileList" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/sources",
+      "importPath" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/Modules",
       "inputs" : [
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/APIDiscoveryCLI.swift"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/APIDiscoveryCLI.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/FullFlowCLI.swift"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/FullFlowCLI.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/LogoTestCLI.swift"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/LogoTestCLI.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/MacScraper.swift"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/MacScraper.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/main.swift"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/main.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/swift-version--33F43AE5D1E816B0.txt"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/swift-version--33F43AE5D1E816B0.txt"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/sources"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/sources"
         }
       ],
       "isLibrary" : false,
       "moduleName" : "scrape_cli",
-      "moduleOutputPath" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/Modules/scrape_cli.swiftmodule",
+      "moduleOutputPath" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/Modules/scrape_cli.swiftmodule",
       "objects" : [
-        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/APIDiscoveryCLI.swift.o",
-        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/FullFlowCLI.swift.o",
-        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/LogoTestCLI.swift.o",
-        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/MacScraper.swift.o",
-        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/main.swift.o"
+        "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/APIDiscoveryCLI.swift.o",
+        "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/FullFlowCLI.swift.o",
+        "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/LogoTestCLI.swift.o",
+        "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/MacScraper.swift.o",
+        "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/main.swift.o"
       ],
       "otherArguments" : [
         "-target",
@@ -68,7 +68,7 @@
         "-enable-batch-mode",
         "-serialize-diagnostics",
         "-index-store-path",
-        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/index/store",
+        "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/index/store",
         "-Onone",
         "-enable-testing",
         "-j16",
@@ -76,7 +76,7 @@
         "-DDEBUG",
         "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
         "-module-cache-path",
-        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/ModuleCache",
+        "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/ModuleCache",
         "-parseable-output",
         "-Xfrontend",
         "-entry-point-function-name",
@@ -116,42 +116,42 @@
         "-package-name",
         "scrape_cli"
       ],
-      "outputFileMapPath" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/output-file-map.json",
+      "outputFileMapPath" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/output-file-map.json",
       "outputs" : [
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/APIDiscoveryCLI.swift.o"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/APIDiscoveryCLI.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/FullFlowCLI.swift.o"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/FullFlowCLI.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/LogoTestCLI.swift.o"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/LogoTestCLI.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/MacScraper.swift.o"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/MacScraper.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/main.swift.o"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/main.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/Modules/scrape_cli.swiftmodule"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/Modules/scrape_cli.swiftmodule"
         }
       ],
       "prepareForIndexing" : false,
       "sources" : [
-        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/APIDiscoveryCLI.swift",
-        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/FullFlowCLI.swift",
-        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/LogoTestCLI.swift",
-        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/MacScraper.swift",
-        "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/main.swift"
+        "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/APIDiscoveryCLI.swift",
+        "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/FullFlowCLI.swift",
+        "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/LogoTestCLI.swift",
+        "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/MacScraper.swift",
+        "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/main.swift"
       ],
-      "tempsPath" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build",
+      "tempsPath" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build",
       "wholeModuleOptimization" : false
     }
   },
@@ -166,20 +166,20 @@
       "-package-name",
       "scrape_cli",
       "-c",
-      "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/APIDiscoveryCLI.swift",
-      "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/FullFlowCLI.swift",
-      "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/LogoTestCLI.swift",
-      "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/MacScraper.swift",
-      "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/main.swift",
+      "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/APIDiscoveryCLI.swift",
+      "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/FullFlowCLI.swift",
+      "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/LogoTestCLI.swift",
+      "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/MacScraper.swift",
+      "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/main.swift",
       "-I",
-      "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/Modules",
+      "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/Modules",
       "-target",
       "arm64-apple-macosx13.0",
       "-incremental",
       "-enable-batch-mode",
       "-serialize-diagnostics",
       "-index-store-path",
-      "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/index/store",
+      "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/index/store",
       "-Onone",
       "-enable-testing",
       "-j16",
@@ -187,7 +187,7 @@
       "-DDEBUG",
       "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
       "-module-cache-path",
-      "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/ModuleCache",
+      "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/ModuleCache",
       "-parseable-output",
       "-Xfrontend",
       "-entry-point-function-name",
@@ -247,7 +247,7 @@
     }
   },
   "writeCommands" : {
-    "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape-cli-entitlement.plist" : {
+    "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape-cli-entitlement.plist" : {
       "alwaysOutOfDate" : false,
       "inputs" : [
         {
@@ -259,9 +259,9 @@
           "name" : "<com.apple.security.get-task-allow>"
         }
       ],
-      "outputFilePath" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape-cli-entitlement.plist"
+      "outputFilePath" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape-cli-entitlement.plist"
     },
-    "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape-cli.product/Objects.LinkFileList" : {
+    "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape-cli.product/Objects.LinkFileList" : {
       "alwaysOutOfDate" : false,
       "inputs" : [
         {
@@ -270,28 +270,28 @@
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/APIDiscoveryCLI.swift.o"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/APIDiscoveryCLI.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/FullFlowCLI.swift.o"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/FullFlowCLI.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/LogoTestCLI.swift.o"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/LogoTestCLI.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/MacScraper.swift.o"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/MacScraper.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/main.swift.o"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/main.swift.o"
         }
       ],
-      "outputFilePath" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape-cli.product/Objects.LinkFileList"
+      "outputFilePath" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape-cli.product/Objects.LinkFileList"
     },
-    "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/sources" : {
+    "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/sources" : {
       "alwaysOutOfDate" : false,
       "inputs" : [
         {
@@ -300,28 +300,28 @@
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/APIDiscoveryCLI.swift"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/APIDiscoveryCLI.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/FullFlowCLI.swift"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/FullFlowCLI.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/LogoTestCLI.swift"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/LogoTestCLI.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/MacScraper.swift"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/MacScraper.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/Sources/scrape-cli/main.swift"
+          "name" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/Sources/scrape-cli/main.swift"
         }
       ],
-      "outputFilePath" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/sources"
+      "outputFilePath" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/scrape_cli.build/sources"
     },
-    "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/swift-version--33F43AE5D1E816B0.txt" : {
+    "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/swift-version--33F43AE5D1E816B0.txt" : {
       "alwaysOutOfDate" : true,
       "inputs" : [
         {
@@ -333,7 +333,7 @@
           "name" : "/Users/shanegillio/Downloads/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
         }
       ],
-      "outputFilePath" : "/Users/shanegillio/Desktop/StreamCenter/Tools/scrape-cli/.build/arm64-apple-macosx/debug/swift-version--33F43AE5D1E816B0.txt"
+      "outputFilePath" : "/Users/shanegillio/Library/Bitrig/Projects/6e495bf0-d273-4bc3-9db4-de29a3d06cf7/Tools/scrape-cli/.build/arm64-apple-macosx/debug/swift-version--33F43AE5D1E816B0.txt"
     }
   }
 }
