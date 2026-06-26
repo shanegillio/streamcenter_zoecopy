@@ -199,6 +199,15 @@ struct PlayerView: View {
       // Configure the audio session so AVPlayer can AirPlay video (not just
       // audio) to an Apple TV, and start tracking the external route.
       AirPlayController.shared.configureAudioSession()
+      // Claim the shared player for this channel so a previous channel's
+      // late-finishing scrape can't load the wrong game over the top of ours.
+      PlaybackEngine.shared.activate(game.id)
+      // While casting, show the retro color-bars test pattern on the TV until
+      // this channel's stream is found (the previous game would otherwise hang
+      // on screen, or — worse — the TV would go blank).
+      if AirPlayController.shared.isExternalActive {
+        PlaybackEngine.shared.showFiller(for: game.id)
+      }
       ruleList = await AdBlockRules.compile()
       rulesReady = true
       buildAttempts()
@@ -791,7 +800,8 @@ struct PlayerView: View {
   }
 
   private func playCandidate(_ cand: StreamCandidate) {
-    let p = makePlayer(url: cand.url, cookies: cand.cookies, referer: cand.referer)
+    guard let p = makePlayer(url: cand.url, cookies: cand.cookies, referer: cand.referer)
+    else { return }  // stale channel — user surfed away
     avPlayer = p
     p.play()
     startAVPlayerWatchdog(p)
@@ -816,7 +826,8 @@ struct PlayerView: View {
   /// but logs a different event kind so we can distinguish auto-play
   /// from user-tap-play in the timeline.
   private func autoPlayCapturedStream(url: URL, cookies: [HTTPCookie], referer: URL) {
-    let p = makePlayer(url: url, cookies: cookies, referer: referer)
+    guard let p = makePlayer(url: url, cookies: cookies, referer: referer)
+    else { return }  // stale channel — user surfed away
     avPlayer = p
     p.play()
     startAVPlayerWatchdog(p)
@@ -1033,7 +1044,7 @@ struct PlayerView: View {
     }
   }
 
-  private func makePlayer(url: URL, cookies: [HTTPCookie], referer: URL) -> AVPlayer {
+  private func makePlayer(url: URL, cookies: [HTTPCookie], referer: URL) -> AVPlayer? {
     var headers = HTTPCookie.requestHeaderFields(with: cookies)
     headers["User-Agent"] = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
     headers["Referer"] = referer.absoluteString
@@ -1041,8 +1052,10 @@ struct PlayerView: View {
     let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
     // Reuse the one long-lived player so switching channels swaps the item
     // in place instead of tearing down the player (which would drop AirPlay).
+    // Returns nil when this channel is no longer active — a stale scrape that
+    // finished after the user surfed away must not hijack the screen.
     let item = AVPlayerItem(asset: asset)
-    PlaybackEngine.shared.load(item)
+    guard PlaybackEngine.shared.load(item, for: game.id) else { return nil }
     return PlaybackEngine.shared.player
   }
 }
