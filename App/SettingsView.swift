@@ -213,30 +213,14 @@ struct SourceListView: View {
     }
   }
 
-  // Composes a source row with its rounded-on-swipe background and trailing
-  // swipe actions. On iOS 27+ the `onPresentationChanged` callback tracks which
-  // row is open so only that row rounds; older OSes keep the prior behavior.
+  // Composes a source row with its background and trailing swipe actions.
   @ViewBuilder
   private func swipeableSourceRow(_ source: AnyStreamSource) -> some View {
-    let base = sourceRow(source)
+    sourceRow(source)
       .listRowBackground(rowBackground(for: source))
-    if #available(iOS 27.0, *) {
-      base.swipeActions(edge: .trailing, allowsFullSwipe: false) {
-        swipeButtons(source)
-      } onPresentationChanged: { presented in
-        withAnimation(.easeInOut(duration: 0.2)) {
-          if presented {
-            revealedSourceID = source.id
-          } else if revealedSourceID == source.id {
-            revealedSourceID = nil
-          }
-        }
-      }
-    } else {
-      base.swipeActions(edge: .trailing, allowsFullSwipe: false) {
+      .swipeActions(edge: .trailing, allowsFullSwipe: false) {
         swipeButtons(source)
       }
-    }
   }
 
   // Swipe-left actions: Edit (name + URL) and Delete, mirroring the system

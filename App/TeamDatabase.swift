@@ -58,11 +58,13 @@ actor TeamDatabase {
     // Synchronous baseline load so the first query after construction
     // returns useful data without awaiting a network round-trip.
     if let bundled = Self.loadBundled() {
-      ingest(bundled)
+      let (e, x) = Self.buildTables(from: bundled)
+      entries = e
+      exact = x
     }
     // Kick off background refresh — silently no-ops if last refresh was
     // recent enough.
-    refreshTask = Task { [weak self] in
+    Task { [weak self] in
       await self?.refreshIfStale()
     }
   }
@@ -203,6 +205,17 @@ actor TeamDatabase {
   ]
 
   private func ingest(_ schema: Schema) {
+    let (newEntries, newExact) = Self.buildTables(from: schema)
+    entries = newEntries
+    exact = newExact
+  }
+
+  /// Pure transform from decoded schema → lookup tables. `nonisolated static`
+  /// so it can run during `init` (before the actor is fully formed) without
+  /// touching mutable actor state.
+  private static func buildTables(
+    from schema: Schema
+  ) -> (entries: [(name: String, league: SportLeague)], exact: [String: SportLeague]) {
     var newEntries: [(name: String, league: SportLeague)] = []
     var newExact: [String: SportLeague] = [:]
     // Walk in priority order so domestic leagues claim teams before
@@ -246,7 +259,6 @@ actor TeamDatabase {
         }
       }
     }
-    entries = newEntries
-    exact = newExact
+    return (newEntries, newExact)
   }
 }
