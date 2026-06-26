@@ -218,6 +218,13 @@ struct PlayerView: View {
         TraversalLog.shared.endSession(sid)
         traversalSessionID = nil
       }
+      // When casting, leave the shared player running so the current game keeps
+      // playing on the TV while the next channel's stream is scraped — the new
+      // PlayerView will hot-swap the item in. When *not* casting, stop it so the
+      // old channel's audio doesn't bleed into the next channel's loading screen.
+      if !AirPlayController.shared.isExternalActive {
+        PlaybackEngine.shared.stop()
+      }
     }
   }
 
@@ -830,9 +837,13 @@ struct PlayerView: View {
   /// gated (e.g. ppv.to → indianservers.st) and only works inside the
   /// WebView's browser context.
   private func startAVPlayerWatchdog(_ player: AVPlayer) {
+    // The player is shared across channels, so identity can't tell us whether
+    // this watchdog still owns the playback — compare the *item* it started on.
+    // If a later channel already swapped in a new item, this watchdog is stale.
+    let watchedItem = player.currentItem
     Task { @MainActor in
       try? await Task.sleep(nanoseconds: 8_000_000_000)
-      guard avPlayer === player else { return }
+      guard avPlayer != nil, player.currentItem === watchedItem else { return }
       let item = player.currentItem
       let hasFailed  = item?.status == .failed || item?.error != nil
       let isStalled  = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
@@ -853,6 +864,9 @@ struct PlayerView: View {
           info: hasFailed ? "item_failed" : "stalled_at_0"
         )
       }
+      // Release the stalled item from the shared player so it doesn't keep
+      // buffering a dead stream; the WebView becomes the player from here.
+      PlaybackEngine.shared.stop()
       avPlayer = nil
       webViewFallbackActivated = true
     }
@@ -1025,12 +1039,11 @@ struct PlayerView: View {
     headers["Referer"] = referer.absoluteString
     headers["Origin"]  = (referer.scheme ?? "https") + "://" + (referer.host ?? "")
     let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
-    let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
-    // Send video — not just audio — to AirPlay / HDMI when a route is picked,
-    // and keep using AirPlay video even while an external screen is connected.
-    player.allowsExternalPlayback = true
-    player.usesExternalPlaybackWhileExternalScreenIsActive = true
-    return player
+    // Reuse the one long-lived player so switching channels swaps the item
+    // in place instead of tearing down the player (which would drop AirPlay).
+    let item = AVPlayerItem(asset: asset)
+    PlaybackEngine.shared.load(item)
+    return PlaybackEngine.shared.player
   }
 }
 
