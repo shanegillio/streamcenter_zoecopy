@@ -14,18 +14,22 @@ import AVKit
 ///
 /// While a channel is loading (and casting), the player loops a generated
 /// color-bars "Loading…" clip so the TV shows the same retro pattern as the
-/// in-app loading screen until the real stream is ready. An `AVQueuePlayer` +
-/// `AVPlayerLooper` give a seamless, flicker-free loop.
+/// in-app loading screen until the real stream is ready. `replaceCurrentItem`
+/// swaps items without ever stopping the player, eliminating the AirPlay flash.
 @MainActor
 final class PlaybackEngine {
   static let shared = PlaybackEngine()
 
-  let player = AVQueuePlayer()
+  // Plain AVPlayer — AVQueuePlayer + AVPlayerLooper are avoided because
+  // AVPlayerLooper.init internally calls removeAllItems(), which stops the
+  // player immediately and causes a visible black flash on AirPlay.
+  let player = AVPlayer()
   /// The channel/game id that currently owns the player. Loads tagged with any
   /// other id are stale and ignored.
   private(set) var activeID: String?
 
-  private var looper: AVPlayerLooper?
+  /// Observer token for filler end-of-clip looping.
+  private var fillerObserver: Any?
   /// Set when a filler was requested before the clip finished generating; we
   /// start it as soon as `ColorBarsVideo` signals ready.
   private var pendingFillerID: String?
@@ -46,9 +50,10 @@ final class PlaybackEngine {
   /// Claim the player for a channel. Call when a PlayerView appears.
   func activate(_ id: String) { activeID = id }
 
-  /// Loop the color-bars "finding the next stream" clip on the (external)
-  /// screen until a real stream is loaded. No-op if the channel is no longer
-  /// active; defers itself until the clip is generated if it isn't ready yet.
+  /// Swap the player to the color-bars "Loading…" clip until the real stream
+  /// arrives. Uses replaceCurrentItem so the player never stops — no AirPlay
+  /// flash. No-op if the channel is no longer active; defers itself until the
+  /// clip finishes generating if it isn't ready yet.
   func showFiller(for id: String) {
     guard id == activeID else { return }
     guard let item = ColorBarsVideo.makeLoopingItem() else {
@@ -57,11 +62,25 @@ final class PlaybackEngine {
       return
     }
     pendingFillerID = nil
-    looper?.disableLooping()
-    looper = nil
-    player.removeAllItems()
-    looper = AVPlayerLooper(player: player, templateItem: item)
+    clearFillerObserver()
+    // replaceCurrentItem transitions without stopping — seamless on AirPlay.
+    player.replaceCurrentItem(with: item)
     player.play()
+    // Re-loop when the 120-second clip ends (covers very slow loads).
+    fillerObserver = NotificationCenter.default.addObserver(
+      forName: .AVPlayerItemDidPlayToEndTime,
+      object: item,
+      queue: .main
+    ) { [weak self] notification in
+      Task { @MainActor [weak self] in
+        guard let self,
+              let ended = notification.object as? AVPlayerItem,
+              self.player.currentItem === ended,
+              let fresh = ColorBarsVideo.makeLoopingItem() else { return }
+        self.player.replaceCurrentItem(with: fresh)
+        self.player.play()
+      }
+    }
   }
 
   /// Hot-swap to a real stream item, keeping the same player (and any active
@@ -71,21 +90,26 @@ final class PlaybackEngine {
   func load(_ item: AVPlayerItem, for id: String) -> Bool {
     guard id == activeID else { return false }
     pendingFillerID = nil
-    looper?.disableLooping()
-    looper = nil
-    player.removeAllItems()
-    player.insert(item, after: nil)
+    clearFillerObserver()
+    // replaceCurrentItem is seamless — no removeAllItems stop.
+    player.replaceCurrentItem(with: item)
     player.play()
     return true
   }
 
-  /// Stop playback and clear the queue. Used when leaving the player while not
-  /// casting, and on the stall/fail fallback.
+  /// Stop playback. Used when leaving the player while not casting, and on the
+  /// stall/fail fallback.
   func stop() {
     pendingFillerID = nil
-    looper?.disableLooping()
-    looper = nil
-    player.removeAllItems()
+    clearFillerObserver()
     player.pause()
+    player.replaceCurrentItem(with: nil)
+  }
+
+  private func clearFillerObserver() {
+    if let obs = fillerObserver {
+      NotificationCenter.default.removeObserver(obs)
+      fillerObserver = nil
+    }
   }
 }
