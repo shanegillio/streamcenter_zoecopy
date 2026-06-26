@@ -57,8 +57,11 @@ struct ScrapeDiagnostic {
 final class WebViewScraper: NSObject {
   // MARK: - Shared resources
 
-  /// Persistent (disk-backed) data store so cf_clearance / cf_bm cookies
-  /// also survive app relaunches.
+  /// Persistent (disk-backed) data store so cf_clearance / cf_bm cookies —
+  /// especially Cloudflare's `cf_clearance` set after a successful challenge —
+  /// persist between probes and survive app relaunches. (A shared
+  /// `WKProcessPool` used to back this; it's a no-op since iOS 15, so the
+  /// data store alone now handles cookie sharing.)
   private static let sharedDataStore: WKWebsiteDataStore = .default()
   /// Compiled WKContentRuleList from `AdBlockRules`. Compiled once on first
   /// access and reused across every scraper instance. Drops ad-network

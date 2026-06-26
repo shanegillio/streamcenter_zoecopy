@@ -32,7 +32,14 @@ final class TeamAliasIndex {
   private var aliasesByName: [String: [String]] = [:]
 
   private init() {
-    if let schema = Self.loadSchema() { ingest(schema) }
+    // Load the binary's bundled baseline first so its aliases are always
+    // present, then overlay the on-disk cache (a fresher team list fetched
+    // from the remote). Aliases are unioned per team, so a stale cache can
+    // never drop an alias the bundled file ships — e.g. "USA"/"USMNT" for
+    // United States, without which abbreviation-routed URLs like
+    // `/world-championship/usa-turkiye` can't be matched.
+    if let bundled = Self.loadBundledSchema() { ingest(bundled) }
+    if let cached = Self.loadDiskSchema() { ingest(cached) }
   }
 
   /// Tokens for a team identified by its display name. Empty when the name
@@ -86,15 +93,17 @@ final class TeamAliasIndex {
 
   // MARK: - Loading
 
-  private static func loadSchema() -> TeamDatabase.Schema? {
-    // Prefer the freshest copy on disk (TeamDatabase keeps it updated), fall
-    // back to the binary's bundled baseline.
-    if let url = diskCacheURL,
-       let data = try? Data(contentsOf: url),
-       let schema = try? JSONDecoder().decode(TeamDatabase.Schema.self, from: data) {
-      return schema
-    }
+  private static func loadBundledSchema() -> TeamDatabase.Schema? {
     guard let url = Bundle.main.url(forResource: "teams", withExtension: "json"),
+          let data = try? Data(contentsOf: url),
+          let schema = try? JSONDecoder().decode(TeamDatabase.Schema.self, from: data) else {
+      return nil
+    }
+    return schema
+  }
+
+  private static func loadDiskSchema() -> TeamDatabase.Schema? {
+    guard let url = diskCacheURL,
           let data = try? Data(contentsOf: url),
           let schema = try? JSONDecoder().decode(TeamDatabase.Schema.self, from: data) else {
       return nil
@@ -111,20 +120,22 @@ final class TeamAliasIndex {
     return dir.appendingPathComponent("teams-cache.json")
   }
 
+  /// Merges a schema's team aliases into `aliasesByName`, unioning with any
+  /// already-loaded values for the same name (the bundled baseline plus the
+  /// disk cache both feed through here). Dedupes case-insensitively while
+  /// preserving first-seen order.
   private func ingest(_ schema: TeamDatabase.Schema) {
-    var map: [String: [String]] = [:]
     for (_, league) in schema.leagues {
       for team in league.teams {
         let key = Self.normalize(team.name)
         guard !key.isEmpty else { continue }
-        var values = [team.name]
+        var values = aliasesByName[key] ?? []
+        values.append(team.name)
         values.append(contentsOf: team.aliases ?? [])
-        // Earlier leagues win on collision, mirroring TeamDatabase, but for
-        // alias purposes any league's aliases for the same name are fine.
-        if map[key] == nil { map[key] = values }
+        var seen = Set<String>()
+        aliasesByName[key] = values.filter { seen.insert($0.lowercased()).inserted }
       }
     }
-    aliasesByName = map
   }
 
   static func normalize(_ s: String) -> String {

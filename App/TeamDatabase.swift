@@ -56,14 +56,16 @@ actor TeamDatabase {
 
   init() {
     // Synchronous baseline load so the first query after construction
-    // returns useful data without awaiting a network round-trip.
+    // returns useful data without awaiting a network round-trip. Assign the
+    // stored indexes directly (rather than via the isolated `ingest`) so this
+    // nonisolated initializer stays valid under the Swift 6 concurrency model.
     if let bundled = Self.loadBundled() {
-      let (e, x) = Self.buildTables(from: bundled)
-      entries = e
-      exact = x
+      let index = Self.buildIndex(from: bundled)
+      entries = index.entries
+      exact = index.exact
     }
     // Kick off background refresh — silently no-ops if last refresh was
-    // recent enough.
+    // recent enough. The Task hops onto the actor before touching state.
     Task { [weak self] in
       await self?.refreshIfStale()
     }
@@ -205,15 +207,14 @@ actor TeamDatabase {
   ]
 
   private func ingest(_ schema: Schema) {
-    let (newEntries, newExact) = Self.buildTables(from: schema)
-    entries = newEntries
-    exact = newExact
+    let index = Self.buildIndex(from: schema)
+    entries = index.entries
+    exact = index.exact
   }
 
-  /// Pure transform from decoded schema → lookup tables. `nonisolated static`
-  /// so it can run during `init` (before the actor is fully formed) without
-  /// touching mutable actor state.
-  private static func buildTables(
+  /// Pure index builder shared by `ingest` and the synchronous `init` baseline
+  /// load. Nonisolated/static so it can run before the actor is fully formed.
+  private static func buildIndex(
     from schema: Schema
   ) -> (entries: [(name: String, league: SportLeague)], exact: [String: SportLeague]) {
     var newEntries: [(name: String, league: SportLeague)] = []
