@@ -25,6 +25,15 @@
       ],
       "versions": [
         {
+          "version": "2.58",
+          "date": "2026-06-26",
+          "size": 0,
+          "downloadURL": "https://github.com/shanegillio/altstore-source/releases/download/v2.58/StreamCenter-2.58.ipa",
+          "localizedDescription": "Fix AirPlay channel-swap glitch: replaceCurrentItem replaces the old AVQueuePlayer+AVPlayerLooper approach that briefly stopped the player (and flashed black on the TV) during every channel switch. Two-phase foundation model scraper now profiles each site's URL pattern and card CSS class once per session, pre-filters links before the model sees them, and handles abbreviation-style team URLs natively.",
+          "buildVersion": "258",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "1.0",
           "date": "2026-05-15",
           "size": 747962,
