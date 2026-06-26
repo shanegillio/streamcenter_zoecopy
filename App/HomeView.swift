@@ -49,7 +49,7 @@ struct HomeView: View {
 
   private var header: some View {
     HStack {
-      Text("Streams")
+      Text("StreamCenter")
         .font(.system(size: 26, weight: .heavy))
         .foregroundStyle(GuideTheme.text)
       Spacer()
@@ -125,6 +125,12 @@ struct HomeView: View {
           }
           .refreshable { await loadLeagues(forceRefresh: true) }
           .clipShape(RoundedRectangle(cornerRadius: 14))
+          // Subtle frame around the guide so blocks scrolling past the edge
+          // read as clipped by a container rather than abruptly cut off.
+          .overlay(
+            RoundedRectangle(cornerRadius: 14)
+              .stroke(GuideTheme.separator, lineWidth: 1)
+          )
           // Keep the tuned-in channel on screen. A nil anchor scrolls the
           // minimum amount, so the guide only "pages" when the selected
           // channel is off-screen and stays put when it's already visible.
