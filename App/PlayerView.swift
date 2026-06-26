@@ -196,6 +196,9 @@ struct PlayerView: View {
     .toolbarColorScheme(.dark, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
     .task {
+      // Configure the audio session so AVPlayer can AirPlay video (not just
+      // audio) to an Apple TV, and start tracking the external route.
+      AirPlayController.shared.configureAudioSession()
       ruleList = await AdBlockRules.compile()
       rulesReady = true
       buildAttempts()
@@ -1022,7 +1025,12 @@ struct PlayerView: View {
     headers["Referer"] = referer.absoluteString
     headers["Origin"]  = (referer.scheme ?? "https") + "://" + (referer.host ?? "")
     let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
-    return AVPlayer(playerItem: AVPlayerItem(asset: asset))
+    let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+    // Send video — not just audio — to AirPlay / HDMI when a route is picked,
+    // and keep using AirPlay video even while an external screen is connected.
+    player.allowsExternalPlayback = true
+    player.usesExternalPlaybackWhileExternalScreenIsActive = true
+    return player
   }
 }
 

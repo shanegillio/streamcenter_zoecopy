@@ -10,12 +10,15 @@ struct TVStageView: View {
   let onChannelDown: () -> Void
   let onPrev: () -> Void
 
+  private let airplay = AirPlayController.shared
+
   var body: some View {
     HStack(alignment: .center, spacing: 10) {
       tvBox
       controls
     }
     .padding(.horizontal, 14)
+    .animation(.smooth, value: airplay.isExternalActive)
   }
 
   private var tvBox: some View {
@@ -27,9 +30,16 @@ struct TVStageView: View {
         // which include a full-screen (expand) button. Going full screen
         // that way reuses this same AVPlayer instead of spinning up a
         // second player, so there's never a double-video.
+        //
+        // The player stays mounted while AirPlaying (so the stream keeps
+        // flowing to the TV) but is covered by the broadcasting panel — the
+        // phone becomes a remote, with the channel controls alongside.
         PlayerView(game: game, embedded: true)
           .id(game.id)
           .clipShape(RoundedRectangle(cornerRadius: 14))
+        if airplay.isExternalActive {
+          broadcastingPanel(game: game)
+        }
       } else {
         TestPatternView()
           .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -39,8 +49,41 @@ struct TVStageView: View {
     .frame(maxWidth: .infinity)
   }
 
+  /// Shown over the (still-playing) inline player while the game is on an
+  /// external screen. Makes it clear the phone is now a remote.
+  private func broadcastingPanel(game: Game) -> some View {
+    ZStack {
+      RoundedRectangle(cornerRadius: 14).fill(Color.black)
+      VStack(spacing: 10) {
+        Image(systemName: "tv.and.mediabox.fill")
+          .font(.system(size: 34, weight: .semibold))
+          .foregroundStyle(.white)
+        VStack(spacing: 3) {
+          Text("Playing on \(airplay.routeName)")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.white)
+          Text(game.title)
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.65))
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+        }
+        .padding(.horizontal, 16)
+      }
+    }
+    .clipShape(RoundedRectangle(cornerRadius: 14))
+    .transition(.opacity)
+  }
+
   private var controls: some View {
     VStack(spacing: 12) {
+      AirPlayRoutePicker(
+        tint: GuideTheme.text,
+        activeTint: .accentColor
+      )
+      .frame(width: 46, height: 42)
+      .glassBackground(in: RoundedRectangle(cornerRadius: 13))
+      .accessibilityLabel("AirPlay")
       Button(action: onChannelUp) {
         controlIcon("chevron.up")
       }
