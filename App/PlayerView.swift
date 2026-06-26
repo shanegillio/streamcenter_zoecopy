@@ -2479,6 +2479,12 @@ struct StreamWebView: UIViewRepresentable {
         }
         var out = parts.join(' | ');
         if (out.length > 600) out = out.slice(0, 600);
+        // Strip diacritics (preserving case so the capital-letter game-line
+        // regex still fires): "Türkiye"→"Turkiye", "Atlético"→"Atletico". The
+        // `_gameLinePattern` token class is ascii-only ([A-Z][\\w…]), so an
+        // accented name would never parse as a team and the card would be
+        // dropped before matching ran.
+        try { out = out.normalize('NFD').replace(/[\\u0300-\\u036f]/g, ''); } catch(e){}
         return out;
       }
 
@@ -2533,9 +2539,18 @@ struct StreamWebView: UIViewRepresentable {
         }
         return false;
       }
+      // Lowercase AND strip diacritics so on-page text like "Türkiye",
+      // "Atlético", or "São Paulo" matches the ascii-folded target tokens the
+      // Swift side ships ("turkiye", "atletico", "sao paulo"). Without this the
+      // text matchers silently miss every accented team name.
+      function _fold(s) {
+        s = '' + s;
+        try { s = s.normalize('NFD').replace(/[\\u0300-\\u036f]/g, ''); } catch(e){}
+        return s.toLowerCase();
+      }
       // Does `blob` (already lowercased or not) mention this side's team?
       function _sideHit(blob, side) {
-        var low = ('' + blob).toLowerCase();
+        var low = _fold(blob);
         var longs = _longToks(side);
         for (var i = 0; i < longs.length; i++) if (low.indexOf(longs[i]) !== -1) return true;
         var abbrs = _abbrToks(side);
