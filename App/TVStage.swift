@@ -23,11 +23,15 @@ struct TVStageView: View {
     if isLandscape {
       landscapeStage
     } else {
-      HStack(alignment: .center, spacing: 10) {
+      // Portrait: the stream spans the full guide width with the channel
+      // controls overlaid on its trailing edge (liquid glass), rather than
+      // sitting in a column beside it.
+      ZStack(alignment: .trailing) {
         portraitTVBox
         controls
+          .padding(.trailing, 10)
       }
-      .padding(.horizontal, 14)
+      .padding(.horizontal, 16)
       .animation(.smooth, value: airplay.isExternalActive)
     }
   }

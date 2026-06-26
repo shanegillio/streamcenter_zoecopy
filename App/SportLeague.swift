@@ -82,6 +82,47 @@ enum SportLeague: String, CaseIterable, Identifiable, Codable, Hashable {
     }
   }
 
+  /// Short, channel-style code (≤4 letters) shown in the guide's channel
+  /// column, e.g. "MLB", "EPL".
+  var channelCode: String {
+    switch self {
+    case .nfl:             return "NFL"
+    case .nba:             return "NBA"
+    case .mlb:             return "MLB"
+    case .nhl:             return "NHL"
+    case .mma:             return "MMA"
+    case .ufc:             return "UFC"
+    case .boxing:          return "BOX"
+    case .soccer:          return "SOC"
+    case .premierLeague:   return "EPL"
+    case .laLiga:          return "LIGA"
+    case .serieA:          return "SERA"
+    case .bundesliga:      return "BUND"
+    case .ligue1:          return "LIG1"
+    case .eredivisie:      return "ERE"
+    case .mls:             return "MLS"
+    case .ligaMx:          return "LMX"
+    case .championsLeague: return "UCL"
+    case .europaLeague:    return "UEL"
+    case .worldCup:        return "WC"
+    case .clubWorldCup:    return "CWC"
+    case .euros:           return "EURO"
+    case .copaAmerica:     return "COPA"
+    case .nationsLeague:   return "UNL"
+    case .f1:              return "F1"
+    case .ncaaf:           return "NCAF"
+    case .ncaab:           return "NCAB"
+    case .wnba:            return "WNBA"
+    case .wwe:             return "WWE"
+    case .tennis:          return "TEN"
+    case .golf:            return "GOLF"
+    case .nascar:          return "NAS"
+    case .cricket:         return "CRIC"
+    case .iihf:            return "IIHF"
+    case .other:           return "OTH"
+    }
+  }
+
   /// Lower = more popular in the United States. Used to order the Live Now feed.
   var popularityRank: Int {
     switch self {

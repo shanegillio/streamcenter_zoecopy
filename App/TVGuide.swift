@@ -42,8 +42,18 @@ enum GuideTheme {
   /// Primary / secondary text drawn on top of the chrome shades.
   static let onChrome = Color.white
   static let onChromeDim = Color.white.opacity(0.7)
-  /// Live game block tint (reads well on both appearances).
+  /// Darkish-yellow tint for the channel column's fallback (no-logo) glyphs.
+  static let channelIcon = Color(red: 0.83, green: 0.64, blue: 0.12)
+  /// Live game block tint (reads well on both appearances). Used for the live
+  /// block's outline, "LIVE" label, and team names.
   static let live = Color(red: 0.80, green: 0.22, blue: 0.24)
+  /// Live blocks use a light-red fill (instead of a solid red one) so the red
+  /// "now" line stays visible through them; paired with the `live` red outline.
+  static let liveFill = Color(light: Color(red: 0.99, green: 0.89, blue: 0.90),
+                             dark: Color(red: 0.32, green: 0.11, blue: 0.13))
+  /// Text drawn on a live (light-red) block.
+  static let liveText = Color(light: Color(red: 0.72, green: 0.13, blue: 0.16),
+                             dark: Color(red: 1.0, green: 0.62, blue: 0.64))
   /// Hairline separators between rows / channels.
   static let separator = Color(light: Color.black.opacity(0.12),
                               dark: Color.white.opacity(0.12))
@@ -60,7 +70,9 @@ enum GuideTheme {
   /// fills the timeline width on a phone (≈300 pt ÷ 120 min), giving the
   /// half-hour tick labels room to breathe.
   static let pointsPerMinute: CGFloat = 2.5
-  static let rowHeight: CGFloat = 72
+  /// Taller rows so team names read clearly; sized so ~3 channels fill the
+  /// guide with a sliver of the fourth peeking in below.
+  static let rowHeight: CGFloat = 130
   static let channelColumnWidth: CGFloat = 64
   static let headerHeight: CGFloat = 34
   /// Minimum rendered width for a block, regardless of how little time the
@@ -388,17 +400,23 @@ struct GuideChannelCell: View {
   private var isFavorited: Bool { favorites.isLeagueFavorite(channel.league) }
 
   var body: some View {
-    HStack(spacing: 4) {
-      LeagueIcon(league: channel.league, size: 28)
-      if let n = channel.number {
-        Text("\(n)")
-          .font(.system(size: 14, weight: .bold))
-          .foregroundStyle(GuideTheme.onChrome)
-      }
-      Spacer(minLength: 0)
+    VStack(spacing: 6) {
+      // Channel-style label: abbreviated league + number (e.g. "MLB 1"). Every
+      // channel shows a number — single-row leagues default to 1.
+      Text("\(channel.league.channelCode) \(channel.number ?? 1)")
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(GuideTheme.onChrome)
+        .lineLimit(1)
+        .minimumScaleFactor(0.6)
+      LeagueIcon(
+        league: channel.league,
+        size: 48,
+        showsBackground: false,
+        symbolColor: GuideTheme.channelIcon
+      )
     }
-    .padding(.leading, 8)
-    .frame(width: GuideTheme.channelColumnWidth, height: GuideTheme.rowHeight, alignment: .leading)
+    .padding(.horizontal, 4)
+    .frame(width: GuideTheme.channelColumnWidth, height: GuideTheme.rowHeight)
     .background(GuideTheme.chromeColumn)
     .overlay(alignment: .topLeading) {
       if isFavorited {
@@ -491,98 +509,92 @@ struct GuideGameBlock: View {
     game.isEvent || game.awayTeam.isEmpty || game.awayTeam == "TBD"
   }
   private var isFavorited: Bool { favorites.isFavoriteGame(game) }
+  private var isLive: Bool { game.isCurrentlyLive }
 
   var body: some View {
-    HStack(spacing: 9) {
-      logos
-      teamNames
-      Spacer(minLength: 6)
+    VStack(alignment: .leading, spacing: 6) {
+      teamRows
       status
     }
-    .foregroundStyle(.white)
-    .padding(.horizontal, 11)
+    .foregroundStyle(isLive ? GuideTheme.liveText : .white)
+    .padding(.horizontal, 14)
+    .padding(.vertical, 8)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     .background(
-      RoundedRectangle(cornerRadius: 10)
-        .fill(game.isCurrentlyLive ? GuideTheme.live : GuideTheme.panelBright)
+      RoundedRectangle(cornerRadius: 12)
+        .fill(isLive ? GuideTheme.liveFill : GuideTheme.panelBright)
+    )
+    // Live blocks get a light-red fill plus a solid red outline (so they still
+    // read as "on now" while the red now-line stays visible through them); the
+    // thicker selection outline sits on top when this is the watched game.
+    .overlay(
+      RoundedRectangle(cornerRadius: 12)
+        .stroke(isLive ? GuideTheme.live : Color.clear, lineWidth: 2.5)
     )
     .overlay(
-      RoundedRectangle(cornerRadius: 10)
-        .stroke(isSelected ? GuideTheme.selectionStroke : Color.clear, lineWidth: 4)
+      RoundedRectangle(cornerRadius: 12)
+        .stroke(isSelected ? GuideTheme.live : Color.clear, lineWidth: 6)
     )
     .overlay(alignment: .topLeading) {
       if isFavorited {
         Image(systemName: "star.fill")
-          .font(.system(size: 11))
+          .font(.system(size: 12))
           .foregroundStyle(.yellow)
-          .padding(5)
+          .padding(6)
       }
     }
-    .clipShape(RoundedRectangle(cornerRadius: 10))
+    .clipShape(RoundedRectangle(cornerRadius: 12))
   }
 
-  // Team names sit left-aligned next to the logos. Two-team games stack the
-  // home team, a "vs." separator, and the away team. Each name stays on a
-  // single line; with the 90-minute minimum block width it almost always fits,
-  // and an overly long name truncates with an ellipsis rather than wrapping.
+  /// Whether per-team logos exist for this game. Single-team events and
+  /// leagues with no ESPN logo source have no team icon — those blocks drop the
+  /// icon entirely and run the names flush to the left.
+  private var showsTeamIcons: Bool { !(game.isEvent || usesLeagueFallback) }
+
+  // Each team is one row: its logo (when available) next to its name. Two-team
+  // games stack the home row above the away row; single-team events show one
+  // row. Names stay on a single line and truncate with an ellipsis if too long.
   @ViewBuilder
-  private var teamNames: some View {
+  private var teamRows: some View {
     if isSingle {
-      Text(game.homeTeam)
-        .font(.system(size: 13, weight: .bold))
+      teamRow(name: game.homeTeam)
+    } else {
+      VStack(alignment: .leading, spacing: 8) {
+        teamRow(name: game.homeTeam)
+        teamRow(name: game.awayTeam)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func teamRow(name: String) -> some View {
+    HStack(spacing: 10) {
+      if showsTeamIcons {
+        TeamLogo(teamName: name, league: game.league, size: 30)
+      }
+      Text(name)
+        .font(.system(size: 18, weight: .bold))
         .lineLimit(1)
         .truncationMode(.tail)
         .multilineTextAlignment(.leading)
-    } else {
-      VStack(alignment: .leading, spacing: 1) {
-        Text(game.homeTeam)
-          .font(.system(size: 13, weight: .bold))
-          .lineLimit(1)
-          .truncationMode(.tail)
-        Text("vs.")
-          .font(.system(size: 11, weight: .semibold))
-          .foregroundStyle(.white.opacity(0.8))
-        Text(game.awayTeam)
-          .font(.system(size: 13, weight: .bold))
-          .lineLimit(1)
-          .truncationMode(.tail)
-      }
-      .multilineTextAlignment(.leading)
     }
   }
 
-  // Status pins to the trailing edge: a "• LIVE" indicator for in-progress
-  // games, or the game's start time for upcoming ones.
+  // Status sits on its own line beneath the team names — a "• LIVE" indicator
+  // for in-progress games, or the start time for upcoming ones — so the full
+  // block width is free for long team names.
   @ViewBuilder
   private var status: some View {
-    Group {
-      if game.isCurrentlyLive {
-        HStack(spacing: 4) {
-          Circle().fill(.white).frame(width: 5, height: 5)
-          Text("LIVE").font(.system(size: 11, weight: .heavy))
-        }
-      } else {
-        Text(game.displayTime)
-          .font(.system(size: 11, weight: .semibold))
-          .foregroundStyle(.white.opacity(0.92))
+    if isLive {
+      HStack(spacing: 5) {
+        Circle().fill(GuideTheme.live).frame(width: 7, height: 7)
+        Text("LIVE").font(.system(size: 16, weight: .heavy))
       }
-    }
-    // Keep the status on one line at its natural width and give it layout
-    // priority, so when team names are long it's the names that wrap, not this.
-    .lineLimit(1)
-    .fixedSize()
-    .layoutPriority(1)
-  }
-
-  @ViewBuilder
-  private var logos: some View {
-    if game.isEvent || usesLeagueFallback {
-      LeagueIcon(league: game.league, size: 30)
     } else {
-      VStack(spacing: 3) {
-        TeamLogo(teamName: game.homeTeam, league: game.league, size: 20)
-        TeamLogo(teamName: game.awayTeam, league: game.league, size: 20)
-      }
+      Text(game.displayTime)
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(.white.opacity(0.92))
+        .lineLimit(1)
     }
   }
 }

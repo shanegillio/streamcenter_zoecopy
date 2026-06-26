@@ -9,61 +9,73 @@ struct SettingsView: View {
 
   var body: some View {
     List {
+      // Custom large title — the system large title renders in the default
+      // (dark) label color, which is invisible on the dark-purple background,
+      // so we draw our own white one here.
+      Text("Settings")
+        .font(.system(size: 34, weight: .bold))
+        .foregroundStyle(GuideTheme.onChrome)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: 12, leading: 18, bottom: 2, trailing: 18))
+
       // MARK: Sources
-      Section("Sources") {
-        NavigationLink(destination: SourceListView()) {
+      Section {
+        chevronLink(destination: SourceListView()) {
           HStack(spacing: 12) {
             settingsIcon(systemName: "antenna.radiowaves.left.and.right")
             Text("Sources")
-              .foregroundStyle(GuideTheme.text)
+              .foregroundStyle(GuideTheme.onChrome)
             Spacer()
             Text("\(registry.enabledSources.count)")
               .font(.subheadline)
-              .foregroundStyle(GuideTheme.textDim)
+              .foregroundStyle(GuideTheme.onChromeDim)
           }
           .padding(.vertical, 2)
         }
-        .listRowBackground(GuideTheme.panel)
+        .listRowBackground(GuideTheme.chromeColumn)
+      } header: {
+        sectionHeader("Sources")
       }
 
       // MARK: Favorites
       Section {
-        NavigationLink(destination: AllFavoritesView()) {
+        chevronLink(destination: AllFavoritesView()) {
           settingsRow(
             icon: "star.fill",
             title: "All favorites",
             count: 0
           )
         }
-        .listRowBackground(GuideTheme.panel)
-        NavigationLink(destination: FavoriteSportsView()) {
+        .listRowBackground(GuideTheme.chromeColumn)
+        chevronLink(destination: FavoriteSportsView()) {
           settingsRow(
             icon: "sportscourt.fill",
             title: "Sports",
             count: favorites.favoriteSports.count
           )
         }
-        .listRowBackground(GuideTheme.panel)
-        NavigationLink(destination: FavoriteLeaguesView()) {
+        .listRowBackground(GuideTheme.chromeColumn)
+        chevronLink(destination: FavoriteLeaguesView()) {
           settingsRow(
             icon: "trophy.fill",
             title: "Leagues",
             count: favorites.favoriteLeagues.count
           )
         }
-        .listRowBackground(GuideTheme.panel)
-        NavigationLink(destination: FavoriteTeamsView()) {
+        .listRowBackground(GuideTheme.chromeColumn)
+        chevronLink(destination: FavoriteTeamsView()) {
           settingsRow(
             icon: "person.3.fill",
             title: "Teams",
             count: favorites.favoriteTeams.count
           )
         }
-        .listRowBackground(GuideTheme.panel)
+        .listRowBackground(GuideTheme.chromeColumn)
       } header: {
-        Text("Favorites")
+        sectionHeader("Favorites")
       } footer: {
-        Text("Favorites surface live games on the home screen and mark tiles with a star.")
+        sectionFooter("Favorites surface live games on the home screen and mark tiles with a star.")
       }
 
       // MARK: Debugging
@@ -72,68 +84,105 @@ struct SettingsView: View {
           HStack(spacing: 12) {
             settingsIcon(systemName: "ladybug.fill")
             Text("Debugging mode")
-              .foregroundStyle(GuideTheme.text)
+              .foregroundStyle(GuideTheme.onChrome)
           }
         }
-        .listRowBackground(GuideTheme.panel)
-        NavigationLink(destination: DiagnosticsView()) {
+        .tint(.accentColor)
+        .listRowBackground(GuideTheme.chromeColumn)
+        chevronLink(destination: DiagnosticsView()) {
           HStack(spacing: 12) {
             settingsIcon(systemName: "wrench.and.screwdriver.fill")
             Text("Source Diagnostics")
-              .foregroundStyle(GuideTheme.text)
+              .foregroundStyle(GuideTheme.onChrome)
           }
           .padding(.vertical, 2)
         }
-        .listRowBackground(GuideTheme.panel)
-        NavigationLink(destination: TraversalLogView()) {
+        .listRowBackground(GuideTheme.chromeColumn)
+        chevronLink(destination: TraversalLogView()) {
           HStack(spacing: 12) {
             settingsIcon(systemName: "list.bullet.rectangle.fill")
             Text("Traversal Log")
-              .foregroundStyle(GuideTheme.text)
+              .foregroundStyle(GuideTheme.onChrome)
           }
           .padding(.vertical, 2)
         }
-        .listRowBackground(GuideTheme.panel)
+        .listRowBackground(GuideTheme.chromeColumn)
       } header: {
-        Text("Debugging")
+        sectionHeader("Debugging")
       } footer: {
-        Text("Debugging mode shows the web view while finding a stream. When off, you'll just see a loading screen until playback starts.")
+        sectionFooter("Debugging mode shows the web view while finding a stream. When off, you'll just see a loading screen until playback starts.")
       }
     }
     .listStyle(.insetGrouped)
     .scrollContentBackground(.hidden)
-    .background(GuideTheme.background)
-    .navigationTitle("Settings")
-    .navigationBarTitleDisplayMode(.large)
+    .background(GuideTheme.chromeHeader)
+    .navigationTitle("")
+    .navigationBarTitleDisplayMode(.inline)
+    // Match the guide's dark-purple chrome: tinted nav bar with light content.
+    .toolbarBackground(GuideTheme.chromeHeader, for: .navigationBar)
+    .toolbarBackground(.visible, for: .navigationBar)
+    .toolbarColorScheme(.dark, for: .navigationBar)
   }
 
   // MARK: - Helpers
 
-  /// Standard iOS-style settings glyph: a filled accent square with a white
-  /// symbol. Every row uses the same accent so the list reads as one app.
+  /// Stylized settings glyph — a bare SF Symbol in the guide's amber/league
+  /// color (no filled square), matching the channel icons in the TV guide.
   private func settingsIcon(systemName: String) -> some View {
-    RoundedRectangle(cornerRadius: 7, style: .continuous)
-      .fill(Color.accentColor)
+    Image(systemName: systemName)
+      .font(.system(size: 17, weight: .semibold))
+      .foregroundStyle(GuideTheme.channelIcon)
       .frame(width: 30, height: 30)
-      .overlay(
-        Image(systemName: systemName)
-          .font(.system(size: 15, weight: .semibold))
-          .foregroundStyle(.white)
-      )
   }
 
   private func settingsRow(icon: String, title: String, count: Int) -> some View {
     HStack(spacing: 12) {
       settingsIcon(systemName: icon)
-      Text(title).foregroundStyle(GuideTheme.text)
+      Text(title).foregroundStyle(GuideTheme.onChrome)
       Spacer()
       if count > 0 {
         Text("\(count)")
           .font(.subheadline)
-          .foregroundStyle(GuideTheme.textDim)
+          .foregroundStyle(GuideTheme.onChromeDim)
       }
     }
     .padding(.vertical, 2)
+  }
+
+  /// White section header on the dark-purple settings list.
+  private func sectionHeader(_ text: String) -> some View {
+    Text(text)
+      .font(.footnote.weight(.semibold))
+      .foregroundStyle(GuideTheme.onChrome)
+  }
+
+  /// Dimmed section footer on the dark-purple settings list.
+  private func sectionFooter(_ text: String) -> some View {
+    Text(text)
+      .font(.footnote)
+      .foregroundStyle(GuideTheme.onChromeDim)
+  }
+
+  /// A navigation row that draws its own light chevron. The system disclosure
+  /// indicator is dark gray and ignores tint, so it disappears on the indigo
+  /// rows — instead we lay a transparent NavigationLink behind the content
+  /// (still fully tappable) and add a visible trailing chevron ourselves.
+  @ViewBuilder
+  private func chevronLink<D: View, L: View>(
+    destination: D,
+    @ViewBuilder label: () -> L
+  ) -> some View {
+    ZStack {
+      NavigationLink(destination: destination) { EmptyView() }
+        .opacity(0)
+      HStack(spacing: 8) {
+        label()
+        Spacer(minLength: 0)
+        Image(systemName: "chevron.right")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(GuideTheme.onChromeDim)
+      }
+    }
   }
 }
 
@@ -388,13 +437,38 @@ private struct AddSourcePopup: View {
 // MARK: - Shared favorites styling
 
 extension View {
-  /// Common dark, inset-grouped list chrome shared by every settings/favorites
-  /// sub-page so they all match the overall Settings look.
+  /// Common dark-purple, inset-grouped list chrome shared by every
+  /// settings/favorites sub-page so they all match the Settings look: purple
+  /// background, tinted nav bar, and a light (white) inline title.
   func darkSettingsList() -> some View {
     self
       .listStyle(.insetGrouped)
       .scrollContentBackground(.hidden)
-      .background(GuideTheme.background)
+      .background(GuideTheme.chromeHeader)
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbarBackground(GuideTheme.chromeHeader, for: .navigationBar)
+      .toolbarBackground(.visible, for: .navigationBar)
+      .toolbarColorScheme(.dark, for: .navigationBar)
+  }
+}
+
+/// A favorites/settings navigation row that draws its own light chevron (the
+/// system disclosure indicator is dark gray and invisible on the indigo rows).
+@ViewBuilder
+func purpleNavLink<D: View, L: View>(
+  destination: D,
+  @ViewBuilder label: () -> L
+) -> some View {
+  ZStack {
+    NavigationLink(destination: destination) { EmptyView() }
+      .opacity(0)
+    HStack(spacing: 8) {
+      label()
+      Spacer(minLength: 0)
+      Image(systemName: "chevron.right")
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(GuideTheme.onChromeDim)
+    }
   }
 }
 
@@ -403,7 +477,7 @@ extension View {
 func FavoriteStar(_ on: Bool) -> some View {
   Image(systemName: on ? "star.fill" : "star")
     .font(.system(size: 17))
-    .foregroundStyle(on ? AnyShapeStyle(.yellow) : AnyShapeStyle(Color(.tertiaryLabel)))
+    .foregroundStyle(on ? AnyShapeStyle(.yellow) : AnyShapeStyle(GuideTheme.onChromeDim))
     // Nudge the star inward so it doesn't crowd the trailing A–Z index bar.
     .padding(.trailing, 6)
 }
@@ -424,20 +498,16 @@ struct FavoriteSportsView: View {
       ForEach(sports) { sport in
         Button { favorites.toggleSport(sport) } label: {
           HStack(spacing: 14) {
-            ZStack {
-              Circle()
-                .fill(sport.accentColor.opacity(0.22))
-                .frame(width: 40, height: 40)
-              Image(systemName: sport.sfSymbol)
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(sport.accentColor)
-            }
+            Image(systemName: sport.sfSymbol)
+              .font(.system(size: 22, weight: .semibold))
+              .foregroundStyle(GuideTheme.channelIcon)
+              .frame(width: 40, height: 40)
             VStack(alignment: .leading, spacing: 2) {
               Text(sport.displayName)
                 .font(.body.weight(.medium))
-                .foregroundStyle(GuideTheme.text)
+                .foregroundStyle(GuideTheme.onChrome)
               Text(sport.leagues.map(\.displayName).joined(separator: ", "))
-                .font(.caption).foregroundStyle(GuideTheme.textDim)
+                .font(.caption).foregroundStyle(GuideTheme.onChromeDim)
                 .lineLimit(1)
             }
             Spacer()
@@ -446,11 +516,10 @@ struct FavoriteSportsView: View {
           .padding(.vertical, 4)
         }
         .buttonStyle(.plain)
-        .listRowBackground(GuideTheme.panel)
+        .listRowBackground(GuideTheme.chromeColumn)
       }
     }
     .navigationTitle("All Sports")
-    .navigationBarTitleDisplayMode(.large)
     .darkSettingsList()
   }
 }
@@ -490,14 +559,14 @@ struct FavoriteLeaguesView: View {
             } header: {
               Text(section.letter)
                 .font(.caption.weight(.bold))
-                .foregroundStyle(GuideTheme.textDim)
+                .foregroundStyle(GuideTheme.onChromeDim)
                 .id(section.letter)
             }
           }
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
-        .background(GuideTheme.background)
+        .background(GuideTheme.chromeHeader)
 
         // Contacts-style A–Z index — only when not searching and there's
         // more than one letter to jump between.
@@ -514,24 +583,27 @@ struct FavoriteLeaguesView: View {
       }
     }
     .navigationTitle("All Leagues")
-    .navigationBarTitleDisplayMode(.large)
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbarBackground(GuideTheme.chromeHeader, for: .navigationBar)
+    .toolbarBackground(.visible, for: .navigationBar)
+    .toolbarColorScheme(.dark, for: .navigationBar)
     .searchable(text: $search, prompt: "Search leagues…")
   }
 
   private func leagueRow(_ league: SportLeague) -> some View {
     Button { favorites.toggleLeague(league) } label: {
       HStack(spacing: 14) {
-        LeagueIcon(league: league, size: 40)
+        LeagueIcon(league: league, size: 40, showsBackground: false, symbolColor: GuideTheme.channelIcon)
         Text(league.displayName)
           .font(.body.weight(.medium))
-          .foregroundStyle(GuideTheme.text)
+          .foregroundStyle(GuideTheme.onChrome)
         Spacer()
         FavoriteStar(favorites.isLeagueFavorite(league))
       }
       .padding(.vertical, 4)
     }
     .buttonStyle(.plain)
-    .listRowBackground(GuideTheme.panel)
+    .listRowBackground(GuideTheme.chromeColumn)
   }
 }
 
@@ -549,22 +621,19 @@ struct FavoriteTeamsView: View {
   var body: some View {
     List {
       ForEach(groups, id: \.league) { group in
-        NavigationLink {
-          LeagueTeamsView(league: group.league, teams: group.teams)
-        } label: {
+        purpleNavLink(destination: LeagueTeamsView(league: group.league, teams: group.teams)) {
           HStack(spacing: 14) {
-            LeagueIcon(league: group.league, size: 40)
+            LeagueIcon(league: group.league, size: 40, showsBackground: false, symbolColor: GuideTheme.channelIcon)
             Text(group.league.displayName)
               .font(.body.weight(.medium))
-              .foregroundStyle(GuideTheme.text)
+              .foregroundStyle(GuideTheme.onChrome)
           }
           .padding(.vertical, 4)
         }
-        .listRowBackground(GuideTheme.panel)
+        .listRowBackground(GuideTheme.chromeColumn)
       }
     }
     .navigationTitle("Select a league")
-    .navigationBarTitleDisplayMode(.large)
     .darkSettingsList()
   }
 }
@@ -601,19 +670,19 @@ struct LeagueTeamsView: View {
           ForEach(sections, id: \.letter) { section in
             Section {
               ForEach(section.teams, id: \.self) { team in
-                teamRow(team).listRowBackground(GuideTheme.panel)
+                teamRow(team).listRowBackground(GuideTheme.chromeColumn)
               }
             } header: {
               Text(section.letter)
                 .font(.caption.weight(.bold))
-                .foregroundStyle(GuideTheme.textDim)
+                .foregroundStyle(GuideTheme.onChromeDim)
                 .id(section.letter)
             }
           }
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
-        .background(GuideTheme.background)
+        .background(GuideTheme.chromeHeader)
 
         // Contacts-style A–Z index — only when not searching and there's
         // more than one letter to jump between.
@@ -634,7 +703,10 @@ struct LeagueTeamsView: View {
       }
     }
     .navigationTitle("All \(league.displayName) Teams")
-    .navigationBarTitleDisplayMode(.large)
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbarBackground(GuideTheme.chromeHeader, for: .navigationBar)
+    .toolbarBackground(.visible, for: .navigationBar)
+    .toolbarColorScheme(.dark, for: .navigationBar)
     .searchable(text: $search, prompt: "Search teams…")
   }
 
@@ -642,7 +714,7 @@ struct LeagueTeamsView: View {
     Button { favorites.toggleTeam(team) } label: {
       HStack(spacing: 12) {
         TeamLogo(teamName: team, league: league, size: 32)
-        Text(team).font(.body).foregroundStyle(GuideTheme.text)
+        Text(team).font(.body).foregroundStyle(GuideTheme.onChrome)
         Spacer()
         FavoriteStar(favorites.isTeamFavorite(team))
       }
@@ -697,27 +769,40 @@ struct SectionIndexBar: View {
 struct LeagueIcon: View {
   let league: SportLeague
   let size: CGFloat
+  /// Whether to draw the tinted circle behind the logo/glyph.
+  var showsBackground: Bool = true
+  /// Tint for the SF Symbol fallback; defaults to the league accent color.
+  var symbolColor: Color? = nil
 
   var body: some View {
     ZStack {
-      Circle()
-        .fill(league.accentColor.opacity(0.12))
-        .frame(width: size, height: size)
+      if showsBackground {
+        Circle()
+          .fill(league.accentColor.opacity(0.12))
+          .frame(width: size, height: size)
+      }
 
       if let logoURL = league.leagueLogoURL {
         CachedAsyncImage(url: logoURL) { image in
           image.resizable().scaledToFit()
-            .padding(size * 0.12)
+            .padding(showsBackground ? size * 0.12 : 0)
         } placeholder: {
-          Text(league.emoji)
-            .font(.system(size: size * 0.55))
+          symbolFallback
         }
         .frame(width: size, height: size)
       } else {
-        Text(league.emoji)
-          .font(.system(size: size * 0.55))
+        symbolFallback
       }
     }
+    .frame(width: size, height: size)
+  }
+
+  /// Stylized SF Symbol fallback (a clean vector glyph rather than an emoji)
+  /// used when a league has no official logo.
+  private var symbolFallback: some View {
+    Image(systemName: league.sfSymbol)
+      .font(.system(size: size * 0.6, weight: .semibold))
+      .foregroundStyle(symbolColor ?? league.accentColor)
   }
 }
 
@@ -745,8 +830,8 @@ struct AllFavoritesView: View {
         Section {
           Text("No favorites yet. Star sports, leagues, or teams to see them here.")
             .font(.subheadline)
-            .foregroundStyle(GuideTheme.textDim)
-            .listRowBackground(GuideTheme.panel)
+            .foregroundStyle(GuideTheme.onChromeDim)
+            .listRowBackground(GuideTheme.chromeColumn)
         }
       }
 
@@ -755,23 +840,21 @@ struct AllFavoritesView: View {
           DisclosureGroup {
             ForEach(favoriteSports) { sport in
               HStack(spacing: 12) {
-                ZStack {
-                  Circle().fill(sport.accentColor.opacity(0.22)).frame(width: 34, height: 34)
-                  Image(systemName: sport.sfSymbol)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(sport.accentColor)
-                }
-                Text(sport.displayName).foregroundStyle(GuideTheme.text)
+                Image(systemName: sport.sfSymbol)
+                  .font(.system(size: 18, weight: .semibold))
+                  .foregroundStyle(GuideTheme.channelIcon)
+                  .frame(width: 34, height: 34)
+                Text(sport.displayName).foregroundStyle(GuideTheme.onChrome)
                 Spacer()
                 starButton { favorites.toggleSport(sport) }
               }
               .padding(.vertical, 2)
-              .listRowBackground(GuideTheme.panel)
+              .listRowBackground(GuideTheme.chromeColumn)
             }
           } label: {
             sectionLabel("Sports", systemImage: "sportscourt.fill")
           }
-          .listRowBackground(GuideTheme.panel)
+          .listRowBackground(GuideTheme.chromeColumn)
         }
       }
 
@@ -780,18 +863,18 @@ struct AllFavoritesView: View {
           DisclosureGroup {
             ForEach(favoriteLeagues) { league in
               HStack(spacing: 12) {
-                LeagueIcon(league: league, size: 34)
-                Text(league.displayName).foregroundStyle(GuideTheme.text)
+                LeagueIcon(league: league, size: 34, showsBackground: false, symbolColor: GuideTheme.channelIcon)
+                Text(league.displayName).foregroundStyle(GuideTheme.onChrome)
                 Spacer()
                 starButton { favorites.toggleLeague(league) }
               }
               .padding(.vertical, 2)
-              .listRowBackground(GuideTheme.panel)
+              .listRowBackground(GuideTheme.chromeColumn)
             }
           } label: {
             sectionLabel("Leagues", systemImage: "trophy.fill")
           }
-          .listRowBackground(GuideTheme.panel)
+          .listRowBackground(GuideTheme.chromeColumn)
         }
       }
 
@@ -807,38 +890,38 @@ struct AllFavoritesView: View {
                   league: FavoritesStore.league(forTeamNamed: team) ?? .other,
                   size: 34
                 )
-                Text(team.capitalized).foregroundStyle(GuideTheme.text)
+                Text(team.capitalized).foregroundStyle(GuideTheme.onChrome)
                 Spacer()
                 starButton { favorites.toggleTeam(team) }
               }
               .padding(.vertical, 2)
-              .listRowBackground(GuideTheme.panel)
+              .listRowBackground(GuideTheme.chromeColumn)
             }
           } label: {
             sectionLabel("Teams", systemImage: "person.3.fill")
           }
-          .listRowBackground(GuideTheme.panel)
+          .listRowBackground(GuideTheme.chromeColumn)
         }
       }
     }
+    .tint(GuideTheme.onChromeDim)
     .listStyle(.insetGrouped)
     .scrollContentBackground(.hidden)
-    .background(GuideTheme.background)
+    .background(GuideTheme.chromeHeader)
     .navigationTitle("All Favorites")
-    .navigationBarTitleDisplayMode(.large)
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbarBackground(GuideTheme.chromeHeader, for: .navigationBar)
+    .toolbarBackground(.visible, for: .navigationBar)
+    .toolbarColorScheme(.dark, for: .navigationBar)
   }
 
   private func sectionLabel(_ title: String, systemImage: String) -> some View {
     HStack(spacing: 12) {
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(Color.accentColor)
+      Image(systemName: systemImage)
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(GuideTheme.channelIcon)
         .frame(width: 32, height: 32)
-        .overlay(
-          Image(systemName: systemImage)
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(.white)
-        )
-      Text(title).font(.body.weight(.semibold)).foregroundStyle(GuideTheme.text)
+      Text(title).font(.body.weight(.semibold)).foregroundStyle(GuideTheme.onChrome)
     }
   }
 
