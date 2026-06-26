@@ -57,6 +57,7 @@ final class PlaybackEngine {
       return
     }
     pendingFillerID = nil
+    looper?.disableLooping()
     looper = nil
     player.removeAllItems()
     looper = AVPlayerLooper(player: player, templateItem: item)
@@ -70,6 +71,7 @@ final class PlaybackEngine {
   func load(_ item: AVPlayerItem, for id: String) -> Bool {
     guard id == activeID else { return false }
     pendingFillerID = nil
+    looper?.disableLooping()
     looper = nil
     player.removeAllItems()
     player.insert(item, after: nil)
@@ -81,6 +83,7 @@ final class PlaybackEngine {
   /// casting, and on the stall/fail fallback.
   func stop() {
     pendingFillerID = nil
+    looper?.disableLooping()
     looper = nil
     player.removeAllItems()
     player.pause()

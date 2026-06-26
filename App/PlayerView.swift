@@ -21,6 +21,11 @@ struct PlayerView: View {
   @State private var rulesReady = false
   @State private var attempts: [SourceAttempt] = []
   @State private var currentAttemptIdx: Int = 0
+  /// Per-attempt watchdog: if a source neither produces a playable stream nor
+  /// trips an abort condition within `perSourceBudget`, it auto-advances to the
+  /// next source (or surfaces the retry UI) so the loading screen can never hang
+  /// forever. Cancelled the moment playback starts or the attempt changes.
+  @State private var budgetTask: Task<Void, Never>? = nil
   /// When on, shows the live scraping WebView + diagnostics. When off
   /// (default), the user sees only a loading screen until playback starts.
   @AppStorage("debugScrapingView") private var debugScraping = false
@@ -29,11 +34,12 @@ struct PlayerView: View {
   /// WebView never briefly loads (and walks) the homepage first.
   @State private var resolving = false
   @State private var allFailed: Bool = false
-  /// Per-source budget. v2.38: relaxed to 20 s because we no longer
-  /// auto-advance — the user manually picks "Try next source" if they
-  /// want to abandon. 20 s gives the walk + iframe drill-down time to
-  /// reach the discovered destination on slow sites.
-  private static let perSourceBudget: TimeInterval = 20
+  /// Per-source budget. The walk + iframe drill-down get this long to reach a
+  /// playable stream on slow sites (Cloudflare interstitials, lazy aggregators)
+  /// before the attempt is abandoned. v2.57: this is now an enforced watchdog
+  /// (`startBudgetTimer`) that auto-advances to the next source — previously it
+  /// was advisory only, so a silently-stuck source could load forever.
+  private static let perSourceBudget: TimeInterval = 30
   /// v2.38: WebView is visible by default in verification mode. Was
   /// previously gated on "Browse Manually" from the retry UI.
   @State private var showWebFallback = true
@@ -223,6 +229,7 @@ struct PlayerView: View {
       }
     }
     .onDisappear {
+      cancelBudgetTimer()
       if let sid = traversalSessionID {
         TraversalLog.shared.endSession(sid)
         traversalSessionID = nil
@@ -374,6 +381,7 @@ struct PlayerView: View {
           // The WebView's embedded player can serve this stream but
           // AVPlayer can't. Activate WebView-player mode so the user
           // sees the live video instead of a loading screen.
+          cancelBudgetTimer()
           webViewFallbackActivated = true
         }
       },
@@ -754,6 +762,8 @@ struct PlayerView: View {
         TraversalLog.shared.endSession(sid)
         traversalSessionID = nil
       }
+      cancelBudgetTimer()
+      PlaybackEngine.shared.stop()
       allFailed = true
     }
   }
@@ -802,6 +812,7 @@ struct PlayerView: View {
   private func playCandidate(_ cand: StreamCandidate) {
     guard let p = makePlayer(url: cand.url, cookies: cand.cookies, referer: cand.referer)
     else { return }  // stale channel — user surfed away
+    cancelBudgetTimer()
     avPlayer = p
     p.play()
     startAVPlayerWatchdog(p)
@@ -828,6 +839,7 @@ struct PlayerView: View {
   private func autoPlayCapturedStream(url: URL, cookies: [HTTPCookie], referer: URL) {
     guard let p = makePlayer(url: url, cookies: cookies, referer: referer)
     else { return }  // stale channel — user surfed away
+    cancelBudgetTimer()
     avPlayer = p
     p.play()
     startAVPlayerWatchdog(p)
@@ -914,6 +926,52 @@ struct PlayerView: View {
       TraversalLog.shared.recordEvent(
         sid, kind: "resolved", info: attempts[currentAttemptIdx].pageURL.absoluteString
       )
+    }
+    startBudgetTimer()
+  }
+
+  /// Arms the per-attempt watchdog for the current source. Cancels any prior
+  /// timer first. In Debug Mode the user drives advancement manually, so we
+  /// don't auto-advance there.
+  private func startBudgetTimer() {
+    budgetTask?.cancel()
+    guard !debugScraping, currentAttemptIdx < attempts.count else { return }
+    let attemptID = attempts[currentAttemptIdx].id
+    budgetTask = Task { @MainActor in
+      try? await Task.sleep(nanoseconds: UInt64(Self.perSourceBudget * 1_000_000_000))
+      guard !Task.isCancelled,
+            avPlayer == nil, !webViewFallbackActivated, !allFailed,
+            currentAttemptIdx < attempts.count,
+            attempts[currentAttemptIdx].id == attemptID else { return }
+      handleBudgetExpired()
+    }
+  }
+
+  private func cancelBudgetTimer() {
+    budgetTask?.cancel()
+    budgetTask = nil
+  }
+
+  /// The current source ran out its budget without playing. Treat it like a
+  /// dead end: mark it failed and move on, or surface retry if it was the last.
+  private func handleBudgetExpired() {
+    if let sid = traversalSessionID {
+      TraversalLog.shared.recordEvent(
+        sid, kind: "budget_timeout",
+        info: "no playable stream within \(Int(Self.perSourceBudget))s"
+      )
+    }
+    guard currentAttemptIdx < attempts.count else { return }
+    attempts[currentAttemptIdx].status = .failed
+    if currentAttemptIdx + 1 < attempts.count {
+      advanceAttempt()
+    } else {
+      if let sid = traversalSessionID {
+        TraversalLog.shared.endSession(sid)
+        traversalSessionID = nil
+      }
+      PlaybackEngine.shared.stop()
+      allFailed = true
     }
   }
 
