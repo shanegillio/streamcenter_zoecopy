@@ -67,11 +67,11 @@ enum GuideTheme {
   /// game has left. The guide is styled like a TV listing, so a game that's
   /// nearly over (or in overtime) still gets a full, readable card rather than
   /// shrinking to an unreadable sliver — at the cost of the block no longer
-  /// matching the game's literal remaining time. 175 pt ≈ 70 minutes at the
-  /// current scale, enough to show both team names and the status line. The
+  /// matching the game's literal remaining time. 225 pt ≈ 90 minutes at the
+  /// current scale — wide enough to keep each team name on a single line. The
   /// row-packer measures against this same width, so wider blocks just push
   /// concurrent games onto additional channel rows instead of overlapping.
-  static let minBlockWidth: CGFloat = 175
+  static let minBlockWidth: CGFloat = 225
   /// Horizontal gutter trimmed from each block so adjacent games don't touch.
   static let blockGap: CGFloat = 3
 }
@@ -152,10 +152,10 @@ enum TVGuideLayout {
     let dur = TimeInterval(game.league.typicalDurationMinutes * 60)
     let natural = s.addingTimeInterval(dur)
     // A live game that has already run past its typical length keeps growing
-    // until "now" so the block reflects that it's still on the air.
-    let raw = (game.isLive && now > natural) ? now.addingTimeInterval(30 * 60) : natural
-    // The guide only covers today, so a block never extends past midnight.
-    return min(raw, endOfDay(now, cal: etCalendar))
+    // until "now" so the block reflects that it's still on the air. A game's
+    // block is allowed to extend past midnight to its true end — the timeline
+    // grows with it rather than cutting off at midnight.
+    return (game.isLive && now > natural) ? now.addingTimeInterval(30 * 60) : natural
   }
 
   /// Midnight at the end of the day containing `date`, in the guide's calendar.
@@ -178,9 +178,16 @@ enum TVGuideLayout {
     // the left edge and live games (which began earlier) are clamped to start
     // flush against the channel column — no empty pre-now gap.
     let start = floorToHalfHour(now, cal: cal)
-    // The timeline always ends at midnight of the current day; games are
-    // clamped to the same boundary in endTime(for:now:).
-    return Axis(start: start, end: endOfDay(now, cal: cal))
+    // Extend the timeline to the latest end time among games that start on the
+    // current day, instead of cutting off at midnight. Always show at least the
+    // next two hours so the axis never collapses when little is scheduled.
+    let dayEnd = endOfDay(now, cal: cal)
+    var maxEnd = now.addingTimeInterval(2 * 60 * 60)
+    for g in games where startTime(for: g, now: now) < dayEnd {
+      let e = endTime(for: g, now: now)
+      if e > maxEnd { maxEnd = e }
+    }
+    return Axis(start: start, end: maxEnd)
   }
 
   private static func floorToHalfHour(_ date: Date, cal: Calendar) -> Date {
@@ -515,32 +522,30 @@ struct GuideGameBlock: View {
   }
 
   // Team names sit left-aligned next to the logos. Two-team games stack the
-  // home team, a "vs." separator, and the away team. Names may wrap to a second
-  // line; the trailing status keeps its width so the names wrap, not it.
+  // home team, a "vs." separator, and the away team. Each name stays on a
+  // single line; with the 90-minute minimum block width it almost always fits,
+  // and an overly long name truncates with an ellipsis rather than wrapping.
   @ViewBuilder
   private var teamNames: some View {
     if isSingle {
       Text(game.homeTeam)
         .font(.system(size: 13, weight: .bold))
-        .lineLimit(2)
-        .minimumScaleFactor(0.7)
+        .lineLimit(1)
+        .truncationMode(.tail)
         .multilineTextAlignment(.leading)
-        .fixedSize(horizontal: false, vertical: true)
     } else {
       VStack(alignment: .leading, spacing: 1) {
         Text(game.homeTeam)
           .font(.system(size: 13, weight: .bold))
-          .lineLimit(2)
-          .minimumScaleFactor(0.6)
-          .fixedSize(horizontal: false, vertical: true)
+          .lineLimit(1)
+          .truncationMode(.tail)
         Text("vs.")
           .font(.system(size: 11, weight: .semibold))
           .foregroundStyle(.white.opacity(0.8))
         Text(game.awayTeam)
           .font(.system(size: 13, weight: .bold))
-          .lineLimit(2)
-          .minimumScaleFactor(0.6)
-          .fixedSize(horizontal: false, vertical: true)
+          .lineLimit(1)
+          .truncationMode(.tail)
       }
       .multilineTextAlignment(.leading)
     }

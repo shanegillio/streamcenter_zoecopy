@@ -1049,23 +1049,16 @@ struct PlayerView: View {
 
   private var retryUI: some View {
     ZStack {
-      // "Lost signal" TV static behind the error slate.
+      // "Lost signal" TV static behind the error slate. The slate is kept
+      // small (just the error line + Try Again) so the static reads clearly
+      // around it rather than being covered by a large panel.
       TVStaticView()
-      VStack(spacing: 14) {
-        Image(systemName: "antenna.radiowaves.left.and.right.slash")
-          .font(.system(size: 40, weight: .semibold))
-          .foregroundStyle(.white)
+      VStack(spacing: 10) {
         Text("Error: could not load stream")
-          .font(.headline)
+          .font(.subheadline.weight(.semibold))
           .foregroundStyle(.white)
           .multilineTextAlignment(.center)
-        Text(attempts.isEmpty
-             ? "No sources are enabled for this game."
-             : "Tried \(attempts.count) source\(attempts.count == 1 ? "" : "s") without finding a playable stream.")
-          .font(.subheadline)
-          .foregroundStyle(.white.opacity(0.75))
-          .multilineTextAlignment(.center)
-          .padding(.horizontal, 8)
+          .fixedSize(horizontal: false, vertical: true)
         Button {
           // v2.38: just rebuild attempts and let verification mode
           // re-load the first attempt's page from scratch.
@@ -1088,16 +1081,15 @@ struct PlayerView: View {
           }
         } label: {
           Label("Try Again", systemImage: "arrow.clockwise")
-            .font(.subheadline.weight(.semibold))
-            .padding(.horizontal, 18).padding(.vertical, 11)
+            .font(.footnote.weight(.semibold))
+            .padding(.horizontal, 14).padding(.vertical, 8)
             .background(Color.white.opacity(0.18), in: Capsule())
             .foregroundStyle(.white)
         }
-        .padding(.top, 2)
       }
-      .padding(28)
-      .frame(maxWidth: 360)
-      .background(Color.black.opacity(0.82), in: RoundedRectangle(cornerRadius: 18))
+      .padding(.horizontal, 18)
+      .padding(.vertical, 14)
+      .background(Color.black.opacity(0.85), in: RoundedRectangle(cornerRadius: 14))
       .padding(.horizontal, 24)
     }
   }

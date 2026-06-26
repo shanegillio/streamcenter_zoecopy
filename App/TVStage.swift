@@ -9,19 +9,32 @@ struct TVStageView: View {
   let onChannelUp: () -> Void
   let onChannelDown: () -> Void
   let onPrev: () -> Void
+  /// In landscape the stage takes over the whole screen — the TV box fills the
+  /// available space and the guide/header are hidden by the parent — so the
+  /// stream plays large with just the channel controls alongside.
+  var isLandscape: Bool = false
 
   private let airplay = AirPlayController.shared
 
+  /// TV bezel / stand color for the landscape "television" frame.
+  private static let bezel = Color(white: 0.45)
+
   var body: some View {
-    HStack(alignment: .center, spacing: 10) {
-      tvBox
-      controls
+    if isLandscape {
+      landscapeStage
+    } else {
+      HStack(alignment: .center, spacing: 10) {
+        portraitTVBox
+        controls
+      }
+      .padding(.horizontal, 14)
+      .animation(.smooth, value: airplay.isExternalActive)
     }
-    .padding(.horizontal, 14)
-    .animation(.smooth, value: airplay.isExternalActive)
   }
 
-  private var tvBox: some View {
+  /// The video surface: black backing + the player (or idle test pattern),
+  /// plus the AirPlay "broadcasting" cover. Shared by both orientations.
+  private var screen: some View {
     ZStack {
       RoundedRectangle(cornerRadius: 14)
         .fill(Color.black)
@@ -45,8 +58,67 @@ struct TVStageView: View {
           .clipShape(RoundedRectangle(cornerRadius: 14))
       }
     }
-    .frame(height: 200)
-    .frame(maxWidth: .infinity)
+  }
+
+  /// Portrait: a fixed-height TV pinned at the top, filling the width.
+  private var portraitTVBox: some View {
+    screen
+      .frame(height: 200)
+      .frame(maxWidth: .infinity)
+  }
+
+  /// Landscape: a flat-screen TV (thin bezel) on a neck-and-base stand, sized
+  /// from the available geometry so it stays large regardless of what the
+  /// player is showing (stream, loading, or error). Centered on screen with
+  /// the channel controls beside it.
+  private var landscapeStage: some View {
+    GeometryReader { geo in
+      let bezel: CGFloat = 12
+      let neckH: CGFloat = 14
+      let baseH: CGFloat = 8
+      let standTotal = neckH + baseH
+      let controlsW: CGFloat = 52
+      let edgePad: CGFloat = 12
+      // Reserve symmetric room on both sides for the controls (so the
+      // screen-centered set never collides with them) and top/bottom for the
+      // stand (so the set stays centered while the stand still fits beneath).
+      let availW = geo.size.width - (controlsW + edgePad) * 2
+      let availH = geo.size.height - edgePad * 2 - standTotal * 2
+      let maxScreenW = availW - bezel * 2
+      let maxScreenH = availH - bezel * 2
+      let screenH = max(0, min(maxScreenH, maxScreenW * 9.0 / 16.0))
+      let screenW = screenH * 16.0 / 9.0
+
+      ZStack {
+        // The set (screen + thin bezel), centered both vertically and
+        // horizontally. The stand hangs beneath it as an overlay so it doesn't
+        // shift the set off-center.
+        screen
+          .frame(width: screenW, height: screenH)
+          .padding(bezel)
+          .background(
+            RoundedRectangle(cornerRadius: 18).fill(Self.bezel)
+          )
+          .overlay(alignment: .bottom) {
+            VStack(spacing: 0) {
+              Rectangle()
+                .fill(Self.bezel)
+                .frame(width: 18, height: neckH)
+              RoundedRectangle(cornerRadius: 3)
+                .fill(Self.bezel)
+                .frame(width: screenW * 0.42, height: baseH)
+            }
+            .offset(y: standTotal)
+          }
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+        // Channel controls pinned to the right edge, vertically centered.
+        controls
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+          .padding(.trailing, edgePad)
+      }
+      .animation(.smooth, value: airplay.isExternalActive)
+    }
   }
 
   /// Shown over the (still-playing) inline player while the game is on an
