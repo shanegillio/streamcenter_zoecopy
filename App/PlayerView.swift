@@ -1982,6 +1982,8 @@ struct StreamWebView: UIViewRepresentable {
       var _walkClickedEls = [];
       var _routedNavedTo = '';
       var _lastTargetPostedAt = 0;
+      var _lastSlugDbgAt = 0;
+      var _slugNavedURLs = [];
 
       // v2.39: surface walk activity to native so PlayerView's verification
       // strip can show what's happening. Without this, walks are silent —
@@ -2101,7 +2103,41 @@ struct StreamWebView: UIViewRepresentable {
         // fall back to clicking matched card text if there's no slug link.
         var slugAnchor = null;
         try { slugAnchor = findTargetByHrefSlug(); } catch(e){}
-        if (slugAnchor && _walkClicks < _maxWalkClicks &&
+        // Diagnostic (debug-mode only): surface what the slug-href scanner saw
+        // this pass — anchor count, home/away hits, whether it matched, and a
+        // sample — so a "found the game but never opened it" failure is visible.
+        if (now2 - _lastSlugDbgAt > 1500) {
+          _lastSlugDbgAt = now2;
+          postWalkEvent('scan', 'SLUG a=' + _slugScanStats.anchors +
+            ' nH=' + _slugScanStats.nHome + ' nA=' + _slugScanStats.nAway +
+            ' m=' + _slugScanStats.matched + ' s="' + _slugScanStats.sample + '"');
+        }
+        // v2.70: an anchor carrying BOTH team names in its URL is the single
+        // most reliable "this is the game" signal. Jump to it directly via
+        // location.href — a guaranteed real navigation — instead of routing it
+        // through the synthetic-click path. The click path was gated by
+        // per-element "already clicked" / click-budget bookkeeping, so when the
+        // matched card and the slug anchor were the same element (already
+        // clicked once with no nav), the guaranteed deep-link jump never fired
+        // and we looped on CLICKED-BUT-NO-NAV. A loop guard (_slugNavedURLs)
+        // and the self-URL skip in findTargetByHrefSlug keep this from
+        // ping-ponging.
+        var _slugJumped = false;
+        if (slugAnchor) {
+          var _sHref = '';
+          try { _sHref = slugAnchor.getAttribute('href') || ''; } catch(e){}
+          var _sAbs = _sHref;
+          try { _sAbs = new URL(_sHref, location.href).href; } catch(e){}
+          if (_sAbs && _sAbs.split('#')[0] !== location.href.split('#')[0] &&
+              _slugNavedURLs.indexOf(_sAbs) === -1 && _navHrefOK(_sHref)) {
+            _slugNavedURLs.push(_sAbs);
+            postWalkEvent('slug', 'nav→ ' + _sAbs);
+            try { location.href = _sAbs; _slugJumped = true; } catch(e){}
+          }
+        }
+        if (_slugJumped) {
+          // navigation in flight — stop processing this pass
+        } else if (slugAnchor && _walkClicks < _maxWalkClicks &&
             _walkClickedEls.indexOf(slugAnchor) === -1) {
           _walkClickedEls.push(slugAnchor);
           _walkClicks++;
@@ -2671,25 +2707,41 @@ struct StreamWebView: UIViewRepresentable {
       // returns the one whose URL contains tokens from BOTH teams. Because
       // it returns a real anchor, clickOrNavigate forces location.href = it,
       // which always produces a true navigation.
-      var _slugScanStats = { anchors: 0, matched: 0, href: '' };
+      var _slugScanStats = { anchors: 0, matched: 0, href: '', nHome: 0, nAway: 0, sample: '' };
       function findTargetByHrefSlug() {
-        _slugScanStats = { anchors: 0, matched: 0, href: '' };
+        _slugScanStats = { anchors: 0, matched: 0, href: '', nHome: 0, nAway: 0, sample: '' };
         if (!window.__sc_target) return null;
         if (!_hasAnyToks('home') || !_hasAnyToks('away')) return null;
         var as;
         try { as = document.querySelectorAll('a[href]'); } catch(e) { return null; }
         _slugScanStats.anchors = as.length;
         var best = null, bestScore = 0;
+        var _curNoHash = location.href.split('#')[0];
         var cap = Math.min(as.length, 2000);
         for (var i = 0; i < cap; i++) {
           var href = '';
           try { href = as[i].getAttribute('href') || ''; } catch(e){}
           if (!_usableHref(href)) continue;
+          // Skip anchors that resolve to the page we're already on. On a game
+          // page that's an interstitial of "Watch on X" links, the self-link
+          // carries both team slugs too — picking it would no-op the nav and
+          // strand us here instead of following a real next-hop (the embed).
+          var _abs = href;
+          try { _abs = new URL(href, location.href).href; } catch(e){}
+          if (_abs.split('#')[0] === _curNoHash) continue;
           var low = href.toLowerCase();
           // v2.65: match home + away via long tokens (substring) or
           // abbreviations (bounded). Score prefers abbreviation hits since a
           // URL carrying both team abbreviations is an unambiguous deep link.
-          if (_sideHit(low, 'home') && _sideHit(low, 'away')) {
+          var hh = _sideHit(low, 'home'), aa = _sideHit(low, 'away');
+          if (hh) _slugScanStats.nHome++;
+          if (aa) _slugScanStats.nAway++;
+          // Capture a sample of an anchor that hit at least one side, so the
+          // diagnostic can show what the slug scanner is actually seeing.
+          if ((hh || aa) && !_slugScanStats.sample) {
+            _slugScanStats.sample = (hh ? 'H' : '') + (aa ? 'A' : '') + ':' + low.slice(0, 70);
+          }
+          if (hh && aa) {
             var score = 2;
             if (_abbrToks('home').some(function(a){ return _boundedHit(low, a); })) score++;
             if (_abbrToks('away').some(function(a){ return _boundedHit(low, a); })) score++;
