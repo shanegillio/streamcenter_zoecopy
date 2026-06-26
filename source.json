@@ -7,12 +7,12 @@
   "website": "https://shanegillio.github.io/altstore-source",
   "tintColor": "#E03030",
   "featuredApps": [
-    "app.bitrig.new.b3037d94-1a52-4185-b143-1daa8fdcafe1"
+    "app.zoestreamcenter"
   ],
   "apps": [
     {
       "name": "StreamCenter",
-      "bundleIdentifier": "app.bitrig.new.b3037d94-1a52-4185-b143-1daa8fdcafe1",
+      "bundleIdentifier": "app.zoestreamcenter",
       "developerName": "Out of Credits",
       "subtitle": "Live sports streams, zero ads.",
       "localizedDescription": "StreamCenter is your all-in-one hub for live sports streaming.\n\nWatch NFL, NBA, MLB, NHL, soccer, MMA, boxing, and more \u2014 pulled straight from the web, with no ads interrupting the action.\n\n\u2022 Add any sports streaming site as a custom source\n\u2022 Browse live and upcoming games across every league\n\u2022 Favorite your teams and leagues for instant access\n\u2022 Ad-free playback powered by a built-in content blocker\n\u2022 Supports m3u8 and DASH streams with native AVPlayer quality\n\u2022 No account required. No subscription. Completely free.",
@@ -70,7 +70,7 @@
       "date": "2026-05-14",
       "tintColor": "#E03030",
       "notify": true,
-      "appID": "app.bitrig.new.b3037d94-1a52-4185-b143-1daa8fdcafe1"
+      "appID": "app.zoestreamcenter"
     }
   ]
 }
