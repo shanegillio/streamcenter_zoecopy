@@ -25,6 +25,15 @@
       ],
       "versions": [
         {
+          "version": "2.61",
+          "date": "2026-06-27",
+          "size": 0,
+          "downloadURL": "https://github.com/shanegillio/streamcenter_zoecopy/releases/download/v2.61/StreamCenter-2.61.ipa",
+          "localizedDescription": "Smarter stream finding across SPA-based sources: the scraper now intercepts the JSON API calls a page's own JavaScript makes during load and extracts game entries from those responses directly — so sources like ppv.to (which serve game data via XHR rather than rendered HTML) are found and matched without navigating to any game page. Fixed a navigation bug where the walk could follow a link off to a completely different streaming site (e.g. buffstreams.plus sending the walk to thestreameast.one) because team names appeared in the destination URL. Added a smarter fallback for login-walled direct game URLs: the walk now backs up to the source root and tries to reach the game via the site's own client-side routing before giving up.",
+          "buildVersion": "261",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "2.60",
           "date": "2026-06-26",
           "size": 1666262,
