@@ -94,6 +94,9 @@ struct PlayerView: View {
   /// v2.40: set when the shim recognized an auth/login wall on the
   /// current page.
   @State private var authWallReason: String? = nil
+  /// True when we already retried the current attempt from the source root
+  /// after hitting an auth wall on a deep-link game URL. Prevents looping.
+  @State private var authWallRootRetried: Bool = false
   /// v2.40: small bridge that holds a weak ref to the WKWebView so the
   /// detected-cards UI can dispatch a `click()` via evaluateJavaScript
   /// when the user taps an alternative game.
@@ -654,12 +657,23 @@ struct PlayerView: View {
     case "detected_cards":
       detectedCards = event.detectedCards
     case "auth_wall":
-      authWallReason = event.info
       lastWalkEvent = event
-      // v2.69: an auth/login wall (streameast's SSO frame is the textbook
-      // case) means this source can't serve the stream without credentials.
-      // Bail immediately instead of re-scanning the login page until the
-      // budget expires — advance to the next source (or surface retry).
+      // If we loaded a deep-link game URL directly and hit an auth wall,
+      // fall back to the source root and let the walk navigate there via
+      // client-side routing (e.g. Vue Router). Client-side navigation
+      // doesn't go through the server's auth check, so the game page may
+      // be reachable without credentials this way. Only try once per attempt.
+      if !authWallRootRetried,
+         currentAttemptIdx < attempts.count {
+        let url = attempts[currentAttemptIdx].pageURL
+        if url.path != "/" && !url.path.isEmpty,
+           let rootURL = URL(string: "/", relativeTo: url)?.absoluteURL {
+          authWallRootRetried = true
+          webBridge.webView?.load(URLRequest(url: rootURL))
+          return
+        }
+      }
+      authWallReason = event.info
       abortTerminal()
     case "dead_page":
       // v2.69: the page explicitly says the game/page is gone
@@ -992,6 +1006,7 @@ struct PlayerView: View {
     loadFailure = nil
     detectedCards = []
     authWallReason = nil
+    authWallRootRetried = false
     noNavStrikes = 0
     webViewFallbackActivated = false
     currentAttemptIdx += 1
@@ -1070,6 +1085,7 @@ struct PlayerView: View {
           loadFailure = nil
           detectedCards = []
           authWallReason = nil
+          authWallRootRetried = false
           noNavStrikes = 0
           webViewFallbackActivated = false
           allFailed = false
@@ -3434,14 +3450,16 @@ struct StreamWebView: UIViewRepresentable {
       return targetTokens.contains { low.contains($0) }
     }
     /// Should this top-frame destination be allowed? Same-site as the
-    /// source (or the page we're currently on), a deep link carrying a
-    /// team token, or a load we initiated ourselves.
+    /// source (or the page we're currently on), or a load we initiated.
+    /// `carriesTargetToken` was removed: team names appearing in a URL
+    /// is not a reliable signal that the destination is the same streaming
+    /// service — it was allowing navigation to entirely different sites
+    /// (e.g. buffstreams.plus → thestreameast.one).
     private func isAllowedTopNav(_ url: URL, current: URL?) -> Bool {
       if intendedLoadURLs.contains(url.absoluteString) { return true }
       if sourceHost == nil { return true }  // not yet pinned
       if sameSite(url.host, sourceHost) { return true }
       if sameSite(url.host, current?.host) { return true }
-      if carriesTargetToken(url) { return true }
       return false
     }
 

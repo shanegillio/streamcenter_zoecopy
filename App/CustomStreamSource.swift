@@ -223,6 +223,10 @@ struct CustomStreamSource: StreamSource {
   // MARK: Scraping
 
   /// Loads the source's baseURL in a WKWebView and extracts anchor links.
+  /// Also fetches any JSON API endpoints the page's JS called during load
+  /// (captured by WebViewScraper's XHR shim) and extracts game-like entries
+  /// from their responses — this picks up SPA sources like ppv.to whose
+  /// game data arrives via XHR rather than being present in the initial HTML.
   /// Handles DNS failure by trying common TLD variants via `HostFallback`.
   /// Cached for 60 s via `ScrapeCache`.
   func scrapeLinks(timeout: TimeInterval = 15) async -> [ScrapedLink] {
@@ -235,26 +239,76 @@ struct CustomStreamSource: StreamSource {
       if let fallback = await HostFallback.shared.tryVariants(of: baseURL) {
         let scraper2 = await MainActor.run { WebViewScraper() }
         let result2 = await scraper2.scrapeWithDiagnostic(url: fallback, timeout: timeout)
-        await ScrapeCache.shared.set(result2.links, for: fallback)
+        let apiLinks = await Self.fetchAPILinks(from: result2.diagnostic.observedAPIUrls)
+        let allLinks = result2.links + apiLinks
+        await ScrapeCache.shared.set(allLinks, for: fallback)
         let sid = self.id
         await MainActor.run {
           SourceRegistry.shared.recordScrape(result2.diagnostic,
-                                             links: result2.links,
+                                             links: allLinks,
                                              for: sid)
           SourceRegistry.shared.replaceSourceURL(originalID: sid, newURL: fallback)
         }
-        return result2.links
+        return allLinks
       }
     }
 
-    await ScrapeCache.shared.set(result.links, for: baseURL)
+    let apiLinks = await Self.fetchAPILinks(from: result.diagnostic.observedAPIUrls)
+    let allLinks = result.links + apiLinks
+    await ScrapeCache.shared.set(allLinks, for: baseURL)
     let sid = self.id
     await MainActor.run {
       SourceRegistry.shared.recordScrape(result.diagnostic,
-                                         links: result.links,
+                                         links: allLinks,
                                          for: sid)
     }
-    return result.links
+    return allLinks
+  }
+
+  /// Fetches up to 5 of the API URLs observed during the WebViewScraper run,
+  /// parses their JSON, and extracts any game-like entries (objects with a
+  /// "name" field containing " vs " and a URL-like field such as "iframe",
+  /// "url", or "href"). Works for any SPA that loads game data via a JSON
+  /// API — no site-specific code.
+  private static func fetchAPILinks(from apiURLs: [URL]) async -> [ScrapedLink] {
+    guard !apiURLs.isEmpty else { return [] }
+    return await withTaskGroup(of: [ScrapedLink].self) { group in
+      for url in apiURLs.prefix(5) {
+        group.addTask {
+          guard let (data, response) = try? await URLSession.shared.data(from: url),
+                (response as? HTTPURLResponse)?.statusCode == 200,
+                let json = try? JSONSerialization.jsonObject(with: data) else { return [] }
+          var links: [ScrapedLink] = []
+          extractGameLinksFromJSON(json, into: &links)
+          return links
+        }
+      }
+      var out: [ScrapedLink] = []
+      for await batch in group { out.append(contentsOf: batch) }
+      return out
+    }
+  }
+
+  /// Recursively walks any JSON value looking for objects whose "name" (or
+  /// similar) field contains " vs" and also has an HTTP URL field (iframe,
+  /// url, href, …). Depth-first so nested arrays (e.g. ppv.to's
+  /// streams→category→streams→game structure) are fully traversed.
+  private static func extractGameLinksFromJSON(_ value: Any, into results: inout [ScrapedLink]) {
+    if let array = value as? [Any] {
+      for item in array { extractGameLinksFromJSON(item, into: &results) }
+    } else if let dict = value as? [String: Any] {
+      let nameKeys = ["name", "title", "game", "event", "match"]
+      let urlKeys  = ["iframe", "url", "href", "stream_url", "embed",
+                      "link", "source", "video_url", "stream"]
+      if let name = nameKeys.compactMap({ dict[$0] as? String }).first,
+         name.contains(" vs") {
+        if let url = urlKeys.compactMap({ dict[$0] as? String })
+                            .first(where: { $0.hasPrefix("http") }) {
+          results.append(ScrapedLink(href: url, text: name, status: "", containerClass: ""))
+        }
+      }
+      for val in dict.values { extractGameLinksFromJSON(val, into: &results) }
+    }
   }
 
   private static func indicatesUnresolvedHost(_ d: ScrapeDiagnostic) -> Bool {
