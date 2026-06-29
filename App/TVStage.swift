@@ -1,5 +1,44 @@
 import SwiftUI
 
+/// Selectable colors for the landscape TV frame (bezel + stand), chosen in
+/// Settings → Personalization → TV personalization. Persisted by raw value.
+enum TVFrameStyle: String, CaseIterable, Identifiable {
+  case bubblegum, graphite, midnight, silver, gold, crimson, teal, royal
+
+  /// UserDefaults / @AppStorage key for the user's choice.
+  static let storageKey = "tvFrameStyle"
+  /// The default frame when the user hasn't picked one.
+  static let defaultStyle = TVFrameStyle.bubblegum
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .bubblegum: return "Bubblegum"
+    case .graphite:  return "Graphite"
+    case .midnight:  return "Midnight"
+    case .silver:    return "Silver"
+    case .gold:      return "Gold"
+    case .crimson:   return "Crimson"
+    case .teal:      return "Teal"
+    case .royal:     return "Royal"
+    }
+  }
+
+  var color: Color {
+    switch self {
+    case .bubblegum: return Color(red: 0.91, green: 0.45, blue: 0.62)
+    case .graphite:  return Color(white: 0.32)
+    case .midnight:  return Color(red: 0.13, green: 0.16, blue: 0.30)
+    case .silver:    return Color(white: 0.72)
+    case .gold:      return Color(red: 0.80, green: 0.62, blue: 0.20)
+    case .crimson:   return Color(red: 0.72, green: 0.16, blue: 0.20)
+    case .teal:      return Color(red: 0.13, green: 0.50, blue: 0.50)
+    case .royal:     return Color(red: 0.30, green: 0.28, blue: 0.62)
+    }
+  }
+}
+
 /// The TV at the top of the home screen. Hosts the embedded player for the
 /// currently selected game and the channel-surfing controls (up / down /
 /// prev). When nothing is selected it shows an idle "test pattern".
@@ -16,8 +55,11 @@ struct TVStageView: View {
 
   private let airplay = AirPlayController.shared
 
-  /// TV bezel / stand color for the landscape "television" frame.
-  private static let bezel = Color(white: 0.45)
+  /// The user's chosen TV frame color (Settings → Personalization).
+  @AppStorage(TVFrameStyle.storageKey) private var tvFrameStyleRaw = TVFrameStyle.defaultStyle.rawValue
+  private var bezelColor: Color {
+    (TVFrameStyle(rawValue: tvFrameStyleRaw) ?? .defaultStyle).color
+  }
 
   var body: some View {
     if isLandscape {
@@ -101,15 +143,15 @@ struct TVStageView: View {
           .frame(width: screenW, height: screenH)
           .padding(bezel)
           .background(
-            RoundedRectangle(cornerRadius: 18).fill(Self.bezel)
+            RoundedRectangle(cornerRadius: 18).fill(bezelColor)
           )
           .overlay(alignment: .bottom) {
             VStack(spacing: 0) {
               Rectangle()
-                .fill(Self.bezel)
+                .fill(bezelColor)
                 .frame(width: 18, height: neckH)
               RoundedRectangle(cornerRadius: 3)
-                .fill(Self.bezel)
+                .fill(bezelColor)
                 .frame(width: screenW * 0.42, height: baseH)
             }
             .offset(y: standTotal)

@@ -78,6 +78,18 @@ struct SettingsView: View {
         sectionFooter("Favorites surface live games on the home screen and mark tiles with a star.")
       }
 
+      // MARK: Personalization
+      Section {
+        chevronLink(destination: TVPersonalizationView()) {
+          settingsRow(icon: "tv", title: "TV personalization", count: 0)
+        }
+        .listRowBackground(GuideTheme.chromeColumn)
+      } header: {
+        sectionHeader("Personalization")
+      } footer: {
+        sectionFooter("Pick the look of the TV frame shown when you rotate to full-screen landscape.")
+      }
+
       // MARK: Debugging
       Section {
         Toggle(isOn: $debugScraping) {
@@ -936,5 +948,84 @@ struct AllFavoritesView: View {
         .padding(.trailing, 4)
     }
     .buttonStyle(.plain)
+  }
+}
+
+struct TVPersonalizationView: View {
+  @AppStorage(TVFrameStyle.storageKey) private var styleRaw = TVFrameStyle.defaultStyle.rawValue
+
+  private var selected: TVFrameStyle { TVFrameStyle(rawValue: styleRaw) ?? .defaultStyle }
+
+  var body: some View {
+    List {
+      Section {
+        TVFramePreview(color: selected.color)
+          .frame(height: 150)
+          .frame(maxWidth: .infinity)
+          .padding(.vertical, 8)
+          .listRowBackground(Color.clear)
+      } header: {
+        Text("Preview")
+          .font(.footnote.weight(.semibold))
+          .foregroundStyle(GuideTheme.onChrome)
+      }
+
+      Section {
+        ForEach(TVFrameStyle.allCases) { style in
+          Button { styleRaw = style.rawValue } label: {
+            HStack(spacing: 14) {
+              RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(style.color)
+                .frame(width: 34, height: 24)
+                .overlay(
+                  RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(GuideTheme.onChromeDim.opacity(0.4), lineWidth: 0.5)
+                )
+              Text(style.displayName)
+                .font(.body.weight(.medium))
+                .foregroundStyle(GuideTheme.onChrome)
+              Spacer()
+              if style == selected {
+                Image(systemName: "checkmark")
+                  .font(.system(size: 15, weight: .bold))
+                  .foregroundStyle(GuideTheme.channelIcon)
+              }
+            }
+            .padding(.vertical, 4)
+          }
+          .buttonStyle(.plain)
+          .listRowBackground(GuideTheme.chromeColumn)
+        }
+      } header: {
+        Text("Frame color")
+          .font(.footnote.weight(.semibold))
+          .foregroundStyle(GuideTheme.onChrome)
+      }
+    }
+    .navigationTitle("TV personalization")
+    .darkSettingsList()
+  }
+}
+
+/// A small flat-screen-TV-on-a-stand preview drawn in the given frame color.
+struct TVFramePreview: View {
+  let color: Color
+
+  var body: some View {
+    VStack(spacing: 0) {
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .fill(Color.black)
+        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .padding(8)
+        .background(
+          RoundedRectangle(cornerRadius: 12, style: .continuous).fill(color)
+        )
+      Rectangle()
+        .fill(color)
+        .frame(width: 14, height: 10)
+      RoundedRectangle(cornerRadius: 2, style: .continuous)
+        .fill(color)
+        .frame(width: 70, height: 6)
+    }
   }
 }
