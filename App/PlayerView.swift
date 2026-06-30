@@ -1113,11 +1113,16 @@ struct PlayerView: View {
         TraversalLog.shared.markOutcome(sid, .worked)
       }
 
-      // Phase 2: continuous mid-playback stall monitor (frozen-frame case).
+      // Phase 2: continuous mid-playback stall monitor. An accumulating score
+      // (rather than a reset-on-recovery counter) catches BOTH a single long
+      // freeze AND the "stall → corrects → stalls again" thrash of a malformed-
+      // bandwidth playlist (-12318) that AVPlayer can't ride out but the embed
+      // can. The score decays during healthy playback, so a rare isolated
+      // buffering hiccup on an otherwise-fine stream never trips the handoff.
       let checkInterval: TimeInterval = 2
-      let stallLimit: TimeInterval = 8   // sustained no-progress before handoff
+      let stallBudget: TimeInterval = 8   // cumulative stalled time before handoff
       var lastTime = player.currentTime().seconds
-      var stalledFor: TimeInterval = 0
+      var stallScore: TimeInterval = 0
       while !Task.isCancelled {
         try? await Task.sleep(nanoseconds: UInt64(checkInterval * 1_000_000_000))
         guard avPlayer != nil, player.currentItem === watchedItem else { return }
@@ -1132,13 +1137,13 @@ struct PlayerView: View {
         // "playing" state. rate == 0 means a deliberate pause, which we leave be.
         let progressed = now > lastTime + 0.05
         if player.rate > 0 && !progressed {
-          stalledFor += checkInterval
-          if stalledFor >= stallLimit {
-            fallBackToEmbedPlayer(reason: "stalled_midstream@\(Int(now))s")
+          stallScore += checkInterval
+          if stallScore >= stallBudget {
+            fallBackToEmbedPlayer(reason: "repeated_stalls@\(Int(now))s")
             return
           }
         } else {
-          stalledFor = 0
+          stallScore = max(0, stallScore - checkInterval / 2)  // heal during good playback
         }
         lastTime = now
       }
