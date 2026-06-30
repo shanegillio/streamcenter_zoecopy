@@ -51,6 +51,15 @@ struct PlayerView: View {
   /// v2.72: one-shot timer (per attempt) that reveals a play-button-gated embed
   /// for the user's real tap if nothing has started playing within the window.
   @State private var revealTask: Task<Void, Never>? = nil
+  /// v2.74: guards one-time initialization. `.task` runs on appear and re-runs
+  /// on every subsequent reappear; a transient disappear/reappear (e.g. a
+  /// modal/full-screen presentation over the embedded player) would otherwise
+  /// re-run `buildAttempts()` + `startCurrentAttempt()`, spawning a brand-new
+  /// scrape/traversal session and reloading the WebView over a stream that's
+  /// already playing. We only run the heavy init the first time this view
+  /// instance appears; a true re-mount (new identity, e.g. a channel change via
+  /// `.id(game.id)`) resets @State and initializes fresh as intended.
+  @State private var didInitialize = false
 
   struct SourceAttempt: Identifiable {
     let id = UUID()
@@ -210,6 +219,12 @@ struct PlayerView: View {
     .toolbarColorScheme(.dark, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
     .task {
+      // v2.74: run heavy init exactly once per view instance. A transient
+      // reappear (full-screen presentation over the embedded player) must not
+      // restart the scrape — that was the "new resolved session on full screen"
+      // bug. A real channel change re-mounts via `.id(game.id)`, resetting this.
+      guard !didInitialize else { return }
+      didInitialize = true
       // Configure the audio session so AVPlayer can AirPlay video (not just
       // audio) to an Apple TV, and start tracking the external route.
       AirPlayController.shared.configureAudioSession()
@@ -1279,7 +1294,6 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     vc.videoGravity = .resizeAspect
     vc.entersFullScreenWhenPlaybackBegins = entersFullScreen
     vc.exitsFullScreenWhenPlaybackEnds = entersFullScreen
-    vc.delegate = context.coordinator
     return vc
   }
   func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
@@ -1291,38 +1305,16 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     if vc.player !== player { vc.player = player }
   }
 
-  func makeCoordinator() -> Coordinator { Coordinator() }
-
-  /// Rotates the scene to landscape when the player goes full screen (e.g. the
-  /// user taps the full-screen button) and back to portrait when it exits, so
-  /// video fills the screen the way people expect from a video player.
-  final class Coordinator: NSObject, AVPlayerViewControllerDelegate {
-    func playerViewController(
-      _ playerViewController: AVPlayerViewController,
-      willBeginFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator
-    ) {
-      // Rotate AFTER AVKit finishes presenting fullscreen, not during — forcing
-      // a scene geometry change mid-transition fights AVKit's own rotation and
-      // can leave the player black.
-      coordinator.animate(alongsideTransition: nil) { [weak self] _ in
-        self?.requestOrientation(.landscape, from: playerViewController)
-      }
-    }
-
-    func playerViewController(
-      _ playerViewController: AVPlayerViewController,
-      willEndFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator
-    ) {
-      coordinator.animate(alongsideTransition: nil) { [weak self] _ in
-        self?.requestOrientation(.portrait, from: playerViewController)
-      }
-    }
-
-    private func requestOrientation(_ mask: UIInterfaceOrientationMask, from vc: UIViewController) {
-      guard let scene = vc.view.window?.windowScene else { return }
-      scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { _ in }
-    }
-  }
+  // NOTE: We deliberately do NOT force a scene rotation when the player enters
+  // full screen. AVPlayerViewController rotates its own full-screen presentation
+  // natively (the app supports all orientations), exactly like the in-WebView
+  // player's full-screen button — which works perfectly. Forcing the scene to
+  // landscape via `requestGeometryUpdate` flipped the host's verticalSizeClass
+  // to `.compact`, which transiently tore down / reappeared the embedding
+  // PlayerView. That re-ran PlayerView.task (spawning a brand-new "resolved"
+  // scrape session) and tripped its onDisappear → PlaybackEngine.stop(), killing
+  // the stream the instant you went full screen. Letting AVKit own the rotation
+  // leaves the SwiftUI tree undisturbed.
 }
 
 // MARK: - WebKit stream view with m3u8 interception
