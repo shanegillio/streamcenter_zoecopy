@@ -32,10 +32,10 @@ enum LLMScrapeCLI {
     let scrapeReason: String
     let rawLinkCount: Int
     let profile: Profile?
-    let focusedLinkCount: Int
+    let candidateLinkCount: Int
+    let chunks: Int
     let games: [Game]
     let scrapeMs: Int
-    let profileMs: Int
     let matchMs: Int
   }
   struct Profile: Encodable {
@@ -73,8 +73,8 @@ enum LLMScrapeCLI {
           baseURL: baseURL.absoluteString, modelAvailable: false,
           modelStatus: String(describing: model.availability),
           scrapeReason: scrape.reason, rawLinkCount: links.count,
-          profile: nil, focusedLinkCount: 0, games: [],
-          scrapeMs: scrapeMs, profileMs: 0, matchMs: 0
+          profile: nil, candidateLinkCount: 0, chunks: 0, games: [],
+          scrapeMs: scrapeMs, matchMs: 0
         )
       }
       return await runModel(baseURL: baseURL, links: links, scrape: scrape, scrapeMs: scrapeMs)
@@ -85,8 +85,8 @@ enum LLMScrapeCLI {
       baseURL: baseURL.absoluteString, modelAvailable: false,
       modelStatus: "FoundationModels unavailable (needs macOS 26 + Apple Intelligence)",
       scrapeReason: scrape.reason, rawLinkCount: links.count,
-      profile: nil, focusedLinkCount: 0, games: [],
-      scrapeMs: scrapeMs, profileMs: 0, matchMs: 0
+      profile: nil, candidateLinkCount: 0, chunks: 0, games: [],
+      scrapeMs: scrapeMs, matchMs: 0
     )
   }
 
@@ -102,91 +102,95 @@ enum LLMScrapeCLI {
 // MARK: - Model pipeline (mirror of FoundationModelScraper)
 
 #if canImport(FoundationModels)
+// Short @Guide strings: the on-device window is only ~4096 tokens and the
+// injected schema is the single biggest consumer, so every word here is paid
+// for in lost room for links. `scheduledTime` is intentionally dropped (it's
+// rarely present in link data and is cheaply derivable later).
 @available(macOS 26.0, *)
 @Generable
 private struct LLMGameEntry_CLI {
-  @Guide(description: "Sport or league name, e.g. NBA, MLB, NHL, Premier League, UFC, F1")
+  @Guide(description: "League, e.g. NBA, MLB, NHL, EPL, UFC, F1")
   var league: String
-  @Guide(description: "Home team or participant as it appears in the URL or card text. Abbreviations are fine (e.g. TOR, PHI, NYY) — do not expand them.")
+  @Guide(description: "Home team/participant verbatim from the link. Keep abbreviations.")
   var homeTeam: String
-  @Guide(description: "Away team or participant. Empty string for solo events like a fight card, draft, or race.")
+  @Guide(description: "Away team verbatim. Empty for solo events.")
   var awayTeam: String
-  @Guide(description: "Game date from the URL path in YYYY-MM-DD format. Empty if not determinable.")
+  @Guide(description: "Date as YYYY-MM-DD if present in the link, else empty.")
   var scheduledDate: String
-  @Guide(description: "Start time in HH:MM 24-hour Eastern Time. Empty if not found.")
-  var scheduledTime: String
-  @Guide(description: "True only when the status explicitly says live, in progress, or shows a score or period indicator.")
+  @Guide(description: "True if the status shows live, in progress, or a score.")
   var isLive: Bool
-  @Guide(description: "Full absolute URL to the stream or game page for this entry.")
+  @Guide(description: "The 'u' value of this link, copied exactly.")
   var pageURL: String
 }
 
 @available(macOS 26.0, *)
 @Generable
 private struct LLMGamesList_CLI {
-  @Guide(description: "All game or event listings found. Exclude navigation, schedule overviews, standings, news, and account links.")
+  @Guide(description: "Game/event listings only. Skip nav, standings, news, login, account.")
   var games: [LLMGameEntry_CLI]
 }
 
 @available(macOS 26.0, *)
-@Generable
-private struct LLMSiteProfile_CLI {
-  @Guide(description: "URL path substring common to game/event pages on this site, e.g. '/live/', '/watch/', '/nhl/2026'. Empty if no clear pattern.")
-  var gameURLPattern: String
-  @Guide(description: "CSS class fragment found on game listing card containers, e.g. 'match-card', 'event-item', 'game'. Empty if no clear pattern.")
-  var cardClassPattern: String
-  @Guide(description: "True if the site routes game pages by team abbreviation in the URL (e.g. /mlb/bos-nyy/) rather than full team names.")
-  var usesAbbreviations: Bool
-}
-
-@available(macOS 26.0, *)
 extension LLMScrapeCLI {
-  static let siteProfilingInstructions = """
-  You analyze a sample of links scraped from a sports streaming website to understand its structure.
-
-  Identify: (1) the URL path substring common to game or event pages, (2) the CSS class fragment \
-  on game listing card containers, (3) whether the site uses team abbreviations in URLs. \
-  Base your answer only on the evidence in the provided link data.
-  """
-
+  // Grounding is everything for this small model: without the "only what's in
+  // the link / never invent / one game per link" rules it (a) fabricates famous
+  // matchups for section links that carry no team data, and (b) loops, emitting
+  // the same game until it overflows the window. Both are caught again in Swift
+  // by post-validation, but cutting them at the source improves yield.
   static let gameMatchingInstructions = """
-  You identify sports game listing links from scraped streaming website data.
-
-  Return every game card — live, upcoming, or countdown-only. A card showing a countdown \
-  timer ("2h 30m", "1d 4h") is a valid upcoming game; include it. Output team names exactly \
-  as they appear in the URL slug or card text; do not expand abbreviations.
-
-  Skip navigation, schedule overviews, standings, news, login, and account links. For games \
-  whose href is a placeholder ("#", "javascript:void"), use the site's section URL. Extract \
-  dates from URL path segments (e.g. /2026-05-15/ → scheduledDate "2026-05-15").
+  You convert scraped link data into a list of sports games. Work ONLY from the \
+  text and URL of each provided link — never use outside knowledge, and never \
+  invent teams, dates, or matchups. Emit at most one game per link, and never \
+  repeat the same game. Copy team names verbatim from the link; keep \
+  abbreviations as-is. If a link has no clear team or event in its own text/URL \
+  (e.g. a section or navigation link like "NFL" → /nflstreams2), skip it.
   """
+
+  // Small chunks keep a *complete* response inside the shared ~4096-token
+  // window. We deliberately do NOT cap maximumResponseTokens: a hard cap
+  // truncates the JSON mid-token and guided generation then fails to decode the
+  // entire chunk. Looping is handled by post-validation + dedupe instead.
+  static let chunkSize = 8
 
   static func runModel(baseURL: URL, links: [CLILink], scrape: ScrapeResult, scrapeMs: Int) async -> Result {
-    let domain = baseURL.host ?? baseURL.absoluteString
-
-    // Phase 1: profile.
-    let profileStart = Date()
-    let structure = await buildSiteProfile(links: links, domain: domain, pageTitle: scrape.loadedURL)
-    let profileMs = Int(Date().timeIntervalSince(profileStart) * 1000)
-
-    // Phase 2: match (with pre-filter).
     let host = (baseURL.scheme ?? "https") + "://" + (baseURL.host ?? "")
-    let focused: [CLILink]
-    if let s = structure, !s.gameURLPattern.isEmpty || !s.cardClassPattern.isEmpty {
-      let urlPat = s.gameURLPattern.lowercased()
-      let clsPat = s.cardClassPattern.lowercased()
-      let filtered = links.filter { link in
-        let hrefMatch = !urlPat.isEmpty && link.href.lowercased().contains(urlPat)
-        let classMatch = !clsPat.isEmpty && link.containerClass.lowercased().contains(clsPat)
-        return hrefMatch || classMatch
-      }
-      focused = filtered.count >= 3 ? filtered : links
-    } else {
-      focused = links
+
+    // Cheap Swift-side junk filter (no model call): drop the homepage itself,
+    // javascript/anchor-only hrefs, and obvious non-game sections. Everything
+    // surviving is a *candidate* — the model is the real classifier, so this
+    // stays deliberately conservative to avoid the old "filter ate the games"
+    // failure mode.
+    let baseNoSlash = baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    let junkPathTokens = ["/blog", "/news", "/about", "/contact", "/privacy",
+                          "/terms", "/dmca", "/login", "/register", "/signup",
+                          "/account", "/faq", "/tag/", "/category/blog"]
+    var seen = Set<String>()
+    let candidates: [CLILink] = links.compactMap { link in
+      var href = link.href
+      if href.hasPrefix("//") { href = (baseURL.scheme ?? "https") + ":" + href }
+      else if href.hasPrefix("/") { href = host + href }
+      guard href.hasPrefix("http"), !href.hasPrefix("javascript:") else { return nil }
+      let lower = href.lowercased()
+      if junkPathTokens.contains(where: { lower.contains($0) }) { return nil }
+      let trimmed = href.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+      if trimmed == baseNoSlash { return nil }            // homepage self-link
+      guard seen.insert(href).inserted else { return nil } // dedupe
+      return CLILink(href: href, text: link.text, status: link.status, containerClass: link.containerClass)
     }
 
+    // Chunk and classify. Merge + dedupe by resolved pageURL.
     let matchStart = Date()
-    let games = await matchGames(links: focused, baseURL: baseURL, structure: structure, host: host)
+    let batches = stride(from: 0, to: candidates.count, by: chunkSize).map {
+      Array(candidates[$0..<min($0 + chunkSize, candidates.count)])
+    }
+    var games: [Game] = []
+    var gameSeen = Set<String>()
+    for batch in batches {
+      let batchGames = await matchChunk(batch, baseURL: baseURL, host: host)
+      for g in batchGames where gameSeen.insert(g.pageURL).inserted {
+        games.append(g)
+      }
+    }
     let matchMs = Int(Date().timeIntervalSince(matchStart) * 1000)
 
     return Result(
@@ -195,82 +199,96 @@ extension LLMScrapeCLI {
       modelStatus: "available",
       scrapeReason: scrape.reason,
       rawLinkCount: links.count,
-      profile: structure.map { Profile(gameURLPattern: $0.gameURLPattern, cardClassPattern: $0.cardClassPattern, usesAbbreviations: $0.usesAbbreviations) },
-      focusedLinkCount: focused.count,
+      profile: nil,
+      candidateLinkCount: candidates.count,
+      chunks: batches.count,
       games: games,
-      scrapeMs: scrapeMs, profileMs: profileMs, matchMs: matchMs
+      scrapeMs: scrapeMs, matchMs: matchMs
     )
   }
 
-  struct Structure { let gameURLPattern: String; let cardClassPattern: String; let usesAbbreviations: Bool }
-
-  static func buildSiteProfile(links: [CLILink], domain: String, pageTitle: String?) async -> Structure? {
-    let sample: [[String: String]] = links.prefix(60).compactMap { link -> [String: String]? in
-      guard !link.href.isEmpty else { return nil }
-      var e: [String: String] = ["href": link.href]
-      let cls = link.containerClass.trimmingCharacters(in: .whitespacesAndNewlines)
-      if !cls.isEmpty { e["class"] = String(cls.prefix(80)) }
-      let txt = link.text.trimmingCharacters(in: .whitespacesAndNewlines)
-      if !txt.isEmpty { e["text"] = String(txt.prefix(80)) }
-      return e
-    }
-    guard !sample.isEmpty,
-          let jsonData = try? JSONSerialization.data(withJSONObject: sample),
-          let jsonStr = String(data: jsonData, encoding: .utf8) else { return nil }
-    let prompt = "Site: \(domain)\n\nSample links:\n\(jsonStr)"
-    do {
-      let session = LanguageModelSession(instructions: siteProfilingInstructions)
-      let p = try await session.respond(to: prompt, generating: LLMSiteProfile_CLI.self).content
-      return Structure(gameURLPattern: p.gameURLPattern, cardClassPattern: p.cardClassPattern, usesAbbreviations: p.usesAbbreviations)
-    } catch {
-      FileHandle.standardError.write(Data("profile error: \(error)\n".utf8))
-      return nil
-    }
-  }
-
-  static func matchGames(links: [CLILink], baseURL: URL, structure: Structure?, host: String) async -> [Game] {
-    let serialized: [[String: String]] = links.prefix(200).compactMap { link in
-      guard !link.href.isEmpty, !link.href.hasPrefix("javascript:") else { return nil }
-      var href = link.href
-      if href.hasPrefix("//") { href = (baseURL.scheme ?? "https") + ":" + href }
-      else if href.hasPrefix("/") { href = host + href }
-      else if !href.hasPrefix("http") { return nil }
-      var entry: [String: String] = ["href": href]
+  /// Classify one batch of links. Sends compact entries (short keys, path-only
+  /// `u`) and disables schema-in-prompt to conserve the tiny context window.
+  /// Every returned game is validated against its source link's own text+URL so
+  /// hallucinated matchups and loop-duplicates are discarded.
+  static func matchChunk(_ links: [CLILink], baseURL: URL, host: String) async -> [Game] {
+    // key (path) → (absolute URL, lowercased haystack of the link's own text+URL)
+    var resolved: [String: String] = [:]
+    var haystack: [String: String] = [:]
+    let serialized: [[String: String]] = links.compactMap { link in
+      let abs = link.href
+      let u: String
+      if abs.hasPrefix(host) { u = String(abs.dropFirst(host.count)) } else { u = abs }
+      let key = u.isEmpty ? "/" : u
+      resolved[key] = abs
+      haystack[key] = (link.text + " " + abs).lowercased()
+      var e: [String: String] = ["u": key]
       let txt = link.text.trimmingCharacters(in: .whitespacesAndNewlines)
       let sts = link.status.trimmingCharacters(in: .whitespacesAndNewlines)
-      let cls = link.containerClass.trimmingCharacters(in: .whitespacesAndNewlines)
-      let pathDepth = URL(string: href)?.pathComponents.filter { $0 != "/" }.count ?? 0
-      if !txt.isEmpty { entry["text"] = txt }
-      if !sts.isEmpty { entry["status"] = sts }
-      if !cls.isEmpty { entry["class"] = String(cls.prefix(80)) }
-      if pathDepth > 0 { entry["depth"] = "\(pathDepth)" }
-      return entry
+      if !txt.isEmpty { e["t"] = String(txt.prefix(80)) }
+      if !sts.isEmpty { e["s"] = String(sts.prefix(30)) }
+      return e
     }
     guard !serialized.isEmpty,
           let jsonData = try? JSONSerialization.data(withJSONObject: serialized),
           let jsonStr = String(data: jsonData, encoding: .utf8) else { return [] }
 
-    var header = "Site: \(baseURL.absoluteString)"
-    if let s = structure, !s.gameURLPattern.isEmpty {
-      header += "\nGame pages on this site typically contain '\(s.gameURLPattern)' in the URL."
-    }
-    let prompt = "\(header)\n\nLinks:\n\(jsonStr)"
+    let prompt = "Host: \(host)\nLinks:\n\(jsonStr)"
     do {
       let session = LanguageModelSession(instructions: gameMatchingInstructions)
-      let response = try await session.respond(to: prompt, generating: LLMGamesList_CLI.self)
+      let response = try await session.respond(
+        to: prompt,
+        generating: LLMGamesList_CLI.self,
+        includeSchemaInPrompt: false,
+        options: GenerationOptions(temperature: 0)
+      )
+      var seenInChunk = Set<String>()
       return response.content.games.compactMap { e -> Game? in
-        guard !e.homeTeam.isEmpty, URL(string: e.pageURL) != nil else { return nil }
+        guard !e.homeTeam.isEmpty else { return nil }
+        if !e.awayTeam.isEmpty, e.homeTeam.caseInsensitiveCompare(e.awayTeam) == .orderedSame { return nil }
+        let key = e.pageURL.hasPrefix(host) ? String(e.pageURL.dropFirst(host.count)) : e.pageURL
+        let abs = resolved[key] ?? resolved["/" + key] ?? (e.pageURL.hasPrefix("http") ? e.pageURL : host + e.pageURL)
+        guard URL(string: abs) != nil else { return nil }
+        // Grounding check: the home (and away, if present) team must actually
+        // appear in the source link's text/URL. Kills fabricated matchups and
+        // recycled-URL loop duplicates.
+        let hay = haystack[key] ?? haystack["/" + key] ?? ""
+        guard !hay.isEmpty, teamGrounded(e.homeTeam, in: hay),
+              e.awayTeam.isEmpty || teamGrounded(e.awayTeam, in: hay) else { return nil }
+        // Dedupe within the chunk by resolved URL + matchup.
+        let dedupeKey = abs + "|" + e.homeTeam.lowercased() + "|" + e.awayTeam.lowercased()
+        guard seenInChunk.insert(dedupeKey).inserted else { return nil }
+        // Keep the date only if it actually appears in the link (else invented).
+        let date: String? = {
+          let d = e.scheduledDate.trimmingCharacters(in: .whitespacesAndNewlines)
+          return (!d.isEmpty && hay.contains(d.lowercased())) ? d : nil
+        }()
         return Game(
           league: e.league, homeTeam: e.homeTeam, awayTeam: e.awayTeam,
-          scheduledDate: e.scheduledDate.isEmpty ? nil : e.scheduledDate,
-          scheduledTime: e.scheduledTime.isEmpty ? nil : e.scheduledTime,
-          isLive: e.isLive, pageURL: e.pageURL
+          scheduledDate: date,
+          scheduledTime: nil,
+          isLive: e.isLive, pageURL: abs
         )
       }
     } catch {
-      FileHandle.standardError.write(Data("match error: \(error)\n".utf8))
+      FileHandle.standardError.write(Data("match error (\(links.count) links): \(error)\n".utf8))
       return []
     }
+  }
+
+  /// True if a meaningful token of `team` appears in `haystack` (the source
+  /// link's lowercased text+URL). Tolerant of slug hyphenation and abbreviation:
+  /// matches if any word ≥3 chars from the team name is present.
+  static func teamGrounded(_ team: String, in haystack: String) -> Bool {
+    let normalized = haystack.replacingOccurrences(of: "-", with: " ")
+    let words = team.lowercased()
+      .components(separatedBy: CharacterSet.alphanumerics.inverted)
+      .filter { $0.count >= 3 }
+    if words.isEmpty {
+      // Very short name (abbreviation like "TOR"); require exact substring.
+      return normalized.contains(team.lowercased())
+    }
+    return words.contains { normalized.contains($0) }
   }
 }
 #endif

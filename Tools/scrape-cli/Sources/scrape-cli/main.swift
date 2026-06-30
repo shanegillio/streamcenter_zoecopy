@@ -54,6 +54,9 @@ while i < args.count {
     fullFlow = true
   case "--llm":
     llmMode = true
+  case "--measure":
+    Task { @MainActor in await MeasureCLI.run(); exit(0) }
+    NSApplication.shared.run()
   case "--logo-test":
     i += 1
     guard i + 1 < args.count else { usage() }
