@@ -1044,6 +1044,11 @@ struct PlayerView: View {
       playerObservers.append(token)
     }
     func stillOwns() -> Bool { avPlayer != nil && player.currentItem === watchedItem }
+    // v2.74: count fatal HTTP segment errors (404/403/5xx). These gated live
+    // playlists serve segment URLs AVPlayer can't fetch; the embed player can,
+    // so a couple of these means hand off NOW rather than waiting ~15 s for the
+    // buffer to drain to black. A single transient blip is tolerated.
+    var fatalHTTPErrors = 0
     observe(.AVPlayerItemDidPlayToEndTime) { _ in
       Task { @MainActor in
         guard stillOwns() else { return }
@@ -1067,13 +1072,26 @@ struct PlayerView: View {
     }
     observe(.AVPlayerItemNewErrorLogEntry) { _ in
       Task { @MainActor in
-        guard stillOwns(), let sid = traversalSessionID,
-              let entry = player.currentItem?.errorLog()?.events.last else { return }
+        guard stillOwns(), let entry = player.currentItem?.errorLog()?.events.last else { return }
         let status = entry.errorStatusCode
-        TraversalLog.shared.recordEvent(
-          sid, kind: "av_error_log",
-          info: "status=\(status) \(entry.errorComment ?? "")".trimmingCharacters(in: .whitespaces)
-        )
+        let comment = entry.errorComment ?? ""
+        if let sid = traversalSessionID {
+          TraversalLog.shared.recordEvent(
+            sid, kind: "av_error_log",
+            info: "status=\(status) \(comment)".trimmingCharacters(in: .whitespaces)
+          )
+        }
+        // A true HTTP failure on a segment/playlist (404/403/5xx) is fatal for
+        // AVPlayer continuity on these streams — fall back to the embed once we
+        // see it recur (the bandwidth-mismatch warning, -12318, is NOT counted).
+        let isHTTPFailure = (400...599).contains(status)
+          || comment.contains("HTTP 4") || comment.contains("HTTP 5")
+        if isHTTPFailure {
+          fatalHTTPErrors += 1
+          if fatalHTTPErrors >= 2 {
+            fallBackToEmbedPlayer(reason: "segment_http_error: \(comment.isEmpty ? "status \(status)" : comment)")
+          }
+        }
       }
     }
 
