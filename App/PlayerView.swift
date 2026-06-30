@@ -1117,10 +1117,11 @@ struct PlayerView: View {
       // (rather than a reset-on-recovery counter) catches BOTH a single long
       // freeze AND the "stall → corrects → stalls again" thrash of a malformed-
       // bandwidth playlist (-12318) that AVPlayer can't ride out but the embed
-      // can. The score decays during healthy playback, so a rare isolated
-      // buffering hiccup on an otherwise-fine stream never trips the handoff.
-      let checkInterval: TimeInterval = 2
-      let stallBudget: TimeInterval = 8   // cumulative stalled time before handoff
+      // can. The score heals slowly during healthy playback, so a rare isolated
+      // buffering hiccup on an otherwise-fine stream never trips the handoff,
+      // but a stream that keeps stalling hands off within a few seconds.
+      let checkInterval: TimeInterval = 1.5
+      let stallBudget: TimeInterval = 5    // cumulative stalled time before handoff
       var lastTime = player.currentTime().seconds
       var stallScore: TimeInterval = 0
       while !Task.isCancelled {
@@ -1132,18 +1133,22 @@ struct PlayerView: View {
           fallBackToEmbedPlayer(reason: "item_failed_midstream@\(Int(now))s")
           return
         }
-        // Count it as a stall when we've ASKED the player to play (rate > 0) but
-        // the clock isn't advancing — covers both a buffering wait and a frozen
-        // "playing" state. rate == 0 means a deliberate pause, which we leave be.
         let progressed = now > lastTime + 0.05
-        if player.rate > 0 && !progressed {
+        // It's a stall when the clock isn't advancing AND it's not a deliberate
+        // pause: either the player is trying to play (rate > 0 / waiting to play)
+        // or its buffer has run dry (the "goes black, clock frozen" case on these
+        // tiny live windows). A user pause keeps a full buffer, so it's excluded.
+        let bufferEmpty = curItem?.isPlaybackBufferEmpty ?? false
+        let wantsToPlay = player.rate > 0
+                       || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+        if !progressed && (wantsToPlay || bufferEmpty) {
           stallScore += checkInterval
           if stallScore >= stallBudget {
-            fallBackToEmbedPlayer(reason: "repeated_stalls@\(Int(now))s")
+            fallBackToEmbedPlayer(reason: "stalled@\(Int(now))s buf_empty=\(bufferEmpty)")
             return
           }
         } else {
-          stallScore = max(0, stallScore - checkInterval / 2)  // heal during good playback
+          stallScore = max(0, stallScore - checkInterval / 3)  // heal during good playback
         }
         lastTime = now
       }
