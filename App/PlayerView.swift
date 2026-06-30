@@ -65,6 +65,10 @@ struct PlayerView: View {
   /// flag that handler stopped the shared player (clearing its item), leaving a
   /// black full-screen player with a dead play button.
   @State private var isPlayerFullScreen = false
+  /// v2.74: AVPlayerItem notification observers for the committed stream (end /
+  /// failed-to-end / stalled / error-log). Removed when we hand off, switch
+  /// items, or leave — see `removePlayerObservers()`.
+  @State private var playerObservers: [NSObjectProtocol] = []
 
   struct SourceAttempt: Identifiable {
     let id = UUID()
@@ -263,6 +267,7 @@ struct PlayerView: View {
     }
     .onDisappear {
       cancelBudgetTimer()
+      removePlayerObservers()
       revealTask?.cancel(); revealTask = nil
       if let sid = traversalSessionID {
         TraversalLog.shared.endSession(sid)
@@ -1019,7 +1024,59 @@ struct PlayerView: View {
     // The player is shared across channels, so identity can't tell us whether
     // this watchdog still owns the playback — compare the *item* it started on.
     // If a later channel already swapped in a new item, this watchdog is stale.
-    let watchedItem = player.currentItem
+    guard let watchedItem = player.currentItem else { return }
+
+    // v2.74: AVFoundation's own item notifications catch failure shapes the
+    // time-progress poll loop can't see — notably the "plays fine, then goes
+    // BLACK at 10–15 s" case, which is the live playlist ending early
+    // (DidPlayToEndTime) or failing to keep up, NOT a position-frozen stall.
+    // These browsers keep re-pulling the playlist; AVPlayer just ends. Each is
+    // logged (so the traversal log shows exactly what happened) and hands off to
+    // the embed player. PlaybackStalled / NewErrorLogEntry are recorded for
+    // diagnostics (e.g. surfacing a 403 on a segment) without forcing a handoff —
+    // the poll loop decides sustained stalls so a self-healing hiccup is spared.
+    removePlayerObservers()
+    let nc = NotificationCenter.default
+    func observe(_ name: Notification.Name, _ handler: @escaping (Notification) -> Void) {
+      let token = nc.addObserver(forName: name, object: watchedItem, queue: .main) { note in
+        handler(note)
+      }
+      playerObservers.append(token)
+    }
+    func stillOwns() -> Bool { avPlayer != nil && player.currentItem === watchedItem }
+    observe(.AVPlayerItemDidPlayToEndTime) { _ in
+      Task { @MainActor in
+        guard stillOwns() else { return }
+        fallBackToEmbedPlayer(reason: "played_to_end@\(Int(player.currentTime().seconds))s")
+      }
+    }
+    observe(.AVPlayerItemFailedToPlayToEndTime) { note in
+      Task { @MainActor in
+        guard stillOwns() else { return }
+        let err = note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+        fallBackToEmbedPlayer(reason: "failed_to_end: \(err?.localizedDescription ?? "unknown")")
+      }
+    }
+    observe(.AVPlayerItemPlaybackStalled) { _ in
+      Task { @MainActor in
+        guard stillOwns(), let sid = traversalSessionID else { return }
+        TraversalLog.shared.recordEvent(
+          sid, kind: "playback_stalled", info: "@\(Int(player.currentTime().seconds))s"
+        )
+      }
+    }
+    observe(.AVPlayerItemNewErrorLogEntry) { _ in
+      Task { @MainActor in
+        guard stillOwns(), let sid = traversalSessionID,
+              let entry = player.currentItem?.errorLog()?.events.last else { return }
+        let status = entry.errorStatusCode
+        TraversalLog.shared.recordEvent(
+          sid, kind: "av_error_log",
+          info: "status=\(status) \(entry.errorComment ?? "")".trimmingCharacters(in: .whitespaces)
+        )
+      }
+    }
+
     Task { @MainActor in
       // Phase 1: initial-start check. Position-0 stall / hard failure ⇒ the
       // stream never opened in AVPlayer; hand straight to the embed.
@@ -1038,7 +1095,7 @@ struct PlayerView: View {
         TraversalLog.shared.markOutcome(sid, .worked)
       }
 
-      // Phase 2: continuous mid-playback stall monitor.
+      // Phase 2: continuous mid-playback stall monitor (frozen-frame case).
       let checkInterval: TimeInterval = 2
       let stallLimit: TimeInterval = 8   // sustained no-progress before handoff
       var lastTime = player.currentTime().seconds
@@ -1052,11 +1109,11 @@ struct PlayerView: View {
           fallBackToEmbedPlayer(reason: "item_failed_midstream@\(Int(now))s")
           return
         }
-        // Count it as a stall only when the player WANTS to play but isn't making
-        // progress — segment/manifest starvation, not a user pause.
-        let wantsToPlay = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+        // Count it as a stall when we've ASKED the player to play (rate > 0) but
+        // the clock isn't advancing — covers both a buffering wait and a frozen
+        // "playing" state. rate == 0 means a deliberate pause, which we leave be.
         let progressed = now > lastTime + 0.05
-        if wantsToPlay && !progressed {
+        if player.rate > 0 && !progressed {
           stalledFor += checkInterval
           if stalledFor >= stallLimit {
             fallBackToEmbedPlayer(reason: "stalled_midstream@\(Int(now))s")
@@ -1073,6 +1130,8 @@ struct PlayerView: View {
   /// Release the (dead/stalled) AVPlayer item and hand playback to the WebView
   /// embed player, which serves these gated streams the way a browser does.
   private func fallBackToEmbedPlayer(reason: String) {
+    guard avPlayer != nil else { return }  // already handed off
+    removePlayerObservers()
     if let sid = traversalSessionID {
       TraversalLog.shared.recordEvent(sid, kind: "avplayer_fallback", info: reason)
     }
@@ -1085,6 +1144,11 @@ struct PlayerView: View {
     // manifest/segment loads and reload so it can fetch the gated stream the
     // browser (unlike AVPlayer) supplies the right Referer/Origin for.
     webBridge.coordinator?.engagePlayerMode()
+  }
+
+  private func removePlayerObservers() {
+    for token in playerObservers { NotificationCenter.default.removeObserver(token) }
+    playerObservers = []
   }
 
   /// v2.64: read the source site and find this game's exact page URL, then
