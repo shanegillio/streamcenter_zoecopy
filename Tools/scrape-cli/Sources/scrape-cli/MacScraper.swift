@@ -17,6 +17,7 @@ struct ScrapeResult: Encodable {
     let href: String
     let text: String
     let status: String
+    let containerClass: String
   }
 }
 
@@ -139,6 +140,20 @@ final class MacScraper: NSObject {
       (function() {
         var links = [], seen = {};
 
+        // Walk up to find the nearest ancestor with a non-empty className.
+        // Mirrors App/WebViewScraper.swift's findContainerClass — the LLM's
+        // strongest signal for distinguishing game cards from navigation.
+        function findContainerClass(el) {
+          if (!el) return '';
+          var p = el;
+          for (var i = 0; i < 6 && p; i++) {
+            var cls = (p.className || '').trim();
+            if (cls && cls.length > 0) return cls.slice(0, 120);
+            p = p.parentElement;
+          }
+          return '';
+        }
+
         function findStatus(anchor) {
           var statusText = '';
           var el = anchor.parentElement;
@@ -169,7 +184,7 @@ final class MacScraper: NSObject {
           var text = (a.innerText || a.textContent || '').replace(/\\s+/g, ' ').trim();
           if (href && !seen[href] && href.startsWith('http')) {
             seen[href] = 1;
-            links.push({href: href, text: text, status: findStatus(a)});
+            links.push({href: href, text: text, status: findStatus(a), containerClass: findContainerClass(a)});
           }
         });
 
@@ -214,7 +229,7 @@ final class MacScraper: NSObject {
           var statusText = (timerEl.innerText || '').replace(/\\s+/g, ' ').trim();
           if (statusText.length > 60) statusText = statusText.slice(0, 60);
 
-          links.push({href: href, text: text, status: statusText});
+          links.push({href: href, text: text, status: statusText, containerClass: findContainerClass(card)});
         });
 
         return JSON.stringify(links);
@@ -234,7 +249,7 @@ final class MacScraper: NSObject {
            let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] {
           let parsed: [ScrapeResult.Link] = raw.compactMap { d -> ScrapeResult.Link? in
             guard let href = d["href"], let text = d["text"] else { return nil }
-            return ScrapeResult.Link(href: href, text: text, status: d["status"] ?? "")
+            return ScrapeResult.Link(href: href, text: text, status: d["status"] ?? "", containerClass: d["containerClass"] ?? "")
           }
           let reason = parsed.isEmpty ? "noLinks" : "success"
           let msg = parsed.isEmpty
