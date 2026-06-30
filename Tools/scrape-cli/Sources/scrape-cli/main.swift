@@ -28,6 +28,7 @@ var debounce: TimeInterval = 4.0
 var clickDelay: TimeInterval = 2.5
 var apiOnly = false
 var fullFlow = false
+var llmMode = false
 var logoTestTeam: String? = nil
 var logoTestLeague: String? = nil
 
@@ -51,6 +52,8 @@ while i < args.count {
     apiOnly = true
   case "--full-flow":
     fullFlow = true
+  case "--llm":
+    llmMode = true
   case "--logo-test":
     i += 1
     guard i + 1 < args.count else { usage() }
@@ -93,7 +96,13 @@ Task { @MainActor in
   encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
   encoder.dateEncodingStrategy = .iso8601
 
-  if fullFlow {
+  if llmMode {
+    let result = await LLMScrapeCLI.run(baseURL: url, debounce: debounce, clickDelay: clickDelay, timeout: timeout)
+    if let data = try? encoder.encode(result),
+       let s = String(data: data, encoding: .utf8) {
+      print(s)
+    }
+  } else if fullFlow {
     let result = await FullFlowCLI.run(baseURL: url)
     if let data = try? encoder.encode(result),
        let s = String(data: data, encoding: .utf8) {
