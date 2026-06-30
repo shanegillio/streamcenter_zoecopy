@@ -66,18 +66,6 @@ private struct LLMGamesList {
   var games: [LLMGameEntry]
 }
 
-@available(iOS 26.0, macOS 26.0, *)
-@Generable
-private struct LLMSiteProfile {
-  @Guide(description: "URL path substring common to game/event pages on this site, e.g. '/live/', '/watch/', '/nhl/2026'. Empty if no clear pattern.")
-  var gameURLPattern: String
-
-  @Guide(description: "CSS class fragment found on game listing card containers, e.g. 'match-card', 'event-item', 'game'. Empty if no clear pattern.")
-  var cardClassPattern: String
-
-  @Guide(description: "True if the site routes game pages by team abbreviation in the URL (e.g. /mlb/bos-nyy/) rather than full team names.")
-  var usesAbbreviations: Bool
-}
 #endif
 
 // MARK: - Scraper actor
@@ -103,17 +91,6 @@ actor FoundationModelScraper {
   }
 
   // MARK: - Instructions
-
-  // Concise per Apple's guidance (1–3 paragraphs). Abbreviation expansion is
-  // handled in Swift post-processing via TeamAliasIndex, not in the model prompt.
-
-  private static let siteProfilingInstructions = """
-  You analyze a sample of links scraped from a sports streaming website to understand its structure.
-
-  Identify: (1) the URL path substring common to game or event pages, (2) the CSS class fragment \
-  on game listing card containers, (3) whether the site uses team abbreviations in URLs. \
-  Base your answer only on the evidence in the provided link data.
-  """
 
   // Grounding is critical for this small model. Without "only what's in the
   // link / never invent / one game per link" it (a) fabricates famous matchups
@@ -150,74 +127,20 @@ actor FoundationModelScraper {
     siteStructureCache[domain]
   }
 
-  // MARK: - Two-phase implementation
+  // MARK: - Implementation
 
   #if canImport(FoundationModels)
   @available(iOS 26.0, macOS 26.0, *)
   private func runWithFoundationModel(links: [ScrapedLink], baseURL: URL, pageTitle: String?) async -> [ExtractedGame]? {
     guard SystemLanguageModel.default.availability == .available else { return nil }
-    let domain = baseURL.host ?? baseURL.absoluteString
-
-    // Phase 1: Profile the site (once per domain per app session).
-    // If the profile call fails, matchGames proceeds with nil profile (uses all links).
-    let structure: SiteStructure?
-    if let cached = siteStructureCache[domain] {
-      structure = cached
-    } else if let fresh = await buildSiteProfile(links: links, domain: domain, pageTitle: pageTitle) {
-      siteStructureCache[domain] = fresh
-      structure = fresh
-    } else {
-      structure = nil
-    }
-
-    // Phase 2: Match games with pre-filtered links.
-    let games = await matchGames(links: links, baseURL: baseURL, structure: structure, pageTitle: pageTitle)
+    let games = await matchGames(links: links, baseURL: baseURL)
     if let games {
       gameCache[baseURL] = (games, Date().addingTimeInterval(60))
     }
     return games
   }
 
-  // MARK: - Phase 1: site profiling
-
-  @available(iOS 26.0, macOS 26.0, *)
-  private func buildSiteProfile(links: [ScrapedLink], domain: String, pageTitle: String?) async -> SiteStructure? {
-    // Feed a 60-link sample so the model can recognize URL and class patterns.
-    let sample: [[String: String]] = links.prefix(60).compactMap { link -> [String: String]? in
-      guard !link.href.isEmpty else { return nil }
-      var e: [String: String] = ["href": link.href]
-      let cls = link.containerClass.trimmingCharacters(in: .whitespacesAndNewlines)
-      if !cls.isEmpty { e["class"] = String(cls.prefix(80)) }
-      let txt = link.text.trimmingCharacters(in: .whitespacesAndNewlines)
-      if !txt.isEmpty { e["text"] = String(txt.prefix(80)) }
-      return e
-    }
-    guard !sample.isEmpty,
-          let jsonData = try? JSONSerialization.data(withJSONObject: sample),
-          let jsonStr = String(data: jsonData, encoding: .utf8) else { return nil }
-
-    var prompt = "Site: \(domain)"
-    if let title = pageTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
-       !title.isEmpty, title.count < 150 {
-      prompt += "\nTitle: \(title)"
-    }
-    prompt += "\n\nSample links:\n\(jsonStr)"
-
-    do {
-      let session = LanguageModelSession(instructions: Self.siteProfilingInstructions)
-      let response = try await session.respond(to: prompt, generating: LLMSiteProfile.self)
-      let p = response.content
-      return SiteStructure(
-        gameURLPattern: p.gameURLPattern,
-        cardClassPattern: p.cardClassPattern,
-        usesAbbreviations: p.usesAbbreviations
-      )
-    } catch {
-      return nil
-    }
-  }
-
-  // MARK: - Phase 2: game matching (chunked + grounded)
+  // MARK: - Game matching (chunked + grounded)
 
   // The on-device window is ~4096 tokens shared between input and output. A
   // single 200-link call always overflowed — and when it didn't, the model
@@ -227,7 +150,7 @@ actor FoundationModelScraper {
   private static let matchChunkSize = 8
 
   @available(iOS 26.0, macOS 26.0, *)
-  private func matchGames(links: [ScrapedLink], baseURL: URL, structure: SiteStructure?, pageTitle: String?) async -> [ExtractedGame]? {
+  private func matchGames(links: [ScrapedLink], baseURL: URL) async -> [ExtractedGame]? {
     let host = (baseURL.scheme ?? "https") + "://" + (baseURL.host ?? "")
     let baseNoSlash = baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
 
@@ -263,8 +186,73 @@ actor FoundationModelScraper {
         if seenGame.insert(key).inserted { games.append(g) }
       }
     }
-    return games.isEmpty ? nil : games
+    guard !games.isEmpty else { return nil }
+
+    // Learn the site's structure from the *validated* games (ground truth) and
+    // cache it for GameURLResolver. Deterministic — replaces the old LLM
+    // profiling call that hallucinated patterns like "/live/" for sites that
+    // didn't use them. Learn once per domain per session.
+    let domain = baseURL.host ?? baseURL.absoluteString
+    if siteStructureCache[domain] == nil,
+       let learned = Self.deriveStructure(games: games, candidates: candidates, host: host) {
+      siteStructureCache[domain] = learned
+    }
+    return games
   }
+
+  /// Derive a `SiteStructure` from validated games — deterministic, no model.
+  /// See the CLI mirror (`LLMScrapeCLI.deriveStructure`) for rationale.
+  @available(iOS 26.0, macOS 26.0, *)
+  private static func deriveStructure(games: [ExtractedGame], candidates: [ScrapedLink], host: String) -> SiteStructure? {
+    guard games.count >= 2 else { return nil }
+    let urls = games.map { $0.pageURL }
+
+    // gameURLPattern: dominant first path segment, but only if it's a short,
+    // non-sport routing prefix (/live/, /watch/) — never a sport section like
+    // /mlb/, which would wrongly bias the resolver toward one sport.
+    var segCounts: [String: Int] = [:]
+    for u in urls {
+      if let seg = u.pathComponents.first(where: { $0 != "/" && !$0.isEmpty }) {
+        segCounts[seg.lowercased(), default: 0] += 1
+      }
+    }
+    var pattern = ""
+    if let (seg, count) = segCounts.max(by: { $0.value < $1.value }),
+       Double(count) / Double(urls.count) >= 0.7,
+       seg.count <= 8, !sportSegments.contains(seg) {
+      pattern = "/\(seg)/"
+    }
+
+    // usesAbbreviations: a path segment that's a hyphenated pair of ≤3-char
+    // codes (tor-cgy, wsh-ari).
+    let abbrevRE = try? NSRegularExpression(pattern: "(^|/)[a-z]{2,3}-[a-z]{2,3}(/|$)")
+    let abbrevCount = urls.filter { u in
+      let p = u.path.lowercased()
+      return abbrevRE?.firstMatch(in: p, range: NSRange(p.startIndex..., in: p)) != nil
+    }.count
+    let usesAbbreviations = Double(abbrevCount) / Double(urls.count) >= 0.5
+
+    // cardClassPattern: most common containerClass token among matched links.
+    let gameHrefs = Set(games.map { $0.pageURL.absoluteString })
+    var classTokenCounts: [String: Int] = [:]
+    for c in candidates where gameHrefs.contains(c.href) {
+      for tok in c.containerClass.lowercased().split(separator: " ") where tok.count >= 3 {
+        classTokenCounts[String(tok), default: 0] += 1
+      }
+    }
+    let cardClass = classTokenCounts.max(by: { $0.value < $1.value }).map { $0.key } ?? ""
+
+    return SiteStructure(gameURLPattern: pattern, cardClassPattern: cardClass, usesAbbreviations: usesAbbreviations)
+  }
+
+  /// Sport/league path segments that are sections, not site-wide game-routing
+  /// prefixes — excluded from `gameURLPattern` learning.
+  private static let sportSegments: Set<String> = [
+    "mlb", "nba", "nfl", "nhl", "ncaaf", "ncaab", "wnba", "mma", "ufc", "boxing",
+    "box", "soccer", "football", "futbol", "f1", "formula", "formula1", "tennis",
+    "golf", "nascar", "cricket", "wwe", "wrestling", "basketball", "baseball",
+    "hockey", "rugby", "afl", "cfl", "motogp", "darts", "ncaa", "epl",
+  ]
 
   /// Classify one batch. Sends compact entries (short keys, path-only `u`),
   /// omits the schema from the prompt to save tokens, and validates every

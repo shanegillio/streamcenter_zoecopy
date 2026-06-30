@@ -193,18 +193,84 @@ extension LLMScrapeCLI {
     }
     let matchMs = Int(Date().timeIntervalSince(matchStart) * 1000)
 
+    // Learn the site's structure deterministically from the *validated* games
+    // (ground truth), not a second LLM guess. This is what gets cached and
+    // reused to speed up later loads / help the deep-link resolver.
+    let learned = deriveStructure(games: games, candidates: candidates, host: host)
+
     return Result(
       baseURL: baseURL.absoluteString,
       modelAvailable: true,
       modelStatus: "available",
       scrapeReason: scrape.reason,
       rawLinkCount: links.count,
-      profile: nil,
+      profile: learned,
       candidateLinkCount: candidates.count,
       chunks: batches.count,
       games: games,
       scrapeMs: scrapeMs, matchMs: matchMs
     )
+  }
+
+  // Sport/league words: a leading path segment that is one of these is a sport
+  // *section* (e.g. /mlb/), not a site-wide game-routing prefix. We must not
+  // learn it as the gameURLPattern, or the resolver would prefer (say) MLB
+  // sections for every sport.
+  static let sportSegments: Set<String> = [
+    "mlb","nba","nfl","nhl","ncaaf","ncaab","wnba","mma","ufc","boxing","box",
+    "soccer","football","futbol","f1","formula","formula1","tennis","golf",
+    "nascar","cricket","wwe","wrestling","basketball","baseball","hockey",
+    "rugby","afl","cfl","motogp","darts","ncaa","epl"
+  ]
+
+  /// Derive a SiteStructure from validated games — deterministic, no model.
+  ///   gameURLPattern: a site-wide routing prefix shared by ≥70% of game URLs
+  ///                   (e.g. ppv.to "/live/"). Empty when games route by sport
+  ///                   section (buffstreams /mlb/, /nba/…) — there is no single
+  ///                   prefix, and the resolver's league keywords handle those.
+  ///   usesAbbreviations: most game slugs carry a short "abc-def" team code.
+  ///   cardClassPattern: most common containerClass token among links that
+  ///                     became games.
+  static func deriveStructure(games: [Game], candidates: [CLILink], host: String) -> Profile? {
+    guard games.count >= 2 else { return nil }
+    let urls = games.compactMap { URL(string: $0.pageURL) }
+
+    // gameURLPattern: dominant first path segment — but only if it's a short,
+    // non-sport routing prefix (/live/, /watch/), never a sport section.
+    var segCounts: [String: Int] = [:]
+    for u in urls {
+      if let seg = u.pathComponents.first(where: { $0 != "/" && !$0.isEmpty }) {
+        segCounts[seg.lowercased(), default: 0] += 1
+      }
+    }
+    var pattern = ""
+    if let (seg, count) = segCounts.max(by: { $0.value < $1.value }),
+       Double(count) / Double(urls.count) >= 0.7,
+       seg.count <= 8, !sportSegments.contains(seg) {
+      pattern = "/\(seg)/"
+    }
+
+    // usesAbbreviations: a path segment that's a hyphenated pair of ≤3-char
+    // tokens (tor-cgy, wsh-ari).
+    let abbrevRE = try? NSRegularExpression(pattern: "(^|/)[a-z]{2,3}-[a-z]{2,3}(/|$)")
+    let abbrevCount = urls.filter { u in
+      let p = u.path.lowercased()
+      let range = NSRange(p.startIndex..., in: p)
+      return (abbrevRE?.firstMatch(in: p, range: range)) != nil
+    }.count
+    let usesAbbreviations = Double(abbrevCount) / Double(urls.count) >= 0.5
+
+    // cardClassPattern: most common class token among the matched links.
+    let gameHrefs = Set(games.map { $0.pageURL })
+    var classTokenCounts: [String: Int] = [:]
+    for c in candidates where gameHrefs.contains(c.href) {
+      for tok in c.containerClass.lowercased().split(separator: " ") where tok.count >= 3 {
+        classTokenCounts[String(tok), default: 0] += 1
+      }
+    }
+    let cardClass = classTokenCounts.max(by: { $0.value < $1.value }).map { $0.key } ?? ""
+
+    return Profile(gameURLPattern: pattern, cardClassPattern: cardClass, usesAbbreviations: usesAbbreviations)
   }
 
   /// Classify one batch of links. Sends compact entries (short keys, path-only
