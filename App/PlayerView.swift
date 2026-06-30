@@ -60,6 +60,11 @@ struct PlayerView: View {
   /// instance appears; a true re-mount (new identity, e.g. a channel change via
   /// `.id(game.id)`) resets @State and initializes fresh as intended.
   @State private var didInitialize = false
+  /// v2.74: true while AVKit is presenting this player full screen. Going full
+  /// screen covers the underlying view, which fires `onDisappear`; without this
+  /// flag that handler stopped the shared player (clearing its item), leaving a
+  /// black full-screen player with a dead play button.
+  @State private var isPlayerFullScreen = false
 
   struct SourceAttempt: Identifiable {
     let id = UUID()
@@ -192,7 +197,12 @@ struct PlayerView: View {
           }
         }
         if let avPlayer {
-          VideoPlayerView(player: avPlayer, entersFullScreen: !embedded).ignoresSafeArea()
+          VideoPlayerView(
+            player: avPlayer,
+            entersFullScreen: !embedded,
+            onFullScreenChange: { isPlayerFullScreen = $0 }
+          )
+          .ignoresSafeArea()
         }
       } else {
         StreamLoadingOverlay(attemptIndex: 0, totalAttempts: 0, sourceName: "")
@@ -262,7 +272,12 @@ struct PlayerView: View {
       // playing on the TV while the next channel's stream is scraped — the new
       // PlayerView will hot-swap the item in. When *not* casting, stop it so the
       // old channel's audio doesn't bleed into the next channel's loading screen.
-      if !AirPlayController.shared.isExternalActive {
+      //
+      // v2.74: but NOT while we're going full screen. AVKit's full-screen
+      // presentation covers the underlying view, firing this onDisappear; the
+      // player is still very much in use (it's the full-screen player), so
+      // stopping it here clears the shared item and blacks out full screen.
+      if !AirPlayController.shared.isExternalActive, !isPlayerFullScreen {
         PlaybackEngine.shared.stop()
       }
     }
@@ -1287,6 +1302,13 @@ struct VideoPlayerView: UIViewControllerRepresentable {
   let player: AVPlayer
   /// Embedded TV playback stays inline; full-screen pushes go full screen.
   var entersFullScreen: Bool = true
+  /// v2.74: reports when AVKit's own full-screen presentation begins/ends.
+  /// PlayerView uses this so its `onDisappear` (which fires because the
+  /// full-screen modal covers the underlying view) does NOT stop the shared
+  /// player while we're merely going full screen — that teardown is what left a
+  /// dead, black full-screen player with a non-working play button.
+  var onFullScreenChange: (Bool) -> Void = { _ in }
+
   func makeUIViewController(context: Context) -> AVPlayerViewController {
     let vc = AVPlayerViewController()
     vc.player = player
@@ -1294,6 +1316,7 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     vc.videoGravity = .resizeAspect
     vc.entersFullScreenWhenPlaybackBegins = entersFullScreen
     vc.exitsFullScreenWhenPlaybackEnds = entersFullScreen
+    vc.delegate = context.coordinator
     return vc
   }
   func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
@@ -1305,16 +1328,42 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     if vc.player !== player { vc.player = player }
   }
 
+  func makeCoordinator() -> Coordinator { Coordinator(onFullScreenChange: onFullScreenChange) }
+
   // NOTE: We deliberately do NOT force a scene rotation when the player enters
   // full screen. AVPlayerViewController rotates its own full-screen presentation
   // natively (the app supports all orientations), exactly like the in-WebView
   // player's full-screen button — which works perfectly. Forcing the scene to
   // landscape via `requestGeometryUpdate` flipped the host's verticalSizeClass
   // to `.compact`, which transiently tore down / reappeared the embedding
-  // PlayerView. That re-ran PlayerView.task (spawning a brand-new "resolved"
-  // scrape session) and tripped its onDisappear → PlaybackEngine.stop(), killing
-  // the stream the instant you went full screen. Letting AVKit own the rotation
-  // leaves the SwiftUI tree undisturbed.
+  // PlayerView. Letting AVKit own the rotation leaves the SwiftUI tree
+  // undisturbed.
+  //
+  // The delegate exists ONLY to observe the full-screen transition (no
+  // rotation), so PlayerView can avoid stopping the shared player while
+  // full screen.
+  final class Coordinator: NSObject, AVPlayerViewControllerDelegate {
+    let onFullScreenChange: (Bool) -> Void
+    init(onFullScreenChange: @escaping (Bool) -> Void) {
+      self.onFullScreenChange = onFullScreenChange
+    }
+    func playerViewController(
+      _ playerViewController: AVPlayerViewController,
+      willBeginFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator
+    ) {
+      onFullScreenChange(true)
+    }
+    func playerViewController(
+      _ playerViewController: AVPlayerViewController,
+      willEndFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator
+    ) {
+      // Cleared after the transition completes so an onDisappear that fires
+      // during the dismissal animation is still treated as "full screen".
+      coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+        self?.onFullScreenChange(false)
+      }
+    }
+  }
 }
 
 // MARK: - WebKit stream view with m3u8 interception
