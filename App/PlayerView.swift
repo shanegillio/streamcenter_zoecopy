@@ -705,6 +705,23 @@ struct PlayerView: View {
       lastWalkEvent = event
       loadFailure = "Source is rate-limiting (Cloudflare 1015) — wait a bit, then retry"
       abortTerminal()
+    case "playback_dropped":
+      // v2.73 (diagnostics): a <video> that had been playing stopped (pause/
+      // ended/emptied/abort/stalled). Surface it so an on-device "goes black
+      // after a few seconds" repro is explained by the log — without acting on
+      // it (a buffering stall self-recovers; we must not reload/abort a player
+      // that may resume).
+      lastWalkEvent = event
+      if let sid = traversalSessionID {
+        TraversalLog.shared.recordEvent(sid, kind: "playback_dropped", info: event.info)
+      }
+    case "fullscreen":
+      // v2.73 (diagnostics): correlate the "blacks out on fullscreen" symptom
+      // with which element entered fullscreen and in which frame.
+      lastWalkEvent = event
+      if let sid = traversalSessionID {
+        TraversalLog.shared.recordEvent(sid, kind: "fullscreen", info: event.info)
+      }
     case "video_playing":
       // v2.72: the embed's own <video> is actually playing — the WebView IS the
       // working player. This is the primary success signal now (vs extracting a
@@ -3531,14 +3548,57 @@ struct StreamWebView: UIViewRepresentable {
       // buffering pause must not un-halt and resume the clicking.
       var _walkHalted = false;
       function _isWalkHalted() { return _walkHalted || window.__sc_stopWalk === true; }
+      function _vIsPlaying(v) {
+        return !v.paused && !v.ended && v.readyState >= 3 &&
+               v.currentTime > 0.3 && (v.videoWidth || 0) > 0;
+      }
+      // v2.73 (diagnostics): wire each <video> for *event-driven* playback
+      // detection (faster halt than the scan timer) and report when a video
+      // that WAS playing drops out — so an on-device black-out tells us whether
+      // the embed paused/emptied itself vs. something we did. Idempotent per el.
+      function wireVideos() {
+        var vs = document.querySelectorAll('video');
+        for (var i = 0; i < vs.length; i++) {
+          var v = vs[i];
+          if (v.__sc_wired) continue;
+          v.__sc_wired = true;
+          ['playing', 'timeupdate', 'loadeddata'].forEach(function(ev) {
+            v.addEventListener(ev, function(){ try { reportVideoPlayback(); } catch(e){} }, { passive: true });
+          });
+          ['pause', 'ended', 'emptied', 'abort', 'stalled'].forEach(function(ev) {
+            v.addEventListener(ev, function(){
+              if (v.__sc_wasPlaying) {
+                postWalkEvent('playback_dropped', ev + ' rs=' + v.readyState +
+                              ' ct=' + (v.currentTime | 0) + ' host=' + (location.host || ''));
+                if (ev === 'ended' || ev === 'emptied' || ev === 'abort') v.__sc_wasPlaying = false;
+              }
+            }, { passive: true });
+          });
+        }
+      }
+      // v2.73 (diagnostics): report fullscreen transitions so we can correlate
+      // the "blacks out on fullscreen" symptom with what element went FS. Once
+      // per frame.
+      function hookFullscreen() {
+        if (window.__sc_fsHooked) return;
+        window.__sc_fsHooked = true;
+        function onFS() {
+          try {
+            var el = document.fullscreenElement || document.webkitFullscreenElement;
+            postWalkEvent('fullscreen', (el ? ('enter ' + (el.tagName || '').toLowerCase()) : 'exit') +
+                          ' main=' + (window.top === window ? '1' : '0') + ' host=' + (location.host || ''));
+          } catch(e){}
+        }
+        document.addEventListener('fullscreenchange', onFS, { passive: true });
+        document.addEventListener('webkitfullscreenchange', onFS, { passive: true });
+      }
       function reportVideoPlayback() {
         var playing = false;
         try {
           var vs = document.querySelectorAll('video');
           for (var i = 0; i < vs.length; i++) {
             var v = vs[i];
-            if (!v.paused && !v.ended && v.readyState >= 3 &&
-                v.currentTime > 0.3 && (v.videoWidth || 0) > 0) { playing = true; break; }
+            if (_vIsPlaying(v)) { playing = true; v.__sc_wasPlaying = true; break; }
           }
         } catch(e){}
         if (playing) _walkHalted = true;
@@ -3559,6 +3619,8 @@ struct StreamWebView: UIViewRepresentable {
         document.querySelectorAll('video').forEach(function(v) {
           if (v.paused) v.play().catch(function(){});
         });
+        try { wireVideos(); } catch(e){}
+        try { hookFullscreen(); } catch(e){}
         try { reportVideoPlayback(); } catch(e){}
         // v2.72: subframes (the many ad iframes these pages spawn) do ONLY the
         // cheap capture/playback essentials above. Everything below — inline-
