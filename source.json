@@ -25,11 +25,20 @@
       ],
       "versions": [
         {
+          "version": "2.62",
+          "date": "2026-06-29",
+          "size": 2654301,
+          "downloadURL": "https://github.com/shanegillio/streamcenter_zoecopy/releases/download/v2.62/StreamCenter-2.62.ipa",
+          "localizedDescription": "More reliable stream finding and playback on sites that rotate domains and gate their feeds. The in-app browser now plays the stream directly when a site's player needs a real tap (and taps register reliably). Recognizes login/redirect gateways (e.g. connect.php / sso-frame.php / login redirects) so it opens the real game page instead of showing a false \u201cpaywall.\u201d Verifies a stream is actually a live, playable feed before committing \u2014 avoids landing on filler or dead streams. Fixes freezes/unresponsiveness on heavy stream pages.",
+          "buildVersion": "262",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "2.61",
           "date": "2026-06-27",
           "size": 1678961,
           "downloadURL": "https://github.com/shanegillio/streamcenter_zoecopy/releases/download/v2.61/StreamCenter-2.61.ipa",
-          "localizedDescription": "Smarter stream finding across SPA-based sources: the scraper now intercepts JSON API calls the page's own JavaScript makes during load and extracts game entries from those responses directly — so sources like ppv.to (which serve game data via XHR rather than rendered HTML) are matched without navigating to any game page. Fixed a navigation bug where the walk could follow a link off to a completely different streaming site because team names appeared in the destination URL. Added a smarter fallback for login-walled direct game URLs: the walk backs up to the source root and tries to reach the game via the site's own client-side routing before giving up.",
+          "localizedDescription": "Smarter stream finding across SPA-based sources: the scraper now intercepts JSON API calls the page's own JavaScript makes during load and extracts game entries from those responses directly \u2014 so sources like ppv.to (which serve game data via XHR rather than rendered HTML) are matched without navigating to any game page. Fixed a navigation bug where the walk could follow a link off to a completely different streaming site because team names appeared in the destination URL. Added a smarter fallback for login-walled direct game URLs: the walk backs up to the source root and tries to reach the game via the site's own client-side routing before giving up.",
           "buildVersion": "261",
           "minOSVersion": "17.0"
         },
