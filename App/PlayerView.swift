@@ -48,6 +48,9 @@ struct PlayerView: View {
   /// can't fetch it (e.g. session-gated CDN). We lift the loading overlay
   /// so the WebView IS the player.
   @State private var webViewFallbackActivated = false
+  /// v2.72: one-shot timer (per attempt) that reveals a play-button-gated embed
+  /// for the user's real tap if nothing has started playing within the window.
+  @State private var revealTask: Task<Void, Never>? = nil
 
   struct SourceAttempt: Identifiable {
     let id = UUID()
@@ -136,6 +139,9 @@ struct PlayerView: View {
             )
           } else if !attempts.isEmpty, currentAttemptIdx < attempts.count {
             let current = attempts[currentAttemptIdx]
+            // v2.72: the WebView the user can tap (reveal-on-arrival /
+            // video_playing) — or the verification layout in Debug Mode.
+            let interactive = debugScraping || webViewFallbackActivated
             if debugScraping {
               // Debug Mode: verification layout — top URL strip, visible
               // WebView in the middle, captured-streams strip at bottom.
@@ -147,30 +153,29 @@ struct PlayerView: View {
                 }
               }
               .ignoresSafeArea(edges: .bottom)
-            } else if webViewFallbackActivated {
-              // Probe-rejected mode: the embedded player inside the WebView
-              // is playing, but AVPlayer can't access the stream directly
-              // (session-gated CDN). Show the WebView as the player.
-              scrapeWebView(current)
             } else {
-              // Normal mode: keep the WebView alive AND on-screen so scraping
-              // runs, but cover it with an opaque loading screen. v2.67: we
-              // render it at full opacity behind a solid black layer rather
-              // than `.opacity(0)`. A zero-opacity WKWebView is treated by
-              // WebKit as not visible, which throttles timers and blocks media
-              // autoplay/visibility observers — so some sites (crackstreams.ms)
-              // never started their player and never emitted the stream until
-              // Debug Mode showed the WebView. Keeping it laid out and visible
-              // (just occluded) lets the player initialize as it does in Debug.
+              // v2.72: keep the WebView in ONE stable tree position and toggle
+              // interactivity + the cover overlay via state. Previously we
+              // branch-swapped the WebView between an occluded layout (hit-
+              // testing OFF) and a revealed one; SwiftUI carried the non-
+              // interactive state across the swap, so the revealed player
+              // couldn't be tapped. Now `interactive` flips true the moment we
+              // reveal (play-button-gated embed) or detect the embed playing,
+              // and the opaque loading cover is removed in the same pass.
+              // v2.67: the WebView stays laid out at full opacity (not
+              // `.opacity(0)`, which WebKit treats as not-visible and throttles)
+              // even while occluded, so the embed player can initialize.
               ZStack {
                 scrapeWebView(current)
-                  .allowsHitTesting(false)
-                Color.black.ignoresSafeArea()
-                StreamLoadingOverlay(
-                  attemptIndex: currentAttemptIdx,
-                  totalAttempts: attempts.count,
-                  sourceName: sourceName(for: current.sourceID)
-                )
+                  .allowsHitTesting(interactive)
+                if !interactive {
+                  Color.black.ignoresSafeArea()
+                  StreamLoadingOverlay(
+                    attemptIndex: currentAttemptIdx,
+                    totalAttempts: attempts.count,
+                    sourceName: sourceName(for: current.sourceID)
+                  )
+                }
               }
             }
           } else {
@@ -233,6 +238,7 @@ struct PlayerView: View {
     }
     .onDisappear {
       cancelBudgetTimer()
+      revealTask?.cancel(); revealTask = nil
       if let sid = traversalSessionID {
         TraversalLog.shared.endSession(sid)
         traversalSessionID = nil
@@ -324,12 +330,18 @@ struct PlayerView: View {
     StreamWebView(
       url: current.pageURL,
       ruleList: ruleList,
+      sourceID: current.sourceID,
       onStreamURLFound: { streamURL, cookies in
         Task { @MainActor in
+          // v2.71: the captured stream's request context should reflect the
+          // page that actually requested it (the embed we drilled into), not
+          // the initial attempt URL — these CDNs gate the manifest AND segments
+          // on Referer/Origin, so the referer must be the real embed page.
+          let captureReferer = navigationHistory.last ?? current.pageURL
           appendCandidate(
             url: streamURL,
             cookies: cookies,
-            referer: current.pageURL
+            referer: captureReferer
           )
           if let sid = traversalSessionID {
             TraversalLog.shared.recordStream(sid, url: streamURL)
@@ -338,29 +350,33 @@ struct PlayerView: View {
           // We only auto-commit when navigation actually advanced past
           // the source's homepage — protects against committing a stream
           // URL that surfaced from an ad iframe before the user-targeted
-          // nav happened. Stays off for the initial Hop 1 captures; in
-          // Debug Mode the user can still tap the strip pill manually,
-          // and normal mode auto-commits via the playable probe below.
-          if avPlayer == nil {
+          // nav happened. v2.71: also auto-commit at Hop 1 when the attempt
+          // started from a DEEP link — discovery now sends us straight to an
+          // embed/game URL (ppv.to → embedindia.st/embed/...), so the stream
+          // surfaces on that first page and there's no homepage ad-iframe to
+          // guard against. The Hop ≥ 2 rule stays for bare-homepage attempts.
+          if avPlayer == nil, !webViewFallbackActivated {
             let hops = URLNormalization.meaningfulHopCount(
               navigationHistory.map { $0.absoluteString }
             )
-            if hops >= 2 {
+            let p0 = current.pageURL.path
+            let startedDeep = !(p0.isEmpty || p0 == "/")
+            if hops >= 2 || startedDeep {
               autoPlayCapturedStream(
                 url: streamURL,
                 cookies: cookies,
-                referer: current.pageURL
+                referer: captureReferer
               )
             }
           }
         }
       },
-      onStreamProbed: { url, playable, cookies, referer in
+      onStreamProbed: { url, playable, live, cookies, referer in
         Task { @MainActor in
           if let sid = traversalSessionID {
             TraversalLog.shared.recordEvent(
               sid, kind: "stream_probed",
-              info: "\(playable ? "ok" : "fail"): \(url.absoluteString)"
+              info: "\(playable ? (live ? "live" : "ok-not-live") : "fail"): \(url.absoluteString)"
             )
           }
           // Normal mode has no visible strip to tap, so auto-commit the
@@ -369,9 +385,10 @@ struct PlayerView: View {
           // `capturedStreams` — that list is populated later (via commitURL →
           // onStreamURLFound), so the lookup was always empty here and normal
           // mode could get stuck on the loading screen for flat sites
-          // (crackstreams.ms) whose real stream surfaces before Hop 2. The
-          // probe already filters out non-video ad captures.
-          if !debugScraping, playable, avPlayer == nil {
+          // (crackstreams.ms) whose real stream surfaces before Hop 2.
+          // v2.72: gate on `live` too — only auto-commit a verified LIVE stream,
+          // never a filler/VOD/dead-endpoint capture that merely parsed.
+          if !debugScraping, playable, live, avPlayer == nil, !webViewFallbackActivated {
             appendCandidate(url: url, cookies: cookies, referer: referer ?? current.pageURL)
             autoPlayCapturedStream(
               url: url, cookies: cookies, referer: referer ?? current.pageURL
@@ -681,6 +698,28 @@ struct PlayerView: View {
       // re-scanning it; treat exactly like a dead end and move on.
       lastWalkEvent = event
       abortTerminal()
+    case "rate_limited":
+      // v2.71: Cloudflare error 1015 — the source is rate-limiting our IP
+      // (aggravated by rapid re-tests / SSO popups). Surface it honestly and
+      // stop; retrying immediately just deepens the block.
+      lastWalkEvent = event
+      loadFailure = "Source is rate-limiting (Cloudflare 1015) — wait a bit, then retry"
+      abortTerminal()
+    case "video_playing":
+      // v2.72: the embed's own <video> is actually playing — the WebView IS the
+      // working player. This is the primary success signal now (vs extracting a
+      // URL). Reveal the player and stop the budget clock; no reload (it's
+      // playing). AVPlayer stays opportunistic; WKWebView AirPlays natively.
+      handleWebViewPlaybackStarted()
+    case "page_state":
+      lastWalkEvent = event
+      // v2.72: a player iframe means we've arrived at the embed. If it doesn't
+      // auto-start (play-button-gated — the playBtns=1 timeout class), reveal it
+      // so the user's real tap can mint the token, instead of dying at the 30s
+      // budget. Armed once per attempt.
+      if event.info.contains("ifh=") || event.info.contains("playBtns=1") {
+        armRevealOnArrival()
+      }
     case "target":
       lastWalkEvent = event
       autoFollowTarget(event.info)
@@ -754,6 +793,40 @@ struct PlayerView: View {
   private func abortTerminal() {
     guard avPlayer == nil, !webViewFallbackActivated else { return }
     handleDeadEnd()
+  }
+
+  /// v2.72: the embed's own <video> started playing — the WebView is the
+  /// working player. Make it the visible player and record success; no AVPlayer
+  /// required (WKWebView <video> AirPlays natively). No reload — it's playing.
+  private func handleWebViewPlaybackStarted() {
+    guard avPlayer == nil else { return }  // AVPlayer already owns playback
+    cancelBudgetTimer()
+    revealTask?.cancel(); revealTask = nil
+    if !webViewFallbackActivated { webViewFallbackActivated = true }
+    webBridge.coordinator?.engagePlayerMode(reload: false)
+    noNavStrikes = 0
+    if currentAttemptIdx < attempts.count {
+      recordSuccess(attempt: attempts[currentAttemptIdx])
+    }
+    if let sid = traversalSessionID {
+      TraversalLog.shared.markOutcome(sid, .worked)
+    }
+  }
+
+  /// v2.72: once we've arrived at a player embed, arm a one-shot timer that
+  /// reveals it for the user's REAL tap if nothing auto-starts within the
+  /// window. This converts the play-button-gated `budget_timeout` cases (the
+  /// embed mints the stream URL only on a trusted gesture) into a tappable
+  /// player. Engages player mode WITHOUT reload so the tap's manifest loads.
+  private func armRevealOnArrival() {
+    guard revealTask == nil, avPlayer == nil, !webViewFallbackActivated else { return }
+    revealTask = Task { @MainActor in
+      try? await Task.sleep(nanoseconds: 11_000_000_000)
+      guard !Task.isCancelled, avPlayer == nil, !webViewFallbackActivated else { return }
+      webBridge.coordinator?.engagePlayerMode(reload: false)
+      webViewFallbackActivated = true
+      cancelBudgetTimer()
+    }
   }
 
   /// The current source can identify the game but can't open it. Mark it
@@ -906,6 +979,10 @@ struct PlayerView: View {
       PlaybackEngine.shared.stop()
       avPlayer = nil
       webViewFallbackActivated = true
+      // v2.71: hand the stream to the embed's own player — stop cancelling its
+      // manifest/segment loads and reload so it can fetch the gated stream the
+      // browser (unlike AVPlayer) supplies the right Referer/Origin for.
+      webBridge.coordinator?.engagePlayerMode()
     }
   }
 
@@ -1009,6 +1086,7 @@ struct PlayerView: View {
     authWallRootRetried = false
     noNavStrikes = 0
     webViewFallbackActivated = false
+    revealTask?.cancel(); revealTask = nil  // v2.72: re-arm reveal for the new source
     currentAttemptIdx += 1
     Task { await startCurrentAttempt() }
   }
@@ -1213,6 +1291,9 @@ struct VideoPlayerView: UIViewControllerRepresentable {
 /// extend its lifetime.
 final class StreamWebViewBridge: ObservableObject {
   weak var webView: WKWebView?
+  /// v2.71: lets PlayerView's AVPlayer watchdog tell the coordinator to hand
+  /// playback to the in-WebView player when a committed stream fails/stalls.
+  weak var coordinator: StreamWebView.Coordinator?
 
   /// Find a clickable element on the page whose readable text contains
   /// `pair` and navigate to it. Used both when the user taps an alternative
@@ -1492,6 +1573,9 @@ final class StreamWebViewBridge: ObservableObject {
 struct StreamWebView: UIViewRepresentable {
   let url: URL
   let ruleList: WKContentRuleList?
+  /// v2.71: the source this attempt belongs to, so the coordinator can apply
+  /// (and the app can learn) this source's real-stream host "style".
+  var sourceID: String = ""
   var onStreamURLFound: ((URL, [HTTPCookie]) -> Void)? = nil
   /// v2.48: fires for every captured stream URL after AVPlayer's
   /// isPlayable probe finishes, regardless of outcome. PlayerView
@@ -1500,7 +1584,7 @@ struct StreamWebView: UIViewRepresentable {
   /// v2.67: carries the cookies + referer used for the probe so normal mode
   /// can auto-commit a playable stream directly, without waiting for the
   /// candidate to land in `capturedStreams`.
-  var onStreamProbed: ((URL, Bool, [HTTPCookie], URL?) -> Void)? = nil
+  var onStreamProbed: ((URL, Bool, Bool, [HTTPCookie], URL?) -> Void)? = nil
   /// Fired when the probe explicitly rejects the first-seen stream URL
   /// (probe returns false). PlayerView uses this to switch to WebView-
   /// player mode instead of waiting for the 6 s fallback to commit a
@@ -1580,6 +1664,11 @@ struct StreamWebView: UIViewRepresentable {
     let config = WKWebViewConfiguration()
     config.allowsInlineMediaPlayback = true
     config.mediaTypesRequiringUserActionForPlayback = []
+    // v2.71: embed players (buffstreams) use the JS Fullscreen API
+    // (element.requestFullscreen()), which WKWebView gates behind this
+    // preference — it defaults to false, so the full-screen button blacked
+    // out. Enabling it lets WebKit present the player full screen.
+    config.preferences.isElementFullscreenEnabled = true
     if let ruleList { config.userContentController.add(ruleList) }
 
     let proxy = WeakScriptProxy(delegate: context.coordinator)
@@ -1613,6 +1702,14 @@ struct StreamWebView: UIViewRepresentable {
       source: Self.autoPlayAndInterceptJS,
       injectionTime: .atDocumentStart, forMainFrameOnly: false
     ))
+    // v2.71: embed players live in nested iframes; when one lacks
+    // `allowfullscreen`/`allow="fullscreen"`, tapping the video's full-screen
+    // button blacks out in WKWebView (buffstreams symptom). Grant fullscreen to
+    // every iframe and re-apply as the DOM mutates. Runs in sub-frames too.
+    config.userContentController.addUserScript(WKUserScript(
+      source: Self.iframeFullscreenJS,
+      injectionTime: .atDocumentEnd, forMainFrameOnly: false
+    ))
 
     if let host = url.host,
        let creds = CredentialStore.credentials(for: host) {
@@ -1631,9 +1728,19 @@ struct StreamWebView: UIViewRepresentable {
     context.coordinator.webView = webView
     context.coordinator.sourceHost = url.host
     context.coordinator.targetTokens = Self.slugTokens(for: targetGame)
+    // v2.71: snapshot this source's learned real-stream host "style" so the
+    // coordinator can reject hosts confirmed wrong and prefer hosts that played.
+    context.coordinator.sourceID = sourceID
+    context.coordinator.knownGoodDomains = StreamHostMemory.shared.goodDomains(for: sourceID)
+    let mt = Self.matchTokens(for: targetGame)
+    context.coordinator.targetLongTokens = mt.long
+    context.coordinator.targetAbbrTokens = mt.abbr
     // v2.40: expose the WebView to the bridge so PlayerView can
     // dispatch evaluateJavaScript commands (detected-card taps).
     bridge?.webView = webView
+    // v2.71: expose the coordinator so the AVPlayer watchdog can engage
+    // WebView-player mode for gated streams AVPlayer can't play.
+    bridge?.coordinator = context.coordinator
 
     var request = URLRequest(url: url)
     request.setValue(
@@ -1696,6 +1803,28 @@ struct StreamWebView: UIViewRepresentable {
   /// the right league-named category link when the user-target game
   /// isn't on the homepage. nil game → __sc_target=null → shim falls
   /// back to generic clicking.
+  /// v2.71: grant fullscreen to every iframe so a nested embed player's
+  /// full-screen button works instead of blacking out (buffstreams).
+  static let iframeFullscreenJS = """
+    (function(){
+      function grant(){
+        try {
+          var f = document.querySelectorAll('iframe');
+          for (var i = 0; i < f.length; i++) {
+            try {
+              f[i].setAttribute('allowfullscreen', '');
+              f[i].setAttribute('webkitallowfullscreen', '');
+              var a = f[i].getAttribute('allow') || '';
+              if (a.indexOf('fullscreen') === -1) f[i].setAttribute('allow', a ? (a + '; fullscreen') : 'fullscreen');
+            } catch(e){}
+          }
+        } catch(e){}
+      }
+      grant();
+      try { new MutationObserver(grant).observe(document.documentElement || document, { childList: true, subtree: true }); } catch(e){}
+    })();
+    """
+
   static func teamSlug(_ s: String) -> String {
     let folded = s.folding(options: [.diacriticInsensitive, .caseInsensitive],
                            locale: .current)
@@ -1723,6 +1852,27 @@ struct StreamWebView: UIViewRepresentable {
       for t in TeamAliasIndex.shared.tokens(forTeam: team).long { toks.insert(t) }
     }
     return Array(toks)
+  }
+
+  /// v2.71: tokens used to judge whether a captured stream URL has anything in
+  /// common with the game the user tapped. `long` (≥4 char team words +
+  /// nicknames) match as substrings; `abbr` (2–3 char codes like "ger"/"par")
+  /// match only as bounded slug segments so they can't false-positive inside an
+  /// unrelated URL. A stream URL carrying one of these is almost certainly the
+  /// right game's; one carrying NONE (ppv.to's `netanyahu…/index.m3u8`) is
+  /// suspect and shouldn't be committed eagerly over a token-bearing capture.
+  static func matchTokens(for game: Game?) -> (long: [String], abbr: [String]) {
+    guard let g = game else { return ([], []) }
+    var long = Set<String>(), abbr = Set<String>()
+    for name in [teamSlug(g.homeTeam), teamSlug(g.awayTeam)] {
+      for w in name.split(separator: "-") where w.count >= 4 { long.insert(String(w).lowercased()) }
+    }
+    for team in [g.homeTeam, g.awayTeam] {
+      let t = TeamAliasIndex.shared.tokens(forTeam: team)
+      for x in t.long { long.insert(x.lowercased()) }
+      for x in t.abbr where x.count >= 2 { abbr.insert(x.lowercased()) }
+    }
+    return (Array(long), Array(abbr))
   }
 
   /// Renders a `[String]` as a JS array literal with single-quoted, escaped
@@ -2226,8 +2376,12 @@ struct StreamWebView: UIViewRepresentable {
         if (slugAnchor) {
           var _sHref = '';
           try { _sHref = slugAnchor.getAttribute('href') || ''; } catch(e){}
-          var _sAbs = _sHref;
-          try { _sAbs = new URL(_sHref, location.href).href; } catch(e){}
+          // v2.71: navigate to the EFFECTIVE href — a …/auth/login?to=/live/…
+          // wrapper becomes its inner game URL, so the slug jump lands on the
+          // game page instead of the login wall.
+          var _sEff = _effectiveHref(_sHref);
+          var _sAbs = _sEff;
+          try { _sAbs = new URL(_sEff, location.href).href; } catch(e){}
           if (_sAbs && _sAbs.split('#')[0] !== location.href.split('#')[0] &&
               _slugNavedURLs.indexOf(_sAbs) === -1 && _navHrefOK(_sHref)) {
             _slugNavedURLs.push(_sAbs);
@@ -2277,11 +2431,20 @@ struct StreamWebView: UIViewRepresentable {
         // main-frame page renders games fine.
         if (window.top !== window) return;
         if (_authWallReported) return;
-        var url = location.href.toLowerCase();
+        // v2.71: don't judge a page mid-render — an SPA whose game cards
+        // haven't painted yet looks empty/auth-ish. Wait for load to settle
+        // (mirrors detectDeadPage) so a browsable SPA is never killed early.
+        if (document.readyState !== 'complete') return;
+        // v2.71: a /auth/login?to=/live/… wrapper is transitional, not a wall —
+        // the walk unwraps it and navigates to the inner game URL, so don't
+        // flag it terminal.
+        if (_isAuthURL(location.href) && _unwrapAuthRedirect(location.href)) return;
         var title = (document.title || '').toLowerCase();
-        var hostHints = ['/sso', '/signin', '/sign-in', '/login', '/log-in', '/auth', 'auth.', 'login.', 'sso-frame'];
         var titleHints = ['sign in', 'log in', 'login', 'authentication required', 'access denied'];
-        var hostMatch = hostHints.some(function(h){ return url.indexOf(h) !== -1; });
+        // v2.71: host/path-based auth detection (pathname only, via _isAuthURL)
+        // so a benign ?redirect=/login or ?to=/live in the QUERY can't trip it —
+        // that loose substring match was flagging browsable pages as login walls.
+        var hostMatch = _isAuthURL(location.href);
         var titleMatch = titleHints.some(function(h){ return title.indexOf(h) !== -1; });
         // Also: very tiny DOM with no game-shaped content is suspicious.
         var domSize = 0;
@@ -2316,6 +2479,18 @@ struct StreamWebView: UIViewRepresentable {
         try { body = (document.body && (document.body.innerText || document.body.textContent) || ''); } catch(e){}
         body = body.toLowerCase().replace(/[‘’]/g, "'");
         if (!body) return;
+        // v2.71: Cloudflare rate-limit (error 1015 "you are being rate
+        // limited") — we hammered the host (rapid re-tests / SSO popups).
+        // Report it distinctly so it reads as "back off & retry," not a dead
+        // page or a missing stream.
+        var rlPhrases = ["you are being rate limited", "error 1015"];
+        for (var r = 0; r < rlPhrases.length; r++) {
+          if (body.indexOf(rlPhrases[r]) !== -1) {
+            _deadPageReported = true;
+            postWalkEvent('rate_limited', rlPhrases[r]);
+            return;
+          }
+        }
         var phrases = [
           "page you're looking for doesn't exist",
           "page you are looking for doesn't exist",
@@ -2415,6 +2590,96 @@ struct StreamWebView: UIViewRepresentable {
             low.indexOf('tel:') === 0 || low.indexOf('#') === 0) return false;
         return true;
       }
+      // v2.71: auth/login URL detection + redirect-target unwrapping. Mirrors
+      // Swift's URLClassifier. A login wrapper like
+      // ppv.to/auth/login?to=/live/mlb/2026-06-27/sea-cle (or StreamEast's
+      // auth.streamea.st/sso-frame.php?redirect=%2Fmlb%2F<slug>) carries the
+      // game slug INSIDE a redirect param; without unwrapping, the team-token
+      // matchers saw both teams in the href and navigated into the auth wall.
+      var _AUTH_HOST_PREFIXES = ['auth.','login.','signin.','sso.','accounts.','id.'];
+      var _AUTH_PATH_FRAGS = ['/sso','/signin','/sign-in','/login','/log-in','/auth','/oauth'];
+      var _REDIRECT_PARAMS = ['to','redirect','redirect_uri','redirect_url','return','return_to','returnurl','next','url','continue','dest','destination','r'];
+      function _isAuthURL(urlStr) {
+        if (!urlStr) return false;
+        var u;
+        try { u = new URL(urlStr, location.href); }
+        catch(e){
+          var low = ('' + urlStr).toLowerCase();
+          for (var i = 0; i < _AUTH_PATH_FRAGS.length; i++) if (low.indexOf(_AUTH_PATH_FRAGS[i]) !== -1) return true;
+          return false;
+        }
+        var host = u.host.toLowerCase(), path = u.pathname.toLowerCase();
+        for (var j = 0; j < _AUTH_HOST_PREFIXES.length; j++) if (host.indexOf(_AUTH_HOST_PREFIXES[j]) === 0) return true;
+        for (var k = 0; k < _AUTH_PATH_FRAGS.length; k++) if (path.indexOf(_AUTH_PATH_FRAGS[k]) !== -1) return true;
+        return false;
+      }
+      // If urlStr is an auth URL with a redirect param pointing at a non-auth
+      // target, return that decoded inner URL (absolute). Else ''.
+      function _unwrapAuthRedirect(urlStr) {
+        var u;
+        try { u = new URL(urlStr, location.href); } catch(e){ return ''; }
+        if (!_isAuthURL(u.href)) return '';
+        for (var i = 0; i < _REDIRECT_PARAMS.length; i++) {
+          var v = null;
+          try { v = u.searchParams.get(_REDIRECT_PARAMS[i]); } catch(e){}
+          if (!v) continue;
+          var inner;
+          try { inner = new URL(v, location.href).href; } catch(e){ continue; }
+          if (inner && !_isAuthURL(inner)) return inner;
+        }
+        return '';
+      }
+      // v2.72: a redirect-gateway wrapper carries the real game URL in a
+      // redirect param — StreamEast's connect.php?redirect=%2Fmlb%2F<game>,
+      // sso-frame.php?redirect=…, login?to=… . The GATEWAY is never the
+      // destination (navigating into it hits Cloudflare 1015 / "Access denied"
+      // and looks like a paywall); the inner value is. Return that inner ONLY
+      // when it carries BOTH team tokens — so this is host/path-agnostic (any
+      // gateway filename) yet can't unwrap a legit deep link that merely has an
+      // unrelated url=/r= param. Token-aware, unlike _unwrapAuthRedirect.
+      function _redirectInner(urlStr) {
+        var u;
+        try { u = new URL(urlStr, location.href); } catch(e){ return ''; }
+        for (var i = 0; i < _REDIRECT_PARAMS.length; i++) {
+          var v = null;
+          try { v = u.searchParams.get(_REDIRECT_PARAMS[i]); } catch(e){}
+          if (!v) continue;
+          var inner;
+          try { inner = new URL(v, location.href).href; } catch(e){ continue; }
+          if (inner && !_isAuthURL(inner) && _sideHit(inner, 'home') && _sideHit(inner, 'away')) return inner;
+        }
+        return '';
+      }
+      // The URL we'd actually navigate to for this href: a redirect-gateway or
+      // auth wrapper is unwrapped to its inner game URL; everything else
+      // returned unchanged.
+      function _effectiveHref(href) {
+        var inner = '';
+        try { inner = _redirectInner(href); } catch(e){}
+        if (inner) return inner;
+        try { inner = _unwrapAuthRedirect(href); } catch(e){}
+        return inner || href;
+      }
+      // The string to run team-token tests against. A redirect-gateway wrapper
+      // resolves to its inner game URL (slug in the PATH). For an auth URL: the
+      // inner redirect target or '' for a bare auth URL — so tokens hidden in a
+      // login URL's query never count. For a normal URL: the full href unchanged
+      // (preserves sites that legitimately carry the slug in a query, e.g.
+      // sources.bintvs.fun/?match=chicago-cubs-vs-...).
+      function _hrefForTokenTest(href) {
+        try {
+          var gw = _redirectInner(href);
+          if (gw) return gw.toLowerCase();
+          var u = new URL(href, location.href);
+          if (_isAuthURL(u.href)) {
+            var inner = _unwrapAuthRedirect(u.href);
+            return inner ? inner.toLowerCase() : '';
+          }
+          return u.href.toLowerCase();
+        } catch(e) {
+          return _isAuthURL(href) ? '' : ('' + href).toLowerCase();
+        }
+      }
       // v2.63: team tokens from the tapped game, used to validate
       // cross-origin links so we follow real deep links but not ads.
       function _hrefTokens() {
@@ -2447,13 +2712,18 @@ struct StreamWebView: UIViewRepresentable {
       function _navHrefOK(href) {
         if (!href) return false;
         var u; try { u = new URL(href, location.href); } catch(e){ return true; }
+        // v2.71: an auth/login URL is never a valid nav target on its own. If it
+        // wraps a redirect to a real game path we'll have unwrapped it at the
+        // navigation site; a bare auth URL is rejected here so a same-site
+        // /auth/login can't slip through the _sameBrand gate below.
+        if (_isAuthURL(u.href) && !_unwrapAuthRedirect(u.href)) return false;
         if (_sameBrand(u.host, location.host)) return true;
-        var low = u.href.toLowerCase(), toks = _hrefTokens();
-        for (var i = 0; i < toks.length; i++){ if (low.indexOf(toks[i]) !== -1) return true; }
+        var low = _hrefForTokenTest(href), toks = _hrefTokens();
+        for (var i = 0; i < toks.length; i++){ if (low && low.indexOf(toks[i]) !== -1) return true; }
         // v2.65: also accept cross-origin deep links routed by team
         // abbreviation (e.g. embedindia.st/embed/mlb/.../wsh-ari) — require
         // BOTH sides so a lone 2-char abbr in an ad URL can't sneak through.
-        if (_hasAnyToks('home') && _hasAnyToks('away') &&
+        if (low && _hasAnyToks('home') && _hasAnyToks('away') &&
             _sideHit(low, 'home') && _sideHit(low, 'away')) return true;
         return false;
       }
@@ -2463,8 +2733,8 @@ struct StreamWebView: UIViewRepresentable {
       function _hrefHasTeamToken(h) {
         if (!h) return false;
         if (!_hasAnyToks('home') || !_hasAnyToks('away')) return false;
-        var low = ('' + h).toLowerCase();
-        return _sideHit(low, 'home') && _sideHit(low, 'away');
+        var low = _hrefForTokenTest(h);  // v2.71: auth wrappers → inner game URL / ''
+        return !!low && _sideHit(low, 'home') && _sideHit(low, 'away');
       }
       // v2.68: best usable href in a subtree — prefer a team-token deep link
       // over the first generic same-site anchor.
@@ -2562,8 +2832,8 @@ struct StreamWebView: UIViewRepresentable {
       function clickOrNavigate(node, kind, label) {
         var href = _findNavHref(node);
         if (href && (kind === 'category_click' || _hrefHasTeamToken(href))) {
-          var abs = href;
-          try { abs = new URL(href, location.href).href; } catch(e){}
+          var abs = _effectiveHref(href);  // v2.71: unwrap auth wrappers to the game URL
+          try { abs = new URL(abs, location.href).href; } catch(e){}
           if (abs && abs.split('#')[0] !== location.href.split('#')[0]) {
             postWalkEvent(kind, 'nav→ ' + abs);
             try { location.href = abs; return 'nav'; } catch(e){}
@@ -2829,7 +3099,11 @@ struct StreamWebView: UIViewRepresentable {
           var _abs = href;
           try { _abs = new URL(href, location.href).href; } catch(e){}
           if (_abs.split('#')[0] === _curNoHash) continue;
-          var low = href.toLowerCase();
+          // v2.71: test tokens against the EFFECTIVE href — an auth wrapper
+          // resolves to its inner game URL (slug in the path), and a bare auth
+          // URL yields '' so a login link's redirect param can't score as a hit.
+          var low = _hrefForTokenTest(href);
+          if (!low) continue;
           // v2.65: match home + away via long tokens (substring) or
           // abbreviations (bounded). Score prefers abbreviation hits since a
           // URL carrying both team abbreviations is an unambiguous deep link.
@@ -2872,15 +3146,20 @@ struct StreamWebView: UIViewRepresentable {
         var curr = location.href.split('#')[0].toLowerCase();
         for (var k = 0; k < matches.length; k++) {
           var cand = matches[k];
-          if (!(_sideHit(cand, 'home') && _sideHit(cand, 'away'))) continue;
+          // v2.71: unwrap a login wrapper (…/auth/login?to=/live/…/sea-cle) to
+          // its inner game URL, and never return a bare auth URL — team tokens
+          // in a redirect param must not pass as the game deep link.
+          var eff = _effectiveHref(cand);
+          if (_isAuthURL(eff)) continue;
+          if (!(_sideHit(eff, 'home') && _sideHit(eff, 'away'))) continue;
           // v2.68: skip a self-referential match. The current page URL itself
           // carries both team slugs (sources.bintvs.fun/?match=chicago-cubs-
           // vs-san-francisco-giants); returning it would just no-op the nav
           // (same URL) and stall — keep scanning for the NEXT hop (the embed).
-          var abs = cand;
-          try { abs = new URL(cand, location.href).href.split('#')[0].toLowerCase(); } catch(e){}
+          var abs = eff;
+          try { abs = new URL(eff, location.href).href.split('#')[0].toLowerCase(); } catch(e){}
           if (abs === curr) continue;
-          return cand;
+          return eff;
         }
         return '';
       }
@@ -3224,19 +3503,54 @@ struct StreamWebView: UIViewRepresentable {
         postWalkEvent('scan', info);
       }
 
+      // v2.72: the truest success signal — the embed's OWN <video> is actually
+      // playing. Runs in every frame (incl. the cross-origin embed), so when the
+      // real player starts (auto, or after a real tap), its frame reports it.
+      // This is what lets us treat the WebView as the player instead of needing
+      // to extract a URL — immune to signed/expiring/gated tokens because the
+      // real browser already did the work. Re-arms if it pauses.
+      var _videoPlayingReported = false;
+      function reportVideoPlayback() {
+        var playing = false;
+        try {
+          var vs = document.querySelectorAll('video');
+          for (var i = 0; i < vs.length; i++) {
+            var v = vs[i];
+            if (!v.paused && !v.ended && v.readyState >= 3 &&
+                v.currentTime > 0.3 && (v.videoWidth || 0) > 0) { playing = true; break; }
+          }
+        } catch(e){}
+        if (playing && !_videoPlayingReported) {
+          _videoPlayingReported = true;
+          postWalkEvent('video_playing', location.host || '');
+        } else if (!playing) {
+          _videoPlayingReported = false;
+        }
+      }
+
       function scan() {
         document.querySelectorAll('video, source').forEach(function(el) {
           [el.src, el.currentSrc, el.getAttribute('src'), el.dataset && el.dataset.src].forEach(function(s) {
             if (s) report(s);
           });
         });
+        document.querySelectorAll('video').forEach(function(v) {
+          if (v.paused) v.play().catch(function(){});
+        });
+        try { reportVideoPlayback(); } catch(e){}
+        // v2.72: subframes (the many ad iframes these pages spawn) do ONLY the
+        // cheap capture/playback essentials above. Everything below — inline-
+        // script regex scans, cross-origin iframe harvest, full-DOM card
+        // matching, play-button sweeps, and a getComputedStyle-over-every-
+        // element overlay hide — is heavy and main-frame-only. Running it per
+        // ad iframe was accumulating into the whole-app main-thread freeze.
+        // (Network intercepts + video/playback detection above still run in
+        // every frame, so the embed subframe is still captured and observed.)
+        if (window.top !== window) return;
         scanScripts();
         // v2.37: harvest cross-origin iframes for drill-down.
         try { harvestIframes(); } catch(e){}
         try { probePageState(); } catch(e){}
-        document.querySelectorAll('video').forEach(function(v) {
-          if (v.paused) v.play().catch(function(){});
-        });
 
         // v2.54: harvest first — it both surfaces page content for the
         // verification strip AND clicks the target card the instant it's
@@ -3284,24 +3598,48 @@ struct StreamWebView: UIViewRepresentable {
         });
         candidates.forEach(function(el, i) {
           setTimeout(function() {
-            if (!el._sc_clicked) { el._sc_clicked = 1; try { el.click(); } catch(e){} }
+            // v2.72: full pointer-event sequence, not a bare .click() — lazy
+            // players that mint the stream URL only on a real press respond to
+            // the gesture-shaped sequence more often (still synthetic, so a
+            // strict isTrusted check needs the user's real tap, which the
+            // reveal-on-arrival path provides).
+            if (!el._sc_clicked) { el._sc_clicked = 1; try { robustClick(el); } catch(e){} }
           }, i * 2500);
         });
 
         try {
-          document.querySelectorAll('*').forEach(function(el) {
-            var s = window.getComputedStyle(el);
-            var z = parseInt(s.zIndex) || 0;
-            if ((s.position === 'fixed' || s.position === 'absolute') && z > 999 &&
-                el.tagName !== 'VIDEO' && el.tagName !== 'BUTTON') {
-              el.style.display = 'none';
+          // v2.72: narrowed from querySelectorAll('*'). getComputedStyle on
+          // every element forces a synchronous style/layout flush per node — the
+          // single biggest freeze contributor when run each scan. Limit to block
+          // containers (where pop-over ad overlays live) and cap the count.
+          var _ov = document.querySelectorAll('div,ins,aside,section');
+          var _ovCap = Math.min(_ov.length, 400);
+          for (var _i = 0; _i < _ovCap; _i++) {
+            var _el = _ov[_i];
+            var _s = window.getComputedStyle(_el);
+            var _z = parseInt(_s.zIndex) || 0;
+            if ((_s.position === 'fixed' || _s.position === 'absolute') && _z > 999) {
+              _el.style.display = 'none';
             }
-          });
+          }
         } catch(e){}
       }
 
+      // v2.72: coalesce mutation storms. Live players and ad animations fire
+      // DOM mutations many times/sec, in every frame; running the heavy scan()
+      // synchronously per mutation flooded the main thread (via streamWalk
+      // messages → @State churn + TraversalLog appends) and hung the WHOLE app
+      // UI intermittently. Debounce to ≤1 scan / 600 ms, and drop attribute
+      // observation — childList+subtree still catches new streams/iframes/cards;
+      // attribute ticks (progress bars, timers) only cause churn.
+      var _scanScheduled = false;
+      function scheduleScan() {
+        if (_scanScheduled) return;
+        _scanScheduled = true;
+        setTimeout(function() { _scanScheduled = false; try { scan(); } catch(e){} }, 600);
+      }
       new MutationObserver(function(mutations) {
-        scan();
+        scheduleScan();
         mutations.forEach(function(mut) {
           mut.addedNodes.forEach(function(node) {
             if (node.tagName === 'IFRAME') {
@@ -3319,7 +3657,7 @@ struct StreamWebView: UIViewRepresentable {
             }
           });
         });
-      }).observe(document.documentElement || document, {childList: true, subtree: true, attributes: true});
+      }).observe(document.documentElement || document, {childList: true, subtree: true});
 
       // v2.53: late scans cover SPA hydration that lands after the
       // existing 18 s schedule and doesn't trigger a MutationObserver
@@ -3368,7 +3706,7 @@ struct StreamWebView: UIViewRepresentable {
     let onStreamURLFound: ((URL, [HTTPCookie]) -> Void)?
     /// v2.48: fires after each probePlayability finishes so PlayerView
     /// can log the result to the TraversalLog.
-    let onStreamProbed: ((URL, Bool, [HTTPCookie], URL?) -> Void)?
+    let onStreamProbed: ((URL, Bool, Bool, [HTTPCookie], URL?) -> Void)?
     let onProbeRejected: (() -> Void)?
     /// v2.38: invoked from `webView(_:didCommit:)` so PlayerView can
     /// render the navigation breadcrumb.
@@ -3388,10 +3726,29 @@ struct StreamWebView: UIViewRepresentable {
     private var found = false
     private var seenURLs = Set<String>()
     private var firstObservedURL: URL?
+    /// v2.72: URLs that passed live-stream verification — the only ones we'll
+    /// ever commit, including via the 6 s fallback path.
+    private var verifiedLiveURLs = Set<String>()
     // When the probe explicitly rejects the first-observed URL (returns
     // false), block the 6 s fallback commit — the stream isn't playable
     // in AVPlayer, and the WebView is already showing it.
     private var probeRejectedFirstURL = false
+    /// v2.71: once AVPlayer has proven it can't play a captured stream (the
+    /// probe rejected it, or PlayerView's watchdog saw it fail/stall), the
+    /// embed's own in-WebView player takes over. We then stop cancelling the
+    /// embed's manifest/segment loads (so its player can fetch the gated
+    /// stream the browser handles the headers for) and reload once so a player
+    /// whose manifest we already cancelled gets a clean start.
+    var playerModeEngaged = false
+    func engagePlayerMode(reload: Bool = true) {
+      if playerModeEngaged { return }
+      playerModeEngaged = true
+      // v2.72: reload only when we're recovering from an AVPlayer failure (the
+      // embed's manifest may have been cancelled). When the page is already
+      // showing/playing (reveal-on-arrival, video_playing), DON'T reload —
+      // that would restart a working player.
+      if reload { DispatchQueue.main.async { [weak self] in self?.webView?.reload() } }
+    }
     weak var webView: WKWebView?
     // v2.37: cross-origin iframe drill-down state. When the JS-shim
     // reports an iframe URL via the streamIframe channel, we navigate
@@ -3417,7 +3774,70 @@ struct StreamWebView: UIViewRepresentable {
     // cancel everything else at the top frame.
     var sourceHost: String?
     var targetTokens: [String] = []
+    /// v2.71: this source's learned real-stream host "style" (registrable
+    /// domains). Snapshot from StreamHostMemory at WebView creation.
+    var sourceID: String = ""
+    var knownGoodDomains: Set<String> = []
+    /// v2.71: target-game tokens for judging stream-URL relatedness (see
+    /// StreamWebView.matchTokens). A captured manifest carrying one of these is
+    /// trusted as the right game's; one carrying none is held back.
+    var targetLongTokens: [String] = []
+    var targetAbbrTokens: [String] = []
+    /// Does this stream URL carry any token of the game the user tapped?
+    func streamCarriesToken(_ url: URL) -> Bool {
+      let s = url.absoluteString.lowercased()
+      for t in targetLongTokens where !t.isEmpty && s.contains(t) { return true }
+      for a in targetAbbrTokens where boundedHit(s, a) { return true }
+      return false
+    }
+    private func boundedHit(_ hay: String, _ needle: String) -> Bool {
+      guard needle.count >= 2 else { return false }
+      func isWord(_ c: Character) -> Bool { c.isLetter || c.isNumber }
+      var from = hay.startIndex
+      while let r = hay.range(of: needle, range: from..<hay.endIndex) {
+        let beforeOK = r.lowerBound == hay.startIndex || !isWord(hay[hay.index(before: r.lowerBound)])
+        let afterOK = r.upperBound == hay.endIndex || !isWord(hay[r.upperBound])
+        if beforeOK && afterOK { return true }
+        from = r.upperBound
+      }
+      return false
+    }
+    /// A playable manifest from an UNKNOWN host, held back briefly in case a
+    /// known-good capture lands first (only when the source HAS known-good
+    /// hosts). Committed by `deferTask` if nothing better arrives.
+    private var deferredCandidate: URL?
+    private var deferTask: Task<Void, Never>?
+    private func registrableDomain(_ host: String?) -> String? {
+      guard let host = host?.lowercased(), !host.isEmpty else { return nil }
+      let parts = host.split(separator: ".")
+      guard parts.count >= 2 else { return host }
+      return parts.suffix(2).joined(separator: ".")
+    }
+    private func isKnownGoodHost(_ host: String?) -> Bool {
+      guard let d = registrableDomain(host) else { return false }
+      return knownGoodDomains.contains(d)
+    }
+    private func deferUnknownCandidate(_ url: URL) {
+      if deferredCandidate == nil { deferredCandidate = url }
+      guard deferTask == nil else { return }
+      deferTask = Task { [weak self] in
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        await MainActor.run {
+          guard let self, !self.found, let u = self.deferredCandidate else { return }
+          self.commitURL(u)
+        }
+      }
+    }
     private var intendedLoadURLs = Set<String>()
+    /// v2.71: short-lived auxiliary WebViews hosting an SSO popup (e.g.
+    /// StreamEast's auth.streamea.st first-party cookie handshake). Retained so
+    /// WebKit keeps loading them; auto-retired after the handshake window.
+    private var ssoPopups: [WKWebView] = []
+    /// v2.71: auth hosts we've already spawned an SSO popup for this attempt.
+    /// A page that calls window.open(auth…) on a loop would otherwise spawn a
+    /// popup per call and hammer the auth host into Cloudflare rate-limiting
+    /// (error 1015). One handshake per host is all we ever need.
+    private var ssoPopupHosts = Set<String>()
 
     func noteIntendedLoad(_ url: URL) { intendedLoadURLs.insert(url.absoluteString) }
 
@@ -3463,8 +3883,26 @@ struct StreamWebView: UIViewRepresentable {
       return false
     }
 
+    /// v2.71: is this blocked popup actually the site's own SSO cookie
+    /// bootstrap (not an ad)? True when it's an auth URL that bounces back to
+    /// the source — a `redirect`/`to`/… param resolving to the source host, or
+    /// a `domain=<sourceHost>` hint (StreamEast: auth.streamea.st/sso-frame.php
+    /// ?domain=v2.streameast.ga&redirect=%2Fmlb%2F<game>). These popups exist
+    /// to set a FIRST-PARTY cookie the embedded sso-frame iframe can't (ITP),
+    /// so letting the popup run is the only way the handshake completes.
+    private func isSSOPopup(_ url: URL, current: URL?) -> Bool {
+      guard URLClassifier.isAuthURL(url) else { return false }
+      let base = current ?? webView?.url
+      if let inner = URLClassifier.unwrapRedirect(url, base: base),
+         sameSite(inner.host, sourceHost) { return true }
+      if let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+         let domain = comps.queryItems?.first(where: { $0.name.lowercased() == "domain" })?.value,
+         sameSite(domain, sourceHost) { return true }
+      return false
+    }
+
     init(onStreamURLFound: ((URL, [HTTPCookie]) -> Void)?,
-         onStreamProbed: ((URL, Bool, [HTTPCookie], URL?) -> Void)? = nil,
+         onStreamProbed: ((URL, Bool, Bool, [HTTPCookie], URL?) -> Void)? = nil,
          onProbeRejected: (() -> Void)? = nil,
          onNavigation: ((URL) -> Void)? = nil,
          onWalkEvent: ((StreamWebView.WalkEvent) -> Void)? = nil,
@@ -3617,6 +4055,33 @@ struct StreamWebView: UIViewRepresentable {
          isAllowedTopNav(url, current: webView.url) {
         noteIntendedLoad(url)
         webView.load(URLRequest(url: url))
+      } else if let url = navigationAction.request.url, isSSOPopup(url, current: webView.url) {
+        // v2.71: one SSO handshake per auth host. A page that loops
+        // window.open(auth…) would otherwise spawn a popup per call and hammer
+        // the auth host into Cloudflare rate-limiting (error 1015).
+        let authHost = url.host ?? url.absoluteString
+        guard ssoPopupHosts.insert(authHost).inserted else { return nil }
+        // Let the site's own SSO popup run in a short-lived auxiliary WebView
+        // that SHARES this one's data store (so the first-party auth cookie
+        // lands in the shared jar and the embedded player can use it). WebKit
+        // auto-loads navigationAction.request into the returned view; we don't
+        // set our navigation delegate on it (that would pin it to the source
+        // host and break the auth redirect). Retired after 12 s.
+        let popup = WKWebView(frame: .zero, configuration: configuration)
+        ssoPopups.append(popup)
+        let event = StreamWebView.WalkEvent(
+          kind: "sso_popup", info: url.host ?? url.absoluteString,
+          at: Date(), detectedCards: []
+        )
+        DispatchQueue.main.async { self.onWalkEvent?(event) }
+        Task { [weak self, weak popup] in
+          try? await Task.sleep(nanoseconds: 12_000_000_000)
+          await MainActor.run {
+            guard let self, let popup else { return }
+            self.ssoPopups.removeAll { $0 === popup }
+          }
+        }
+        return popup
       } else if let url = navigationAction.request.url {
         let event = StreamWebView.WalkEvent(
           kind: "popup_blocked", info: url.host ?? url.absoluteString,
@@ -3740,6 +4205,9 @@ struct StreamWebView: UIViewRepresentable {
         // whose own request — path ending in .m3u8/.mpd — we catch here next.
         let p = url.path.lowercased()
         if p.contains(".m3u8") || p.contains(".mpd") {
+          // v2.71: in WebView-player mode let the embed's own player load the
+          // manifest (and its segments) so it can play a stream AVPlayer can't.
+          if playerModeEngaged { decisionHandler(.allow); return }
           if !found { report(url) }
           decisionHandler(.cancel); return
         }
@@ -3792,6 +4260,9 @@ struct StreamWebView: UIViewRepresentable {
       let urlStr = url?.absoluteString.lowercased() ?? ""
       let isStreamURL = urlStr.contains(".m3u8") || urlStr.contains(".mpd")
       if (isStreamMime || (mime.contains("octet-stream") && isStreamURL)), let url {
+        // v2.71: in WebView-player mode, let the embed player consume the
+        // stream response instead of cancelling it to hand to AVPlayer.
+        if playerModeEngaged { decisionHandler(.allow); return }
         decisionHandler(.cancel)
         if !found { report(url) }
         return
@@ -3800,7 +4271,7 @@ struct StreamWebView: UIViewRepresentable {
     }
 
     private func report(_ url: URL) {
-      guard !found else { return }
+      guard !found, !playerModeEngaged else { return }
       let key = url.absoluteString
       guard seenURLs.insert(key).inserted else { return }
       if firstObservedURL == nil {
@@ -3830,15 +4301,46 @@ struct StreamWebView: UIViewRepresentable {
           }
         }()
         let playable = await Self.probePlayability(url, referer: referer, cookies: cookies)
+        // v2.72: verify it's actually a LIVE, currently-reachable stream before
+        // we'd ever commit it. This is host-agnostic — the core defense against
+        // takedown-evading aggregators whose endpoints rotate/die constantly and
+        // whose pages serve filler/ad/VOD loops we used to commit by mistake.
+        let live = playable ? await StreamLiveness.isLive(url, referer: referer, cookies: cookies) : false
         await MainActor.run {
-          onProbed?(url, playable, cookies, referer)
+          onProbed?(url, playable, live, cookies, referer)
           guard let self else { return }
+          // v2.72: NO host-identity rejection. These CDNs rotate to evade
+          // takedowns, so a host is never reliably "bad" — and "Didn't" feedback
+          // often meant wrong CONTENT, not a bad host, which poisoned the legit
+          // ppv CDN (indianservers.st). Liveness verification below is the real,
+          // host-agnostic trust signal; we lean on it instead.
           if !playable, isFirstURL {
             self.probeRejectedFirstURL = true
+            self.engagePlayerMode()  // v2.71: hand playback to the embed's player
             onProbeRejected?()
+            return
           }
           guard !self.found, playable else { return }
-          self.commitURL(url)
+          // v2.72: strict live gate — these are all live games, so a finite/VOD
+          // playlist, or one whose first segment won't load (dead/gated CDN), is
+          // NOT the stream we want. Reject and keep scanning rather than commit.
+          guard live else {
+            self.onWalkEvent?(WalkEvent(
+              kind: "stream_rejected", info: "not-live " + (url.host ?? ""),
+              at: Date(), detectedCards: []
+            ))
+            return
+          }
+          self.verifiedLiveURLs.insert(url.absoluteString)
+          // v2.71: among live candidates, prefer the one related to what the
+          // user wanted. Commit immediately on a known-good host OR a URL
+          // carrying a target-game token; otherwise hold an unknown host back
+          // briefly so a related/known-good live capture can win the race.
+          if self.isKnownGoodHost(url.host) || self.streamCarriesToken(url) {
+            self.commitURL(url)
+          } else {
+            self.deferUnknownCandidate(url)
+          }
         }
       }
     }
@@ -3848,6 +4350,8 @@ struct StreamWebView: UIViewRepresentable {
       // Probe already determined this URL isn't playable by AVPlayer —
       // don't force-commit it. The WebView continues showing the stream.
       guard !probeRejectedFirstURL else { return }
+      // v2.72: only ever commit a stream we verified is live + reachable.
+      guard verifiedLiveURLs.contains(url.absoluteString) else { return }
       commitURL(url)
     }
 
