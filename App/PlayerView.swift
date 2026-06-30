@@ -1283,7 +1283,12 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     return vc
   }
   func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
-    vc.player = player
+    // Only reassign when the player instance actually changed. SwiftUI calls
+    // this on every body update (walk/scan events, timers fire several times a
+    // second during playback); reassigning `vc.player` — even to the same
+    // object — interrupts an in-progress fullscreen presentation and blacks it
+    // out. This guard is the fix for "fullscreen goes black on every source."
+    if vc.player !== player { vc.player = player }
   }
 
   func makeCoordinator() -> Coordinator { Coordinator() }
@@ -1296,19 +1301,26 @@ struct VideoPlayerView: UIViewControllerRepresentable {
       _ playerViewController: AVPlayerViewController,
       willBeginFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator
     ) {
-      requestOrientation(.landscape, from: playerViewController)
+      // Rotate AFTER AVKit finishes presenting fullscreen, not during — forcing
+      // a scene geometry change mid-transition fights AVKit's own rotation and
+      // can leave the player black.
+      coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+        self?.requestOrientation(.landscape, from: playerViewController)
+      }
     }
 
     func playerViewController(
       _ playerViewController: AVPlayerViewController,
       willEndFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator
     ) {
-      requestOrientation(.portrait, from: playerViewController)
+      coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+        self?.requestOrientation(.portrait, from: playerViewController)
+      }
     }
 
     private func requestOrientation(_ mask: UIInterfaceOrientationMask, from vc: UIViewController) {
       guard let scene = vc.view.window?.windowScene else { return }
-      scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask))
+      scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { _ in }
     }
   }
 }
