@@ -798,12 +798,23 @@ struct PlayerView: View {
   /// v2.72: the embed's own <video> started playing — the WebView is the
   /// working player. Make it the visible player and record success; no AVPlayer
   /// required (WKWebView <video> AirPlays natively). No reload — it's playing.
+  /// v2.62: stop the in-page walk once playback has started so it can't click a
+  /// server-switcher / reload the player and kill the stream "after a few
+  /// seconds." The embed subframe self-halts when it sees its own <video>; this
+  /// sets the flag in the TOP frame (which can't see a cross-origin embed's
+  /// video). `engagePlayerMode(reload:true)` later re-injects a fresh shim, so
+  /// an AVPlayer-failure fallback still re-enables walking.
+  private func haltWalk() {
+    webBridge.webView?.evaluateJavaScript("window.__sc_stopWalk = true;", completionHandler: nil)
+  }
+
   private func handleWebViewPlaybackStarted() {
     guard avPlayer == nil else { return }  // AVPlayer already owns playback
     cancelBudgetTimer()
     revealTask?.cancel(); revealTask = nil
     if !webViewFallbackActivated { webViewFallbackActivated = true }
     webBridge.coordinator?.engagePlayerMode(reload: false)
+    haltWalk()
     noNavStrikes = 0
     if currentAttemptIdx < attempts.count {
       recordSuccess(attempt: attempts[currentAttemptIdx])
@@ -902,6 +913,7 @@ struct PlayerView: View {
     cancelBudgetTimer()
     avPlayer = p
     p.play()
+    haltWalk()  // v2.62: AVPlayer owns playback now — stop the WebView walk
     startAVPlayerWatchdog(p)
     // Record success for the source that yielded this candidate. We
     // don't know which attempt index it was from precisely, but for
@@ -929,6 +941,7 @@ struct PlayerView: View {
     cancelBudgetTimer()
     avPlayer = p
     p.play()
+    haltWalk()  // v2.62: AVPlayer owns playback now — stop the WebView walk
     startAVPlayerWatchdog(p)
     if currentAttemptIdx < attempts.count {
       recordSuccess(attempt: attempts[currentAttemptIdx])
@@ -3510,6 +3523,14 @@ struct StreamWebView: UIViewRepresentable {
       // to extract a URL — immune to signed/expiring/gated tokens because the
       // real browser already did the work. Re-arms if it pauses.
       var _videoPlayingReported = false;
+      // v2.62: once a real video is playing, the walk must STOP poking the page.
+      // Continuing to run tryAdvance + the mirror/source/"watch" click loop on a
+      // PLAYING page hits a server-switcher or reloads the player a few seconds
+      // in — which is exactly why playback "stops after a few seconds" in-app but
+      // never in a plain browser (a browser doesn't click anything). Sticky: a
+      // buffering pause must not un-halt and resume the clicking.
+      var _walkHalted = false;
+      function _isWalkHalted() { return _walkHalted || window.__sc_stopWalk === true; }
       function reportVideoPlayback() {
         var playing = false;
         try {
@@ -3520,6 +3541,7 @@ struct StreamWebView: UIViewRepresentable {
                 v.currentTime > 0.3 && (v.videoWidth || 0) > 0) { playing = true; break; }
           }
         } catch(e){}
+        if (playing) _walkHalted = true;
         if (playing && !_videoPlayingReported) {
           _videoPlayingReported = true;
           postWalkEvent('video_playing', location.host || '');
@@ -3547,6 +3569,11 @@ struct StreamWebView: UIViewRepresentable {
         // (Network intercepts + video/playback detection above still run in
         // every frame, so the embed subframe is still captured and observed.)
         if (window.top !== window) return;
+        // v2.62: stream is playing (this frame saw its own <video>, or native
+        // set window.__sc_stopWalk after a video_playing/commit elsewhere) —
+        // stop ALL walking/clicking/navigation so we don't disrupt playback.
+        // Passive capture + reportVideoPlayback above still run.
+        if (_isWalkHalted()) return;
         scanScripts();
         // v2.37: harvest cross-origin iframes for drill-down.
         try { harvestIframes(); } catch(e){}
