@@ -180,6 +180,15 @@ final class TraversalLog: ObservableObject {
   func markOutcome(_ id: UUID, _ outcome: TraversalSession.PlaybackOutcome) {
     guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
     sessions[idx].playbackOutcome = outcome
+    // v2.72: learn only the POSITIVE signal — a host that actually played. We
+    // no longer record "bad" hosts from `.failed`: these CDNs rotate, and
+    // "Didn't" usually means wrong CONTENT (not-live / wrong feed), not a bad
+    // host — recording it poisoned the legit rotating ppv CDN (indianservers.st).
+    // Liveness verification (StreamLiveness) is the host-agnostic trust signal.
+    let session = sessions[idx]
+    if outcome == .worked, let last = session.capturedStreams.last, let url = URL(string: last) {
+      StreamHostMemory.shared.recordGood(sourceID: session.sourceID, streamURL: url)
+    }
     scheduleSave()
   }
 

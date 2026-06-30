@@ -20,6 +20,50 @@ private actor ScrapeCache {
   }
 }
 
+// MARK: - URLClassifier
+
+/// v2.71: shared auth/login URL classification + redirect-target unwrapping.
+/// Many sites wrap a game deep-link in a login URL whose redirect param carries
+/// the game slug — ppv.to: `/auth/login?to=/live/mlb/2026-06-07/sea-cle`;
+/// StreamEast: `auth.streamea.st/sso-frame.php?redirect=%2Fmlb%2F<slug>`. Our
+/// team-token matchers used to see both team tokens inside that redirect param
+/// and treat the wrapper as the game itself, navigating straight into the auth
+/// wall. These helpers let the discovery matcher (and, mirrored in the in-player
+/// walk's JS) reject the bare wrapper and recover the inner game URL instead.
+enum URLClassifier {
+  static let authHostPrefixes = ["auth.", "login.", "signin.", "sso.", "accounts.", "id."]
+  static let authPathFragments = ["/sso", "/signin", "/sign-in", "/login", "/log-in", "/auth", "/oauth"]
+  /// Query-param names whose value is a post-login redirect target.
+  static let redirectParams = ["to", "redirect", "redirect_uri", "redirect_url",
+                               "return", "return_to", "returnurl", "next", "url",
+                               "continue", "dest", "destination", "r"]
+
+  static func isAuthURL(_ url: URL) -> Bool {
+    let host = (url.host ?? "").lowercased()
+    let path = url.path.lowercased()
+    if authHostPrefixes.contains(where: { host.hasPrefix($0) }) { return true }
+    if authPathFragments.contains(where: { path.contains($0) }) { return true }
+    return false
+  }
+
+  /// If `url` is an auth URL carrying a redirect param that points at a
+  /// non-auth path/URL, return that inner URL resolved against `base`. Else nil.
+  static func unwrapRedirect(_ url: URL, base: URL?) -> URL? {
+    guard isAuthURL(url),
+          let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+          let items = comps.queryItems else { return nil }
+    for name in redirectParams {
+      guard let raw = items.first(where: { $0.name.lowercased() == name })?.value,
+            !raw.isEmpty else { continue }
+      if let inner = URL(string: raw, relativeTo: base ?? url)?.absoluteURL,
+         !isAuthURL(inner) {
+        return inner
+      }
+    }
+    return nil
+  }
+}
+
 // MARK: - CustomStreamSource
 
 /// v2.32 rewrite. The aggregator's only job: given today's canonical
@@ -133,13 +177,16 @@ struct CustomStreamSource: StreamSource {
                    (soloEvent || index.hasTokens(forTeam: game.awayTeam))
 
     if useIndex {
-      // href first — URL slugs are the most reliable signal.
+      // href first — URL slugs are the most reliable signal. v2.71: match
+      // against the EFFECTIVE URL (auth wrappers unwrapped to their inner game
+      // URL; bare auth URLs skipped) so team tokens hiding in a login URL's
+      // `?to=`/`?redirect=` param can't masquerade as the game deep-link.
       for link in links {
-        let key = " " + HomeView.normalizeForMatch(link.href) + " "
+        guard let eff = effectiveURL(forHref: link.href) else { continue }
+        let key = " " + HomeView.normalizeForMatch(eff.absoluteString) + " "
         if index.matches(team: game.homeTeam, inPadded: key),
-           soloEvent || index.matches(team: game.awayTeam, inPadded: key),
-           let url = URL(string: link.href, relativeTo: baseURL)?.absoluteURL {
-          return url
+           soloEvent || index.matches(team: game.awayTeam, inPadded: key) {
+          return eff
         }
       }
       // link text second.
@@ -147,8 +194,8 @@ struct CustomStreamSource: StreamSource {
         let key = " " + HomeView.normalizeForMatch(link.text) + " "
         if index.matches(team: game.homeTeam, inPadded: key),
            soloEvent || index.matches(team: game.awayTeam, inPadded: key),
-           let url = URL(string: link.href, relativeTo: baseURL)?.absoluteURL {
-          return url
+           let eff = effectiveURL(forHref: link.href) {
+          return eff
         }
       }
       return nil
@@ -159,13 +206,24 @@ struct CustomStreamSource: StreamSource {
     let awayKey = HomeView.normalizeForMatch(game.awayTeam)
     guard !homeKey.isEmpty else { return nil }
     for link in links {
-      let blob = HomeView.normalizeForMatch(link.text + " " + link.href)
-      if blob.contains(homeKey), awayKey.isEmpty || blob.contains(awayKey),
-         let url = URL(string: link.href, relativeTo: baseURL)?.absoluteURL {
-        return url
+      guard let eff = effectiveURL(forHref: link.href) else { continue }
+      let blob = HomeView.normalizeForMatch(link.text + " " + eff.absoluteString)
+      if blob.contains(homeKey), awayKey.isEmpty || blob.contains(awayKey) {
+        return eff
       }
     }
     return nil
+  }
+
+  /// v2.71: resolve a scraped href to the URL we'd actually store/navigate to.
+  /// An auth/login wrapper carrying a redirect param is unwrapped to its inner
+  /// game URL; a bare auth URL (no usable redirect target) returns nil so it's
+  /// never stored as a game match. Non-auth hrefs resolve as before.
+  private func effectiveURL(forHref href: String) -> URL? {
+    guard let url = URL(string: href, relativeTo: baseURL)?.absoluteURL else { return nil }
+    if let inner = URLClassifier.unwrapRedirect(url, base: baseURL) { return inner }
+    if URLClassifier.isAuthURL(url) { return nil }
+    return url
   }
 
   /// LLM fallback: hand the scraped links to FoundationModelScraper and
@@ -192,7 +250,13 @@ struct CustomStreamSource: StreamSource {
     for game in games {
       for cand in extracted where out[game.id] == nil {
         if llmCandidateMatchesGame(cand, game) {
-          out[game.id] = cand.pageURL
+          // v2.71: unwrap an auth wrapper to its inner game URL; skip a bare
+          // auth URL so the game stays unmatched (a later candidate may hit).
+          if let inner = URLClassifier.unwrapRedirect(cand.pageURL, base: baseURL) {
+            out[game.id] = inner
+          } else if !URLClassifier.isAuthURL(cand.pageURL) {
+            out[game.id] = cand.pageURL
+          }
         }
       }
     }
@@ -304,7 +368,19 @@ struct CustomStreamSource: StreamSource {
          name.contains(" vs") {
         if let url = urlKeys.compactMap({ dict[$0] as? String })
                             .first(where: { $0.hasPrefix("http") }) {
-          results.append(ScrapedLink(href: url, text: name, status: "", containerClass: ""))
+          // v2.71: don't store an auth/login wrapper as a game link — unwrap it
+          // to the inner game URL, or skip it entirely if it's a bare auth URL.
+          var stored: String? = url
+          if let parsed = URL(string: url) {
+            if let inner = URLClassifier.unwrapRedirect(parsed, base: nil) {
+              stored = inner.absoluteString
+            } else if URLClassifier.isAuthURL(parsed) {
+              stored = nil
+            }
+          }
+          if let stored {
+            results.append(ScrapedLink(href: stored, text: name, status: "", containerClass: ""))
+          }
         }
       }
       for val in dict.values { extractGameLinksFromJSON(val, into: &results) }
