@@ -1001,49 +1001,90 @@ struct PlayerView: View {
     }
   }
 
-  /// After AVPlayer starts, wait 8 s and check whether it has produced any
-  /// video. If the player is still at position 0 (stalled) or reported a
-  /// failure, fall back to the WebView-player mode — the stream is session-
-  /// gated (e.g. ppv.to → indianservers.st) and only works inside the
-  /// WebView's browser context.
+  /// Watches AVPlayer health for the lifetime of the committed item — not just
+  /// at startup. Two failure shapes both fall back to the WebView embed player
+  /// (which plays these session-gated live streams the way a browser does):
+  ///
+  ///   1. Never-started (≤8 s): item failed, or still pinned at position 0.
+  ///      The stream is session-gated and AVPlayer can't open it at all.
+  ///   2. v2.74 — Started-then-stalled (the "plays 10–15 s then freezes" bug):
+  ///      AVPlayer plays its initially-buffered window, then later segment /
+  ///      manifest-reload requests fail (expiring tokens, or auth headers not
+  ///      reliably applied to every sub-request), so playback freezes mid-stream
+  ///      with no recovery. The old one-shot 8 s check had already returned
+  ///      "worked" and nothing monitored afterward, so it stalled forever. We
+  ///      now keep polling and, on a SUSTAINED no-progress stall (so a brief,
+  ///      self-healing buffering hiccup doesn't trip it), hand off to the embed.
   private func startAVPlayerWatchdog(_ player: AVPlayer) {
     // The player is shared across channels, so identity can't tell us whether
     // this watchdog still owns the playback — compare the *item* it started on.
     // If a later channel already swapped in a new item, this watchdog is stale.
     let watchedItem = player.currentItem
     Task { @MainActor in
+      // Phase 1: initial-start check. Position-0 stall / hard failure ⇒ the
+      // stream never opened in AVPlayer; hand straight to the embed.
       try? await Task.sleep(nanoseconds: 8_000_000_000)
       guard avPlayer != nil, player.currentItem === watchedItem else { return }
       let item = player.currentItem
       let hasFailed  = item?.status == .failed || item?.error != nil
-      let isStalled  = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-                    && player.currentTime().seconds < 0.1
-      guard hasFailed || isStalled else {
-        // v2.69: 8 s of healthy playback (progressed past position 0, no
-        // failure) is a strong signal the stream actually works. Auto-mark
-        // the traversal session "worked" so the log's success metric reflects
-        // reality instead of always 0 — outcomes were never marked by hand.
-        if let sid = traversalSessionID {
-          TraversalLog.shared.markOutcome(sid, .worked)
-        }
+      let neverStarted = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                      && player.currentTime().seconds < 0.1
+      if hasFailed || neverStarted {
+        fallBackToEmbedPlayer(reason: hasFailed ? "item_failed" : "stalled_at_0")
         return
       }
+      // Healthy start — record success once.
       if let sid = traversalSessionID {
-        TraversalLog.shared.recordEvent(
-          sid, kind: "avplayer_fallback",
-          info: hasFailed ? "item_failed" : "stalled_at_0"
-        )
+        TraversalLog.shared.markOutcome(sid, .worked)
       }
-      // Release the stalled item from the shared player so it doesn't keep
-      // buffering a dead stream; the WebView becomes the player from here.
-      PlaybackEngine.shared.stop()
-      avPlayer = nil
-      webViewFallbackActivated = true
-      // v2.71: hand the stream to the embed's own player — stop cancelling its
-      // manifest/segment loads and reload so it can fetch the gated stream the
-      // browser (unlike AVPlayer) supplies the right Referer/Origin for.
-      webBridge.coordinator?.engagePlayerMode()
+
+      // Phase 2: continuous mid-playback stall monitor.
+      let checkInterval: TimeInterval = 2
+      let stallLimit: TimeInterval = 8   // sustained no-progress before handoff
+      var lastTime = player.currentTime().seconds
+      var stalledFor: TimeInterval = 0
+      while !Task.isCancelled {
+        try? await Task.sleep(nanoseconds: UInt64(checkInterval * 1_000_000_000))
+        guard avPlayer != nil, player.currentItem === watchedItem else { return }
+        let curItem = player.currentItem
+        let now = player.currentTime().seconds
+        if curItem?.status == .failed || curItem?.error != nil {
+          fallBackToEmbedPlayer(reason: "item_failed_midstream@\(Int(now))s")
+          return
+        }
+        // Count it as a stall only when the player WANTS to play but isn't making
+        // progress — segment/manifest starvation, not a user pause.
+        let wantsToPlay = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+        let progressed = now > lastTime + 0.05
+        if wantsToPlay && !progressed {
+          stalledFor += checkInterval
+          if stalledFor >= stallLimit {
+            fallBackToEmbedPlayer(reason: "stalled_midstream@\(Int(now))s")
+            return
+          }
+        } else {
+          stalledFor = 0
+        }
+        lastTime = now
+      }
     }
+  }
+
+  /// Release the (dead/stalled) AVPlayer item and hand playback to the WebView
+  /// embed player, which serves these gated streams the way a browser does.
+  private func fallBackToEmbedPlayer(reason: String) {
+    if let sid = traversalSessionID {
+      TraversalLog.shared.recordEvent(sid, kind: "avplayer_fallback", info: reason)
+    }
+    // Release the item from the shared player so it doesn't keep buffering a
+    // dead stream; the WebView becomes the player from here.
+    PlaybackEngine.shared.stop()
+    avPlayer = nil
+    webViewFallbackActivated = true
+    // v2.71: hand the stream to the embed's own player — stop cancelling its
+    // manifest/segment loads and reload so it can fetch the gated stream the
+    // browser (unlike AVPlayer) supplies the right Referer/Origin for.
+    webBridge.coordinator?.engagePlayerMode()
   }
 
   /// v2.64: read the source site and find this game's exact page URL, then
