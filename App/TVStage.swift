@@ -62,20 +62,79 @@ struct TVStageView: View {
   }
 
   var body: some View {
-    if isLandscape {
-      landscapeStage
-    } else {
-      // Portrait: the stream spans the full guide width with the channel
-      // controls overlaid on its trailing edge (liquid glass), rather than
-      // sitting in a column beside it.
-      ZStack(alignment: .trailing) {
-        portraitTVBox
+    // CRITICAL: `screen` (which hosts PlayerView) must stay at ONE structural
+    // position across orientations. Previously the body branched on
+    // `isLandscape` with a separate `screen`/PlayerView in each branch. Tapping
+    // fullscreen rotates the scene to landscape, which flips `isLandscape`, and
+    // SwiftUI then tore down the portrait branch and built the landscape one
+    // from scratch — rebuilding PlayerView, re-running its `.task`, and starting
+    // a brand-new scrape/traversal session that killed the stream already
+    // playing. Keeping the player in a single slot and varying only the
+    // surrounding chrome (bezel/stand, control placement) via the `isLandscape`
+    // flag preserves its identity, so going fullscreen no longer restarts
+    // playback.
+    GeometryReader { geo in
+      let m = screenMetrics(for: geo.size)
+      ZStack {
+        // Landscape-only chrome: the bezel + stand behind the screen. Sized to
+        // wrap the centered screen rectangle. Absent in portrait (no-op), which
+        // does NOT change the screen's structural position.
+        if isLandscape {
+          bezelAndStand(screenW: m.w, screenH: m.h)
+        }
+        // The player's single, branch-free home.
+        screen
+          .frame(width: m.w, height: m.h)
+        // Channel controls overlaid on the trailing edge in both orientations.
         controls
-          .padding(.trailing, 10)
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+          .padding(.trailing, isLandscape ? 12 : 10)
       }
-      .padding(.horizontal, 16)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
       .animation(.smooth, value: airplay.isExternalActive)
     }
+    .padding(.horizontal, isLandscape ? 0 : 16)
+    .frame(height: isLandscape ? nil : 200)
+  }
+
+  /// The screen rectangle's size for the current orientation. Portrait fills the
+  /// padded 200-tall box; landscape is a 16:9 set centered within the available
+  /// space, reserving symmetric room for the side controls and the stand.
+  private func screenMetrics(for size: CGSize) -> (w: CGFloat, h: CGFloat) {
+    guard isLandscape else { return (size.width, size.height) }
+    let bezel: CGFloat = 12
+    let standTotal: CGFloat = 14 + 8   // neck + base
+    let controlsW: CGFloat = 52
+    let edgePad: CGFloat = 12
+    let availW = size.width - (controlsW + edgePad) * 2
+    let availH = size.height - edgePad * 2 - standTotal * 2
+    let maxScreenW = availW - bezel * 2
+    let maxScreenH = availH - bezel * 2
+    let h = max(0, min(maxScreenH, maxScreenW * 9.0 / 16.0))
+    let w = h * 16.0 / 9.0
+    return (w, h)
+  }
+
+  /// Landscape TV chrome: a thin bezel wrapping the screen with a neck-and-base
+  /// stand hanging beneath. Centered to match the centered `screen` slot.
+  private func bezelAndStand(screenW: CGFloat, screenH: CGFloat) -> some View {
+    let bezel: CGFloat = 12
+    let neckH: CGFloat = 14
+    let baseH: CGFloat = 8
+    return RoundedRectangle(cornerRadius: 18)
+      .fill(bezelColor)
+      .frame(width: screenW + bezel * 2, height: screenH + bezel * 2)
+      .overlay(alignment: .bottom) {
+        VStack(spacing: 0) {
+          Rectangle()
+            .fill(bezelColor)
+            .frame(width: 18, height: neckH)
+          RoundedRectangle(cornerRadius: 3)
+            .fill(bezelColor)
+            .frame(width: screenW * 0.42, height: baseH)
+        }
+        .offset(y: neckH + baseH)
+      }
   }
 
   /// The video surface: black backing + the player (or idle test pattern),
@@ -103,67 +162,6 @@ struct TVStageView: View {
         TestPatternView()
           .clipShape(RoundedRectangle(cornerRadius: 14))
       }
-    }
-  }
-
-  /// Portrait: a fixed-height TV pinned at the top, filling the width.
-  private var portraitTVBox: some View {
-    screen
-      .frame(height: 200)
-      .frame(maxWidth: .infinity)
-  }
-
-  /// Landscape: a flat-screen TV (thin bezel) on a neck-and-base stand, sized
-  /// from the available geometry so it stays large regardless of what the
-  /// player is showing (stream, loading, or error). Centered on screen with
-  /// the channel controls beside it.
-  private var landscapeStage: some View {
-    GeometryReader { geo in
-      let bezel: CGFloat = 12
-      let neckH: CGFloat = 14
-      let baseH: CGFloat = 8
-      let standTotal = neckH + baseH
-      let controlsW: CGFloat = 52
-      let edgePad: CGFloat = 12
-      // Reserve symmetric room on both sides for the controls (so the
-      // screen-centered set never collides with them) and top/bottom for the
-      // stand (so the set stays centered while the stand still fits beneath).
-      let availW = geo.size.width - (controlsW + edgePad) * 2
-      let availH = geo.size.height - edgePad * 2 - standTotal * 2
-      let maxScreenW = availW - bezel * 2
-      let maxScreenH = availH - bezel * 2
-      let screenH = max(0, min(maxScreenH, maxScreenW * 9.0 / 16.0))
-      let screenW = screenH * 16.0 / 9.0
-
-      ZStack {
-        // The set (screen + thin bezel), centered both vertically and
-        // horizontally. The stand hangs beneath it as an overlay so it doesn't
-        // shift the set off-center.
-        screen
-          .frame(width: screenW, height: screenH)
-          .padding(bezel)
-          .background(
-            RoundedRectangle(cornerRadius: 18).fill(bezelColor)
-          )
-          .overlay(alignment: .bottom) {
-            VStack(spacing: 0) {
-              Rectangle()
-                .fill(bezelColor)
-                .frame(width: 18, height: neckH)
-              RoundedRectangle(cornerRadius: 3)
-                .fill(bezelColor)
-                .frame(width: screenW * 0.42, height: baseH)
-            }
-            .offset(y: standTotal)
-          }
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-        // Channel controls pinned to the right edge, vertically centered.
-        controls
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
-          .padding(.trailing, edgePad)
-      }
-      .animation(.smooth, value: airplay.isExternalActive)
     }
   }
 
