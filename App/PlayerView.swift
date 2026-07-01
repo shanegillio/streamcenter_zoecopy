@@ -69,6 +69,14 @@ struct PlayerView: View {
   /// failed-to-end / stalled / error-log). Removed when we hand off, switch
   /// items, or leave — see `removePlayerObservers()`.
   @State private var playerObservers: [NSObjectProtocol] = []
+  /// v2.74: a discovered stream held back from AVPlayer during the embed grace
+  /// window (see `preferEmbedThenCommit`), plus the timer that commits it if the
+  /// page's own player never starts.
+  @State private var pendingAVCommit: StreamCandidate? = nil
+  @State private var avCommitGraceTask: Task<Void, Never>? = nil
+  /// How long to let the page's embedded player try to start before we fall
+  /// through to AVPlayer extraction.
+  private static let embedGraceWindow: TimeInterval = 5
 
   struct SourceAttempt: Identifiable {
     let id = UUID()
@@ -269,6 +277,7 @@ struct PlayerView: View {
       cancelBudgetTimer()
       removePlayerObservers()
       revealTask?.cancel(); revealTask = nil
+      avCommitGraceTask?.cancel(); avCommitGraceTask = nil
       if let sid = traversalSessionID {
         TraversalLog.shared.endSession(sid)
         traversalSessionID = nil
@@ -397,7 +406,7 @@ struct PlayerView: View {
             let p0 = current.pageURL.path
             let startedDeep = !(p0.isEmpty || p0 == "/")
             if hops >= 2 || startedDeep {
-              await autoPlayCapturedStream(
+              preferEmbedThenCommit(
                 url: streamURL,
                 cookies: cookies,
                 referer: captureReferer
@@ -425,7 +434,7 @@ struct PlayerView: View {
           // never a filler/VOD/dead-endpoint capture that merely parsed.
           if !debugScraping, playable, live, avPlayer == nil, !webViewFallbackActivated {
             appendCandidate(url: url, cookies: cookies, referer: referer ?? current.pageURL)
-            await autoPlayCapturedStream(
+            preferEmbedThenCommit(
               url: url, cookies: cookies, referer: referer ?? current.pageURL
             )
           }
@@ -864,6 +873,15 @@ struct PlayerView: View {
     guard avPlayer == nil else { return }  // AVPlayer already owns playback
     cancelBudgetTimer()
     revealTask?.cancel(); revealTask = nil
+    // v2.74: the embed's own player started — prefer it. Cancel any pending
+    // AVPlayer commit that was waiting out the grace window.
+    avCommitGraceTask?.cancel(); avCommitGraceTask = nil
+    if pendingAVCommit != nil {
+      pendingAVCommit = nil
+      if let sid = traversalSessionID {
+        TraversalLog.shared.recordEvent(sid, kind: "prefer_embed", info: "embed playing — skipped AVPlayer")
+      }
+    }
     if !webViewFallbackActivated { webViewFallbackActivated = true }
     webBridge.coordinator?.engagePlayerMode(reload: false)
     haltWalk()
@@ -980,6 +998,38 @@ struct PlayerView: View {
         sid, kind: "user_play",
         info: cand.url.absoluteString
       )
+    }
+  }
+
+  /// v2.74: prefer the page's OWN embed player over AVPlayer extraction. Many
+  /// sources (buffstreams / thestreameast → hereisman, etc.) serve short-window,
+  /// oversized, mislabeled HLS that AVPlayer's strict engine can't ride but the
+  /// site's hls.js plays fine — the same feed the browser uses. So instead of
+  /// committing AVPlayer the instant we discover a playable URL, we hold it for a
+  /// short grace window and let the embed's <video> try to start (the WKWebView
+  /// is configured to autoplay). If the embed starts (`video_playing`
+  /// → handleWebViewPlaybackStarted), we use it and this pending commit is
+  /// cancelled. Only if the embed never starts do we fall through to AVPlayer —
+  /// which is the right choice for pages that expose a stream URL but have no
+  /// working embedded player.
+  private func preferEmbedThenCommit(url: URL, cookies: [HTTPCookie], referer: URL) {
+    guard avPlayer == nil, !webViewFallbackActivated else { return }
+    if pendingAVCommit == nil {
+      pendingAVCommit = StreamCandidate(url: url, cookies: cookies, referer: referer)
+    }
+    guard avCommitGraceTask == nil else { return }
+    avCommitGraceTask = Task { @MainActor in
+      try? await Task.sleep(nanoseconds: UInt64(Self.embedGraceWindow * 1_000_000_000))
+      avCommitGraceTask = nil
+      guard !Task.isCancelled, avPlayer == nil, !webViewFallbackActivated,
+            let pending = pendingAVCommit else { return }
+      pendingAVCommit = nil
+      if let sid = traversalSessionID {
+        TraversalLog.shared.recordEvent(
+          sid, kind: "embed_grace_elapsed", info: "no embed playback — committing AVPlayer"
+        )
+      }
+      await autoPlayCapturedStream(url: pending.url, cookies: pending.cookies, referer: pending.referer)
     }
   }
 
@@ -1280,6 +1330,8 @@ struct PlayerView: View {
     noNavStrikes = 0
     webViewFallbackActivated = false
     revealTask?.cancel(); revealTask = nil  // v2.72: re-arm reveal for the new source
+    avCommitGraceTask?.cancel(); avCommitGraceTask = nil
+    pendingAVCommit = nil
     currentAttemptIdx += 1
     Task { await startCurrentAttempt() }
   }
