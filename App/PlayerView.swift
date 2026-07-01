@@ -3884,6 +3884,66 @@ struct StreamWebView: UIViewRepresentable {
         }
       }
 
+      // v2.75: start a click-gated player from INSIDE its own (cross-origin)
+      // subframe. Many embeds (gooz.aapmains.net) don't create their <video>
+      // until the big play button is pressed, and the main frame can't reach
+      // across origins to press it. This runs ONCE per frame, and only in frames
+      // that actually look like a video player, so it can't spray clicks across
+      // the ad iframes these pages spawn (which is what v2.72 disabled). The
+      // WebView permits autoplay, so a synthetic press starts hls.js without a
+      // real gesture — after which reportVideoPlayback fires 'video_playing' and
+      // the app prefers this embed over AVPlayer.
+      var _sc_embedStartTried = false;
+      function startEmbedInSubframe() {
+        if (_sc_embedStartTried) return;
+        // Only genuine player frames — must carry a player element/container.
+        var hasPlayer = false;
+        try {
+          hasPlayer = !!document.querySelector(
+            'video, source, .video-js, .jwplayer, .jw-video, .plyr, ' +
+            '[class*="flowplayer"], .clappr-player, [id*="player" i], [class*="player" i]'
+          );
+        } catch(e){}
+        if (!hasPlayer) return;
+        // Skip trivially small frames — the real player fills space; ad slots
+        // that happen to carry "player"-ish classes are usually small.
+        if ((window.innerWidth || 0) < 200 || (window.innerHeight || 0) < 150) return;
+        _sc_embedStartTried = true;
+        var started = '';
+        // 1) A <video> already exists → just play it.
+        try {
+          var vs = document.querySelectorAll('video');
+          for (var i = 0; i < vs.length; i++) { if (vs[i].paused) { vs[i].play().catch(function(){}); started = 'video.play'; } }
+        } catch(e){}
+        // 2) Press a recognized big-play / overlay control so the player builds
+        //    and starts its <video>.
+        var playSel = [
+          '.vjs-big-play-button', '.jw-icon-display', '.jw-display-icon-display',
+          '.plyr__control--overlaid', '[data-plyr="play"]', '.fp-play',
+          '.clappr-play-button', '[class*="vjs-big-play"]',
+          '.play-button', '#play-button', '#play', '#playBtn',
+          '[aria-label="Play" i]', 'button[title="Play" i]'
+        ];
+        var clicked = false;
+        for (var s = 0; s < playSel.length && !clicked; s++) {
+          try {
+            var el = document.querySelector(playSel[s]);
+            if (el) { robustClick(el); clicked = true; started = playSel[s]; }
+          } catch(e){}
+        }
+        // 3) Custom players with no recognizable button: press the center of the
+        //    frame (where the play overlay sits). Only in a confirmed player frame.
+        if (!clicked) {
+          try {
+            var cx = Math.floor((window.innerWidth || 0) / 2);
+            var cy = Math.floor((window.innerHeight || 0) / 2);
+            var center = document.elementFromPoint(cx, cy);
+            if (center) { robustClick(center); started = 'center'; }
+          } catch(e){}
+        }
+        try { postWalkEvent('embed_autostart', 'host=' + (location.host || '') + ' via=' + (started || 'none')); } catch(e){}
+      }
+
       function scan() {
         document.querySelectorAll('video, source').forEach(function(el) {
           [el.src, el.currentSrc, el.getAttribute('src'), el.dataset && el.dataset.src].forEach(function(s) {
@@ -3904,7 +3964,11 @@ struct StreamWebView: UIViewRepresentable {
         // ad iframe was accumulating into the whole-app main-thread freeze.
         // (Network intercepts + video/playback detection above still run in
         // every frame, so the embed subframe is still captured and observed.)
-        if (window.top !== window) return;
+        // v2.75: BUT the actual player is a cross-origin subframe whose <video>
+        // is created only when its play button is pressed (thestreameast → gooz
+        // reports vid=0 until clicked). The main frame can't reach into it, so
+        // the subframe must start itself — one narrow, ad-safe attempt.
+        if (window.top !== window) { try { startEmbedInSubframe(); } catch(e){} return; }
         // v2.62: stream is playing (this frame saw its own <video>, or native
         // set window.__sc_stopWalk after a video_playing/commit elsewhere) —
         // stop ALL walking/clicking/navigation so we don't disrupt playback.
