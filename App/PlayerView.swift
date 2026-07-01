@@ -397,7 +397,7 @@ struct PlayerView: View {
             let p0 = current.pageURL.path
             let startedDeep = !(p0.isEmpty || p0 == "/")
             if hops >= 2 || startedDeep {
-              autoPlayCapturedStream(
+              await autoPlayCapturedStream(
                 url: streamURL,
                 cookies: cookies,
                 referer: captureReferer
@@ -425,7 +425,7 @@ struct PlayerView: View {
           // never a filler/VOD/dead-endpoint capture that merely parsed.
           if !debugScraping, playable, live, avPlayer == nil, !webViewFallbackActivated {
             appendCandidate(url: url, cookies: cookies, referer: referer ?? current.pageURL)
-            autoPlayCapturedStream(
+            await autoPlayCapturedStream(
               url: url, cookies: cookies, referer: referer ?? current.pageURL
             )
           }
@@ -656,7 +656,7 @@ struct PlayerView: View {
         HStack(spacing: 8) {
           ForEach(capturedStreams) { cand in
             Button {
-              playCandidate(cand)
+              Task { await playCandidate(cand) }
             } label: {
               HStack(spacing: 6) {
                 Image(systemName: "play.fill").font(.system(size: 10, weight: .bold))
@@ -959,8 +959,8 @@ struct PlayerView: View {
     }
   }
 
-  private func playCandidate(_ cand: StreamCandidate) {
-    guard let p = makePlayer(url: cand.url, cookies: cand.cookies, referer: cand.referer)
+  private func playCandidate(_ cand: StreamCandidate) async {
+    guard let p = await makePlayer(url: cand.url, cookies: cand.cookies, referer: cand.referer)
     else { return }  // stale channel — user surfed away
     cancelBudgetTimer()
     avPlayer = p
@@ -987,8 +987,8 @@ struct PlayerView: View {
   /// has happened past the source's homepage. Mirrors playCandidate
   /// but logs a different event kind so we can distinguish auto-play
   /// from user-tap-play in the timeline.
-  private func autoPlayCapturedStream(url: URL, cookies: [HTTPCookie], referer: URL) {
-    guard let p = makePlayer(url: url, cookies: cookies, referer: referer)
+  private func autoPlayCapturedStream(url: URL, cookies: [HTTPCookie], referer: URL) async {
+    guard let p = await makePlayer(url: url, cookies: cookies, referer: referer)
     else { return }  // stale channel — user surfed away
     cancelBudgetTimer()
     avPlayer = p
@@ -1381,12 +1381,20 @@ struct PlayerView: View {
     }
   }
 
-  private func makePlayer(url: URL, cookies: [HTTPCookie], referer: URL) -> AVPlayer? {
+  private func makePlayer(url: URL, cookies: [HTTPCookie], referer: URL) async -> AVPlayer? {
     var headers = HTTPCookie.requestHeaderFields(with: cookies)
     headers["User-Agent"] = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
     headers["Referer"] = referer.absoluteString
     headers["Origin"]  = (referer.scheme ?? "https") + "://" + (referer.host ?? "")
-    let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
+    // v2.74: if this is an HLS MASTER playlist with a single rendition, play the
+    // rendition's MEDIA playlist directly. A media playlist carries no
+    // EXT-X-STREAM-INF/BANDWIDTH, so AVPlayer has no declared peak bitrate to
+    // enforce — which is what these sources mis-declare (segments run well over
+    // the advertised bandwidth → error -12318 → the picture goes black once the
+    // buffer drains). Browsers' hls.js ignores the declaration; this makes
+    // AVPlayer effectively ignore it too, WITHOUT a fragile resource-loader.
+    let playURL = await resolveSingleVariantMedia(url: url, headers: headers)
+    let asset = AVURLAsset(url: playURL, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
     // Reuse the one long-lived player so switching channels swaps the item
     // in place instead of tearing down the player (which would drop AirPlay).
     // Returns nil when this channel is no longer active — a stale scrape that
@@ -1394,6 +1402,34 @@ struct PlayerView: View {
     let item = AVPlayerItem(asset: asset)
     guard PlaybackEngine.shared.load(item, for: game.id) else { return nil }
     return PlaybackEngine.shared.player
+  }
+
+  /// Fetches `url`; if it's an HLS master playlist with exactly one variant,
+  /// returns that variant's (absolute) media-playlist URL. Returns the original
+  /// URL for a media playlist, a multi-variant master (AVPlayer's own bitrate
+  /// switching handles those, and their bandwidth is usually declared right), or
+  /// on any network/parse failure — so this can only help, never regress.
+  private func resolveSingleVariantMedia(url: URL, headers: [String: String]) async -> URL {
+    var req = URLRequest(url: url)
+    for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+    req.timeoutInterval = 6
+    guard let (data, resp) = try? await URLSession.shared.data(for: req),
+          (resp as? HTTPURLResponse)?.statusCode == 200,
+          let text = String(data: data, encoding: .utf8),
+          text.contains("#EXT-X-STREAM-INF") else { return url }
+    var variantURIs: [String] = []
+    var expectURI = false
+    for raw in text.components(separatedBy: .newlines) {
+      let line = raw.trimmingCharacters(in: .whitespaces)
+      if line.hasPrefix("#EXT-X-STREAM-INF") { expectURI = true; continue }
+      if expectURI {
+        if !line.isEmpty && !line.hasPrefix("#") { variantURIs.append(line) }
+        expectURI = false
+      }
+    }
+    guard variantURIs.count == 1,
+          let media = URL(string: variantURIs[0], relativeTo: url)?.absoluteURL else { return url }
+    return media
   }
 }
 
